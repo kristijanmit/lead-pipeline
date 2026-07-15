@@ -1,4 +1,4 @@
-# ONIX lead pipeline — development plan
+# AGENCY lead pipeline — development plan
 
 Six phases, each shippable on its own. Phase 1-3 are what gets a real, scored
 dataset flowing; phase 4-6 are what makes it a habit instead of a one-off script.
@@ -16,21 +16,29 @@ Goal: get a real, live dataset before optimizing anything downstream.
 Lands as: `pipeline/schema.py` (the `Lead` shape), `pipeline/dedupe.py`
 (domain normalization), `pipeline/collectors/{osm,maps,manual}.py`.
 
-- [ ] Run `collect_osm.py` against ONIX's actual target areas/categories and
+- [x] Run `collect_osm.py` against AGENCY's actual target areas/categories and
       sanity-check the output (does `leads.csv` actually look usable?)
+      (Novi Sad dentists, 2026-07-16 — 23 raw leads, domains/emails/phones sane;
+      OSM coverage is thin there, which is what the maps supplement is for)
 - [x] Change `collect_osm.py` so location and categories are given as input when
       the script is run (CLI args or an interactive prompt), not just buried in
       `config.yaml` — makes it quick to re-target a new city/vertical per run
       (landed directly as `pipeline/runner.py collect --location ... --categories ...`)
-- [ ] Add `collect_maps.py` wrapping `gosom/google-maps-scraper` for categories/areas
+- [x] Add `collect_maps.py` wrapping `gosom/google-maps-scraper` for categories/areas
       where OSM data is thin (use sparingly — gray area on Google's ToS), same
       runtime-input pattern as above
-- [ ] Add a `leads_manual.csv` path for LinkedIn/Clutch/referral leads gathered by
+      (landed as `pipeline/collectors/maps.py`; needs the scraper release binary
+      on PATH for live runs — parser is fixture-tested)
+- [x] Add a `leads_manual.csv` path for LinkedIn/Clutch/referral leads gathered by
       hand, merged with the automated sources before `enrich.py` runs
-- [ ] Since there are now three sources feeding one pipeline, this is the
+      (landed as `pipeline/collectors/manual.py` + `leads_manual.csv.example`;
+      `--source osm,manual` merges and dedupes in one run)
+- [x] Since there are now three sources feeding one pipeline, this is the
       natural point to split into `pipeline/collectors/` per ARCHITECTURE.md
       §6-7 rather than three more standalone scripts — each satisfies the
       same `Collector.collect(params) -> Iterable[Lead]` interface
+      (built into `pipeline/collectors/` from the start — osm, maps, manual,
+      each registered behind the `Collector` protocol)
 
 ## Phase 2 — Enrichment (contact data first, then audit)
 
@@ -41,7 +49,7 @@ each satisfying the `Enricher.enrich(lead: Lead) -> Lead` interface.
 - [x] Notion schema already supports this data — `Primary Email`,
       `Additional Emails`, `Phone`, `Social Links`, `CMS`, `HTTPS`,
       `Mobile Friendly`, and the four Lighthouse breakdown scores all exist
-      in ONIX Leads Pipeline now, so this phase just needs to produce the data
+      in AGENCY Leads Pipeline now, so this phase just needs to produce the data
 - [ ] Expand contact enrichment in `enrich.py` (-> `enrichers/contact.py`): pull
       phone numbers (regex) and social media links (LinkedIn, Instagram,
       Facebook, X) from the homepage/contact page, alongside the existing

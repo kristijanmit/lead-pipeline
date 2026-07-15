@@ -65,7 +65,7 @@ _BACKOFF_S = 5
 
 # OSM usage policy asks clients to identify themselves; the default
 # python-requests agent also gets 406'd by some Overpass instances.
-_USER_AGENT = "onix-lead-pipeline/0.1 (single-operator lead tool)"
+_USER_AGENT = "agency-lead-pipeline/0.1 (single-operator lead tool)"
 
 
 def resolve_category(category: str) -> tuple[str, str]:

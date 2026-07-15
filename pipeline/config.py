@@ -20,10 +20,18 @@ DEFAULTS: dict = {
     "collect": {
         "location": "",
         "categories": [],
+        "manual_csv": "leads_manual.csv",
     },
     "overpass": {
         "endpoint": "https://overpass-api.de/api/interpreter",
         "timeout_s": 60,
+    },
+    "maps": {
+        "binary": "google-maps-scraper",
+        "depth": 3,
+        "language": "",
+        "extract_emails": True,
+        "timeout_s": 900,
     },
 }
 
@@ -65,3 +73,7 @@ def _validate(config: dict, path: Path) -> None:
     collect = config["collect"]
     if not isinstance(collect.get("categories"), list):
         raise ConfigError(f"{path}: collect.categories must be a list")
+    maps = config["maps"]
+    for key in ("depth", "timeout_s"):
+        if not isinstance(maps.get(key), int) or maps[key] <= 0:
+            raise ConfigError(f"{path}: maps.{key} must be a positive integer")

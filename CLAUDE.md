@@ -1,6 +1,6 @@
 # Project Instructions
 
-This is the ONIX lead pipeline: a single-operator, zero-budget lead generation
+This is the AGENCY lead pipeline: a single-operator, zero-budget lead generation
 tool. Collect businesses from free sources → enrich with contact data and a
 website audit → score for outreach priority → land in Notion.
 

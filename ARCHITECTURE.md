@@ -1,4 +1,4 @@
-# ONIX lead pipeline — architecture
+# AGENCY lead pipeline — architecture
 
 ## 1. Overview
 
@@ -240,7 +240,7 @@ class Sink(Protocol):
 
 Adding `collect_linkedin.py` later means writing one class that satisfies
 `Collector` and registering it — `runner.py` doesn't change. Same for a
-future paid-provider enricher if ONIX's budget changes: it's a new class
+future paid-provider enricher if AGENCY's budget changes: it's a new class
 next to `contact.py`, not a rewrite.
 
 ## 8. Run lifecycle
@@ -295,7 +295,7 @@ with a clear message — not three stages later as a cryptic `KeyError`.
 
 Secrets (a future Notion token, a future paid API key) go in a
 `.env`-style file that's gitignored; `config.yaml` itself stays safe to
-commit since ONIX's own weights and ICP definitions aren't secret.
+commit since AGENCY's own weights and ICP definitions aren't secret.
 
 ## 11. Error handling and resilience
 
@@ -350,4 +350,4 @@ Postgres, a scheduler):
   `runner.py` starts feeling like the bottleneck rather than the config.
 
 None of these are true today — building for them now would be solving
-problems ONIX doesn't have yet.
+problems AGENCY doesn't have yet.

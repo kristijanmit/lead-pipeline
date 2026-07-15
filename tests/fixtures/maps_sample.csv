@@ -1,0 +1,6 @@
+input_id,link,title,category,address,website,phone,emails,review_rating,review_count
+dentist,https://maps.google.com/?cid=101,Dental Centar Novak,Dentist,"Bulevar oslobođenja 1, Novi Sad",https://www.dentalnovak.rs/,+381 21 123 456,"info@dentalnovak.rs, office@dentalnovak.rs, INFO@dentalnovak.rs",4.9,127
+dentist,https://maps.google.com/?cid=102,Zubar Petrović,Dentist,"Železnička 5, Novi Sad",,+381 21 654 321,,4.5,34
+hairdresser,https://maps.google.com/?cid=103,Salon Nina,Hair salon,"Dunavska 12, Novi Sad",http://salonnina.example,,"['nina@salonnina.example']",4.8,88
+8f3a2c1e-uuid,https://maps.google.com/?cid=104,Mystery Biz,Cafe,"Somewhere 9",https://mystery.example,,,4.0,12
+,https://maps.google.com/?cid=105,,,,,,,,

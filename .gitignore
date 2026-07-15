@@ -8,6 +8,12 @@ data/
 # local Notion dedupe cache
 seen_domains.json
 
+# hand-gathered lead data (the .example template IS committed)
+leads_manual.csv
+
+# downloaded binaries (google-maps-scraper release)
+tools/
+
 # python
 __pycache__/
 *.pyc

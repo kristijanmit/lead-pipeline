@@ -35,16 +35,24 @@ def cmd_collect(args: argparse.Namespace) -> int:
             if args.categories
             else config["collect"]["categories"]
         ),
+        "input": args.input,
     }
+    sources = [s.strip() for s in args.source.split(",") if s.strip()]
 
-    collector = get_collector(args.source, config)
+    # instantiate all collectors up front so a typo'd source name or missing
+    # binary fails before any collection effort is spent
+    collectors = {source: get_collector(source, config) for source in sources}
     run_id = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     started_at = _now_iso()
 
-    raw_leads = list(collector.collect(params))
-    leads = dedupe_leads(raw_leads)
-    if args.limit is not None:
-        leads = leads[: args.limit]
+    raw_leads: list = []
+    raw_by_source: dict[str, int] = {}
+    for source, collector in collectors.items():
+        collected = list(collector.collect(params))
+        raw_by_source[source] = len(collected)
+        raw_leads.extend(collected)
+    deduped = dedupe_leads(raw_leads)
+    leads = deduped if args.limit is None else deduped[: args.limit]
     for lead in leads:
         lead.run_id = run_id
 
@@ -57,14 +65,15 @@ def cmd_collect(args: argparse.Namespace) -> int:
         "run_id": run_id,
         "stage": "collect",
         "config_snapshot": {
-            "source": args.source,
+            "sources": sources,
             "params": params,
             "limit": args.limit,
             "overpass": config["overpass"],
         },
         "counts": {
             "raw": len(raw_leads),
-            "after_dedupe": len(dedupe_leads(raw_leads)),
+            "raw_by_source": raw_by_source,
+            "after_dedupe": len(deduped),
             "written": len(leads),
         },
         "started_at": started_at,
@@ -75,7 +84,8 @@ def cmd_collect(args: argparse.Namespace) -> int:
     )
 
     with_domain = sum(1 for lead in leads if lead.domain)
-    print(f"run {run_id}: {len(raw_leads)} raw -> {len(leads)} written")
+    source_summary = ", ".join(f"{s}: {n}" for s, n in raw_by_source.items())
+    print(f"run {run_id}: {len(raw_leads)} raw ({source_summary}) -> {len(leads)} written")
     print(f"  {with_domain} with a website, {len(leads) - with_domain} without")
     print(f"  {run_dir}/collected.jsonl (+ collected.csv, manifest.json)")
     return 0
@@ -86,9 +96,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    collect = sub.add_parser("collect", help="collect leads from a source")
-    collect.add_argument("--source", required=True, help='e.g. "osm"')
+    collect = sub.add_parser("collect", help="collect leads from one or more sources")
+    collect.add_argument(
+        "--source",
+        required=True,
+        help='comma-separated: "osm", "maps", "manual" — e.g. "osm,manual"',
+    )
     collect.add_argument("--location", help='OSM area name, e.g. "Berlin"')
+    collect.add_argument(
+        "--input", help="manual collector: path to the hand-gathered leads CSV"
+    )
     collect.add_argument(
         "--categories",
         help='comma-separated, e.g. "restaurant,hairdresser" or raw "craft=roofer"',

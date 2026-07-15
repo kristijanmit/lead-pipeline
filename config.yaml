@@ -5,9 +5,19 @@
 collect:
   location: ""     # OSM area name, e.g. "Berlin" — usually given per run via --location
   categories: []   # e.g. [restaurant, hairdresser] or raw OSM tags like "craft=roofer"
+  manual_csv: leads_manual.csv   # hand-gathered leads; see leads_manual.csv.example
 
 overpass:
   endpoint: https://overpass-api.de/api/interpreter
   timeout_s: 60
+
+# gosom/google-maps-scraper — supplement only (ToS gray area, see RESOURCES.md).
+# Install a release binary from github.com/gosom/google-maps-scraper/releases.
+maps:
+  binary: tools/google-maps-scraper   # v1.16.2 darwin-amd64 release, runs via Rosetta
+  depth: 3           # scroll depth per query; higher = more results, slower
+  language: ""       # e.g. "sr" — empty uses the scraper's default
+  extract_emails: true
+  timeout_s: 900
 
 # scoring weights and ICP definitions land here in Phase 3
