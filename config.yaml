@@ -1,0 +1,13 @@
+# Defaults for pipeline runs — CLI args override these at runtime.
+# Safe to commit: secrets (Notion token, future API keys) live in the
+# gitignored .env, never here.
+
+collect:
+  location: ""     # OSM area name, e.g. "Berlin" — usually given per run via --location
+  categories: []   # e.g. [restaurant, hairdresser] or raw OSM tags like "craft=roofer"
+
+overpass:
+  endpoint: https://overpass-api.de/api/interpreter
+  timeout_s: 60
+
+# scoring weights and ICP definitions land here in Phase 3

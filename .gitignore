@@ -1,0 +1,15 @@
+# pipeline run data — JSONL outputs, manifests; never committed
+data/
+
+# secrets — Notion token, future API keys
+.env
+.env.*
+
+# local Notion dedupe cache
+seen_domains.json
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/

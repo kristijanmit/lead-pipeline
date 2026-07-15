@@ -1,0 +1,62 @@
+{
+  "version": 0.6,
+  "generator": "Overpass API 0.7.62",
+  "elements": [
+    {
+      "type": "node",
+      "id": 100001,
+      "lat": 52.5201,
+      "lon": 13.4049,
+      "tags": {
+        "name": "Bäckerei Schmidt",
+        "shop": "bakery",
+        "website": "https://www.Baeckerei-Schmidt.de/",
+        "phone": "+49 30 1234567"
+      }
+    },
+    {
+      "type": "way",
+      "id": 200002,
+      "center": { "lat": 52.5105, "lon": 13.4102 },
+      "tags": {
+        "name": "Café Luna",
+        "amenity": "cafe",
+        "contact:website": "http://cafeluna.example/kontakt",
+        "email": "Hello@cafeluna.example",
+        "contact:email": "hello@cafeluna.example"
+      }
+    },
+    {
+      "type": "node",
+      "id": 300003,
+      "lat": 52.5301,
+      "lon": 13.4201,
+      "tags": {
+        "shop": "bakery",
+        "website": "https://unnamed-bakery.example"
+      }
+    },
+    {
+      "type": "node",
+      "id": 400004,
+      "lat": 52.5402,
+      "lon": 13.4305,
+      "tags": {
+        "name": "No Web Bistro",
+        "amenity": "restaurant",
+        "contact:phone": "+49 30 7654321"
+      }
+    },
+    {
+      "type": "node",
+      "id": 500005,
+      "lat": 52.5203,
+      "lon": 13.4051,
+      "tags": {
+        "name": "Bäckerei Schmidt Filiale 2",
+        "shop": "bakery",
+        "website": "baeckerei-schmidt.de"
+      }
+    }
+  ]
+}
