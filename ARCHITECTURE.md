@@ -104,13 +104,14 @@ A single canonical record flows through every stage. Defined once in
 ```python
 @dataclass
 class Lead:
-    schema_version: int = 4        # bump whenever fields are added/changed
+    schema_version: int = 5        # bump whenever fields are added/changed
 
     # identity — set at collection, never changes after
     company: str
     domain: str                    # normalized: no scheme, no "www.", lowercase
     source: str                    # "osm" | "maps" | "manual"
     industry: str = "other"
+    location: str = ""             # the market the lead was collected in, e.g. "Novi Sad" (v5)
 
     # contact enrichment (Phase 2, step 1)
     contact_emails: list[str] = field(default_factory=list)   # info@, sales@, etc — don't collapse to one
@@ -222,8 +223,12 @@ has to flatten a few `Lead` fields deliberately rather than fail on them:
 | ------------------------------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ------------------------------- | ------------------------------------------------------------------- |
 | `contact_emails[0]`                                     | `Primary Email` (Email)         | First address, since Notion's Email type validates a single string                                                                                          |
 | `contact_emails[1:]`                                    | `Additional Emails` (Rich text) | Joined with `, ` — informational only, not clickable as mailto                                                                                              |
-| `contact_phones[0]`                                     | `Phone` (Phone number)          | Same rule as emails: first number, since Notion's Phone type is a single string; the rest stay queryable in the JSONL until an `Additional Phones` rich-text property earns its place |
+| `contact_phones[0]`                                     | `Phone` (Phone number)          | Same rule as emails: first number, since Notion's Phone type is a single string                                                                             |
+| `contact_phones[1:]`                                    | `Additional Phones` (Rich text) | Joined with `, ` — same rule as additional emails                                                                                                           |
 | `social_links`                                          | `Social Links` (Rich text)      | Rendered as Markdown links, one per line: `[LinkedIn](url)`                                                                                                 |
+| `https`, `mobile_friendly`                              | two Checkbox properties         | Only sent when not `None` — a checkbox can't say "unknown", so omit instead of asserting false                                                              |
+| `lead_type`                                             | `Lead Type` (Select)            | `new_build` / `redesign` / `unclear` — the outreach step filters on it                                                                                      |
+| `source`                                                | `Source` (Select)               | `osm`/`maps` → "OSM/Maps", `manual` → "Manual"; `industry`, `location`, and `cms` go out raw and Notion auto-creates select options                         |
 | `lighthouse["performance"                               | "accessibility"                 | "seo"                                                                                                                                                       | "best_practices"]` | four separate Number properties | Flattened one key per column — Notion has no nested-object property |
 | `schema_version`, `scoring_version`, `run_id`, `errors` | _(none)_                        | Deliberately not synced — Notion is a sink for humans to act on, not the source of truth; this bookkeeping stays in the JSONL manifest where it's queryable |
 
@@ -265,9 +270,10 @@ next to `contact.py`, not a rewrite.
    stop the batch.
 3. `runner.py score --run <run_id>` loads `config.yaml` weights, applies the
    pure scoring function, writes `scored.jsonl` and `scored.csv`.
-4. `runner.py sync --run <run_id> --sink notion` (once Phase 4 lands) reads
-   `scored.jsonl`, checks each domain against a local cache of what's already
-   in Notion, and only creates pages for new ones.
+4. `runner.py sync --run <run_id> --sink notion` reads `scored.jsonl`,
+   checks each domain against a local cache of what's already in Notion,
+   and only creates pages for new ones; successfully pushed leads flip to
+   `status: synced` in `scored.jsonl`.
 
 Every command accepts `--limit N` to run against just the first N leads —
 a first-class dry-run, not something improvised by hand-editing a CSV before

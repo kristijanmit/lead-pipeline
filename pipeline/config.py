@@ -7,6 +7,7 @@ Secrets never live here — they go in the gitignored .env.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import yaml
@@ -40,6 +41,13 @@ DEFAULTS: dict = {
             "binary": "lighthouse",
             "timeout_s": 120,
         },
+    },
+    "notion": {
+        "database_id": "",
+        "api_version": "2022-06-28",
+        "delay_s": 0.35,
+        "timeout_s": 30,
+        "cache_path": "data/seen_domains.json",
     },
     "scoring": {
         "version": 1,
@@ -90,6 +98,23 @@ def load_config(path: str | Path = "config.yaml") -> dict:
     return config
 
 
+def load_env(path: str | Path = ".env") -> dict:
+    """Minimal .env reader — KEY=VALUE lines, # comments — so secrets stay
+    out of config.yaml without a new dependency. Values already present in
+    the real environment win over the file."""
+    env: dict[str, str] = {}
+    p = Path(path)
+    if p.exists():
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            env[key.strip()] = value.strip().strip("'\"")
+    env.update(os.environ)
+    return env
+
+
 def _merge(defaults: dict, override: dict) -> dict:
     merged = dict(defaults)
     for key, value in override.items():
@@ -125,6 +150,20 @@ def _validate(config: dict, path: Path) -> None:
         raise ConfigError(f"{path}: enrich.lighthouse.binary must be a non-empty string")
     if not isinstance(lighthouse.get("timeout_s"), int) or lighthouse["timeout_s"] <= 0:
         raise ConfigError(f"{path}: enrich.lighthouse.timeout_s must be a positive integer")
+
+    notion = config["notion"]
+    # database_id may legitimately be empty until Phase 4 setup — the sink
+    # itself refuses to construct without one, with a pointer to the README
+    if not isinstance(notion.get("database_id"), str):
+        raise ConfigError(f"{path}: notion.database_id must be a string")
+    if not isinstance(notion.get("api_version"), str) or not notion["api_version"]:
+        raise ConfigError(f"{path}: notion.api_version must be a non-empty string")
+    if not isinstance(notion.get("delay_s"), (int, float)) or notion["delay_s"] < 0:
+        raise ConfigError(f"{path}: notion.delay_s must be a non-negative number")
+    if not isinstance(notion.get("timeout_s"), int) or notion["timeout_s"] <= 0:
+        raise ConfigError(f"{path}: notion.timeout_s must be a positive integer")
+    if not isinstance(notion.get("cache_path"), str) or not notion["cache_path"]:
+        raise ConfigError(f"{path}: notion.cache_path must be a non-empty path")
 
     scoring = config["scoring"]
     if not isinstance(scoring.get("version"), int) or scoring["version"] <= 0:

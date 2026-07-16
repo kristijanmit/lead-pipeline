@@ -2,7 +2,7 @@
 
 Stages themselves are functions of lists of leads (ARCHITECTURE.md §3);
 this module only handles argument parsing, the run directory, and the
-manifest. enrich/score/sync subcommands land with their phases.
+manifest.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from pipeline.dedupe import dedupe_leads, lead_key
 from pipeline.enrichers import apply_enrichers, get_enricher
 from pipeline.schema import read_jsonl, write_jsonl
 from pipeline.scoring import score
+from pipeline.sinks import get_sink
 from pipeline.sinks.csv_sink import CsvSink
 
 # contact data first, then the website audit — ROADMAP Phase 2 ordering
@@ -62,6 +63,10 @@ def cmd_collect(args: argparse.Namespace) -> int:
     leads = deduped if args.limit is None else deduped[: args.limit]
     for lead in leads:
         lead.run_id = run_id
+        # stamp the market the run targeted; a collector that set its own
+        # (the manual CSV's optional "location" column) wins
+        if not lead.location:
+            lead.location = params["location"]
 
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -267,6 +272,82 @@ def cmd_score(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sync(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    sink = get_sink(args.sink, config)
+
+    if args.refresh_cache:
+        count = sink.refresh_cache()
+        print(f"cache rebuilt from Notion: {count} entries -> {sink.cache_path}")
+        return 0
+
+    if not args.run:
+        raise ValueError("--run is required (unless using --refresh-cache)")
+    run_dir = RUNS_DIR / args.run
+    scored_path = run_dir / "scored.jsonl"
+    if not scored_path.exists():
+        raise ValueError(f"no scored.jsonl in {run_dir} — run score first")
+    leads = read_jsonl(scored_path)
+
+    # only scored leads go out: "synced" is already pushed, anything else is
+    # a pending pass-through row from a limited enrich/score run
+    to_sync = [lead for lead in leads if lead.status == "scored"]
+    already_synced = sum(1 for lead in leads if lead.status == "synced")
+    not_scored = len(leads) - len(to_sync) - already_synced
+    started_at = _now_iso()
+
+    report = sink.write(to_sync, limit=args.limit)
+
+    # cache hits are also flipped: the lead is in Notion, however it got there
+    done = {lead_key(lead) for lead in report.created + report.cached}
+    results = [
+        replace(lead, status="synced")
+        if lead.status == "scored" and lead_key(lead) in done
+        else lead
+        for lead in leads
+    ]
+    write_jsonl(scored_path, results)
+    CsvSink(run_dir / "scored.csv").write(results)
+
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {"run_id": args.run}
+    manifest["stage"] = "sync"
+    manifest["sync"] = {
+        "config_snapshot": {"sink": args.sink, "notion": config["notion"], "limit": args.limit},
+        "counts": {
+            "input": len(leads),
+            "created": len(report.created),
+            "already_in_notion": len(report.cached),
+            "already_synced": already_synced,
+            "skipped_not_scored": not_scored,
+            "beyond_limit": report.pending,
+            "failed": len(report.failed),
+        },
+        "started_at": started_at,
+        "finished_at": _now_iso(),
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    print(
+        f"run {args.run}: {len(report.created)} created in Notion, "
+        f"{len(report.cached)} already there (cache), {already_synced} already synced, "
+        f"{len(report.failed)} failed"
+    )
+    for lead, error in report.failed:
+        print(f"  failed: {lead.company} ({lead.domain or 'no website'}): {error}")
+    if not_scored:
+        print(
+            f"  warning: {not_scored} leads not yet scored were skipped — "
+            f"finish `score --run {args.run}` first"
+        )
+    if report.pending:
+        print(f"  {report.pending} beyond --limit left for the next run")
+    print(f"  {run_dir}/scored.jsonl (+ scored.csv, manifest.json)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m pipeline.runner")
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
@@ -308,6 +389,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--limit", type=int, help="score only the first N leads — dry-run"
     )
     score_cmd.set_defaults(func=cmd_score)
+
+    sync_cmd = sub.add_parser(
+        "sync", help="push scored leads to a sink, deduped via the local cache"
+    )
+    sync_cmd.add_argument("--run", help="run id under data/runs/")
+    sync_cmd.add_argument("--sink", required=True, help='sink name, e.g. "notion"')
+    sync_cmd.add_argument(
+        "--limit", type=int, help="create at most N pages — dry-run"
+    )
+    sync_cmd.add_argument(
+        "--refresh-cache",
+        action="store_true",
+        help="rebuild seen_domains.json from Notion, then exit",
+    )
+    sync_cmd.set_defaults(func=cmd_sync)
 
     return parser
 

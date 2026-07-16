@@ -71,3 +71,12 @@ Free, no-key, no-signup query API against OpenStreetMap's business/POI data.
 **Used in**: Phase 1 (`pipeline/collectors/osm.py`) — the default, ToS-clean
 collection source. Not something to adopt code from; just a shared public
 service to query respectfully (see ROADMAP.md's rate-limit note).
+
+### Notion API
+
+https://developers.notion.com (public API, free internal integrations)
+**Used in**: Phase 4 (`pipeline/sinks/notion_sink.py`). One-time setup:
+create an internal integration at notion.so/my-integrations, connect it to
+the leads database (`•••` → Connections on the database page), and put the
+token in the gitignored `.env` as `NOTION_TOKEN`. Free tier rate limit is
+~3 requests/second — `notion.delay_s` in `config.yaml` stays under it.

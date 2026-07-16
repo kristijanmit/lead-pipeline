@@ -4,8 +4,9 @@ Reads leads_manual.csv (see leads_manual.csv.example for the header) so
 hand-found leads flow through the same dedupe/enrich/score path as the
 automated sources instead of living in a separate spreadsheet.
 
-Columns: company (required), website, industry, emails (";"-separated),
-phone (also ";"-separated — keep every number, same as emails).
+Columns: company (required), website, industry, location, emails
+(";"-separated), phone (also ";"-separated — keep every number, same as
+emails). An empty location falls back to the run's --location in cmd_collect.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from pipeline.dedupe import normalize_domain
 from pipeline.schema import Lead
 
 _REQUIRED_COLUMNS = {"company"}
-_KNOWN_COLUMNS = {"company", "website", "industry", "emails", "phone"}
+_KNOWN_COLUMNS = {"company", "website", "industry", "location", "emails", "phone"}
 
 
 def read_manual_csv(path: str | Path) -> list[Lead]:
@@ -49,6 +50,7 @@ def read_manual_csv(path: str | Path) -> list[Lead]:
                     domain=normalize_domain(row.get("website")),
                     source="manual",
                     industry=(row.get("industry") or "").strip() or "other",
+                    location=(row.get("location") or "").strip(),
                     contact_emails=emails,
                     contact_phones=phones,
                 )

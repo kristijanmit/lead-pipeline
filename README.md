@@ -35,7 +35,37 @@ priority → land in Notion. See `ARCHITECTURE.md` for the design and
 - `audit_notes` summarizes contact-data completeness + all four Lighthouse
   categories per lead
 
-Not yet implemented: scoring (Phase 3), Notion sync (Phase 4).
+## Implemented (Phase 3 — scoring)
+
+- Pure scoring function (`pipeline/scoring/scorer.py`, no I/O): ICP fit +
+  website audit + manual intent, weighted per `config.yaml`; the reasoning
+  behind every weight is in `SCORING.md`
+- Each lead classified as `new_build` / `redesign` / `unclear`, ranked by
+  `total_score` in `scored.jsonl`/`scored.csv`
+- Hand-edited `intent_score` values in `scored.jsonl` survive re-scoring
+
+## Implemented (Phase 4 — Notion sync)
+
+- `NotionSink` (`pipeline/sinks/notion_sink.py`) pushes scored leads to the
+  leads database via the Notion API; field mapping lives in one function,
+  `to_notion_properties()` (ARCHITECTURE.md §6.1)
+- Idempotent: a local `seen_domains.json` cache (never a live Notion query
+  per lead) plus `status: synced` in `scored.jsonl`; re-runs and interrupted
+  batches skip what already landed
+- Per-lead API failures are reported and retried on the next run — one bad
+  lead doesn't halt the batch
+
+Not yet implemented: outreach handoff (Phase 5).
+
+### Notion setup (one-time)
+
+1. Create an internal integration at
+   [notion.so/my-integrations](https://www.notion.so/my-integrations)
+2. Connect it to the leads database: database page → `•••` → Connections
+3. Put the token in the gitignored `.env` at the repo root:
+   `NOTION_TOKEN=ntn_...`
+
+The target database id lives in `config.yaml` under `notion.database_id`.
 
 ## Setup
 
@@ -70,6 +100,16 @@ to `tools/google-maps-scraper` and `chmod +x` it (path is set as
 .venv/bin/python -m pipeline.runner enrich --run <run_id> --limit 3
 .venv/bin/python -m pipeline.runner enrich --run <run_id>
 
+# score an enriched run (weights from config.yaml)
+.venv/bin/python -m pipeline.runner score --run <run_id>
+
+# push scored leads to Notion — dry-run a couple of pages first
+.venv/bin/python -m pipeline.runner sync --run <run_id> --sink notion --limit 2
+.venv/bin/python -m pipeline.runner sync --run <run_id> --sink notion
+
+# rebuild the local dedupe cache from what's actually in Notion
+.venv/bin/python -m pipeline.runner sync --sink notion --refresh-cache
+
 # tests
 .venv/bin/python -m pytest
 ```
@@ -79,4 +119,3 @@ to `tools/google-maps-scraper` and `chmod +x` it (path is set as
 - `--location` must match the OSM area name; local spelling and English both work
 - `--limit N` keeps only the first N leads — use it before spending rate-limit
   budget on a full batch
-- Coming with later phases: `score`, `sync`

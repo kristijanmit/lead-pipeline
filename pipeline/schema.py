@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Iterable
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 SCORING_VERSION = 1
 
 
@@ -23,6 +23,9 @@ class Lead:
     domain: str  # normalized: no scheme, no "www.", lowercase — see dedupe.py
     source: str  # "osm" | "maps" | "manual"
     industry: str = "other"
+    location: str = ""  # the market this lead was collected in, e.g. "Novi Sad" (v5) —
+    # stamped by cmd_collect from --location unless the collector set one itself
+    # (the manual CSV's optional "location" column). v4 JSONL loads as "".
 
     schema_version: int = SCHEMA_VERSION
 

@@ -104,17 +104,25 @@ Lands as: `pipeline/sinks/csv_sink.py` and `pipeline/sinks/notion_sink.py` —
 see ARCHITECTURE.md §6.1 for the exact `Lead` -> Notion property mapping
 (multiple emails, social links, and Lighthouse breakdown don't map 1:1).
 
-- [ ] Decide the sync path: paste-to-chat bulk create (works today, zero setup)
+- [x] Decide the sync path: paste-to-chat bulk create (works today, zero setup)
       vs. a dedicated Notion integration token used directly from Claude Code
       (removes the manual step, needs a one-time free token setup)
-- [ ] Implement `to_notion_properties(lead)` in `notion_sink.py` per
+      — integration token; `NOTION_TOKEN` in the gitignored `.env`, one-time
+      setup in the README
+- [x] Implement `to_notion_properties(lead)` in `notion_sink.py` per
       ARCHITECTURE.md §6.1 — first email to `Primary Email`, the rest joined
       into `Additional Emails`, social links rendered as markdown, Lighthouse
       categories flattened into their four separate score columns
-- [ ] Add a dedupe check — a local `seen_domains.json` cache refreshed
+      — plus `Additional Phones` and `Lead Type` properties added to the
+      Notion database so multiple phones and the new_build/redesign split sync
+- [x] Add a dedupe check — a local `seen_domains.json` cache refreshed
       periodically from Notion, not a live query per lead (per ARCHITECTURE.md
       §9, this is what keeps sync fast once the database has a few hundred rows)
-- [ ] Confirm the Status field moves cleanly: Not started → In progress → Done
+      — cache entry written after each successful create, so an interrupted
+      batch resumes cleanly; `sync --sink notion --refresh-cache` rebuilds it
+- [x] Confirm the Status field moves cleanly: Not started → In progress → Done
+      — pages land as "Not started"; the later stages are moved by hand in
+      Notion during outreach (Phase 5)
 
 ## Phase 5 — Outreach handoff
 

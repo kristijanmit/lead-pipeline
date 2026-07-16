@@ -37,6 +37,22 @@ def test_read_manual_csv(tmp_path):
     assert bob.contact_phones == []
 
 
+def test_location_column_is_optional(tmp_path):
+    # header without location (pre-v5 CSVs) still reads fine
+    path = _write(tmp_path, "company,website,industry,emails,phone\nA,a.com,,,\n")
+    assert read_manual_csv(path)[0].location == ""
+
+    path = _write(
+        tmp_path,
+        "company,website,industry,location,emails,phone\n"
+        "A,a.com,,Belgrade,,\n"
+        "B,b.com,,,,\n",
+    )
+    leads = read_manual_csv(path)
+    assert leads[0].location == "Belgrade"
+    assert leads[1].location == ""  # cmd_collect falls back to --location
+
+
 def test_missing_company_column_raises(tmp_path):
     path = _write(tmp_path, "name,website\nStudio Alfa,alfa.rs\n")
     with pytest.raises(ValueError, match="missing column"):

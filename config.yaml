@@ -29,6 +29,15 @@ enrich:
     binary: lighthouse
     timeout_s: 120     # per-site cap; slow sites fail into Lead.errors, not hang the batch
 
+# Phase 4 — Notion sync. The integration token is a secret and lives in the
+# gitignored .env as NOTION_TOKEN (see README setup), never here.
+notion:
+  database_id: ebbfdaa7-5970-4917-a4b1-44ef846ac1c8   # "ONIX Leads Pipeline"
+  api_version: "2022-06-28"
+  delay_s: 0.35        # pause between page creates — Notion allows ~3 req/s
+  timeout_s: 30
+  cache_path: data/seen_domains.json   # local dedupe cache, refreshed via --refresh-cache
+
 # Phase 3 — scoring weights. The reasoning behind every number is in
 # SCORING.md; tune here after the first real outreach batch (SCORING.md §7),
 # and bump version whenever weights or formula shape change so old and new
