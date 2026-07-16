@@ -29,4 +29,43 @@ enrich:
     binary: lighthouse
     timeout_s: 120     # per-site cap; slow sites fail into Lead.errors, not hang the batch
 
-# scoring weights and ICP definitions land here in Phase 3
+# Phase 3 — scoring weights. The reasoning behind every number is in
+# SCORING.md; tune here after the first real outreach batch (SCORING.md §7),
+# and bump version whenever weights or formula shape change so old and new
+# total_scores are never silently compared as if they meant the same thing.
+scoring:
+  version: 1
+
+  # icp_fit_score: reachability + legitimacy of the business itself —
+  # deliberately ignores the website (that's website_audit). Sums to 100
+  # with everything triggered; clamped at 100 either way.
+  icp_fit:
+    has_email: 30
+    has_phone: 25
+    has_social: 15
+    established_bonus: 15      # awarded when emails+phones+socials >= threshold
+    established_threshold: 2   # more contact surface ~ multi-person practice
+    industry_match: 15         # full credit while runs are single-industry
+
+  # website_audit_score: opportunity, not quality — higher = more to sell
+  # into. Computed case is 100 - weighted Lighthouse quality + flat bonuses,
+  # clamped to [0, 100].
+  website_audit:
+    no_website_score: 90           # no domain at all — strongest new-build signal
+    unreachable_domain_score: 65   # domain exists, audit failed — discounted: the
+                                   # practice may be gone or the domain abandoned
+    no_https_bonus: 10             # flat add-ons: easy one-sentence pitch hooks
+    not_mobile_friendly_bonus: 10  # that Lighthouse doesn't penalize cleanly
+    lighthouse_weights:            # must sum to 1.0
+      performance: 0.40      # most visible; "this site feels broken"
+      best_practices: 0.25   # structural/security issues perf misses
+      accessibility: 0.20    # real gap, rarely why a cold lead replies
+      seo: 0.15              # most sites already score 75-100 — least signal
+
+  # total_score = weighted sum of the three sub-scores; must sum to 1.0.
+  # intent is smallest since it's 0.0 for every lead until the manual
+  # research pass (SCORING.md §5) fills it in on the top candidates.
+  total:
+    icp_fit: 0.35
+    website_audit: 0.50
+    intent: 0.15

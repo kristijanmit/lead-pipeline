@@ -64,6 +64,7 @@ For deeper context, consult these before guessing:
 - `ARCHITECTURE.md` — full data model, module structure, stage protocols, run lifecycle, dedup/idempotency rules
 - `ARCHITECTURE.md` §6.1 — the exact `Lead` → Notion property mapping (emails, social links, Lighthouse flattening); keep it in one function, `to_notion_properties()`
 - `ROADMAP.md` — the six phases, what lands where, and current checkbox status; update checkboxes as work ships
+- `SCORING.md` — the "why" behind every scoring weight, the fit/opportunity split, the manual intent workflow, and how to retune after real reply data
 - `config.yaml` — scoring weights and ICP definitions (safe to commit; secrets are not)
 
 ## Testing

@@ -104,7 +104,7 @@ A single canonical record flows through every stage. Defined once in
 ```python
 @dataclass
 class Lead:
-    schema_version: int = 3        # bump whenever fields are added/changed
+    schema_version: int = 4        # bump whenever fields are added/changed
 
     # identity — set at collection, never changes after
     company: str
@@ -130,6 +130,8 @@ class Lead:
     website_audit_score: float | None = None
     intent_score: float = 0.0
     total_score: float | None = None
+    lead_type: str | None = None   # "new_build" | "redesign" | "unclear" (v4) —
+                                   # set by scorer.py, see SCORING.md §8
 
     # pipeline bookkeeping
     run_id: str = ""

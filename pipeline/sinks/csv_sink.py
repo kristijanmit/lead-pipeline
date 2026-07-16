@@ -15,10 +15,18 @@ _COLUMNS = [
     "source",
     "contact_emails",
     "contact_phones",
+    "lead_type",
+    "icp_fit_score",
+    "website_audit_score",
+    "intent_score",
     "total_score",
     "status",
     "errors",
 ]
+
+
+def _score_cell(value: float | None) -> float | str:
+    return "" if value is None else value
 
 
 class CsvSink:
@@ -38,7 +46,11 @@ class CsvSink:
                         lead.source,
                         "; ".join(lead.contact_emails),
                         "; ".join(lead.contact_phones),
-                        "" if lead.total_score is None else lead.total_score,
+                        lead.lead_type or "",
+                        _score_cell(lead.icp_fit_score),
+                        _score_cell(lead.website_audit_score),
+                        lead.intent_score,
+                        _score_cell(lead.total_score),
                         lead.status,
                         "; ".join(lead.errors),
                     ]

@@ -11,6 +11,7 @@ import argparse
 import json
 import sys
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from pipeline.config import ConfigError, load_config
 from pipeline.dedupe import dedupe_leads, lead_key
 from pipeline.enrichers import apply_enrichers, get_enricher
 from pipeline.schema import read_jsonl, write_jsonl
+from pipeline.scoring import score
 from pipeline.sinks.csv_sink import CsvSink
 
 # contact data first, then the website audit — ROADMAP Phase 2 ordering
@@ -175,6 +177,72 @@ def cmd_enrich(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_score(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    run_dir = RUNS_DIR / args.run
+    enriched_path = run_dir / "enriched.jsonl"
+    if not enriched_path.exists():
+        raise ValueError(f"no enriched.jsonl in {run_dir} — run enrich first")
+    leads = read_jsonl(enriched_path)
+    if args.limit is not None:
+        leads = leads[: args.limit]
+
+    # the intent workflow (SCORING.md §5): intent_score is hand-edited in
+    # scored.jsonl after manual research, so a re-score must carry those
+    # edits forward instead of resetting them from enriched.jsonl
+    scored_path = run_dir / "scored.jsonl"
+    if scored_path.exists():
+        intents = {
+            lead_key(lead): lead.intent_score
+            for lead in read_jsonl(scored_path)
+            if lead.intent_score
+        }
+        leads = [
+            replace(lead, intent_score=intents[lead_key(lead)])
+            if lead_key(lead) in intents
+            else lead
+            for lead in leads
+        ]
+
+    weights = config["scoring"]
+    started_at = _now_iso()
+    scored = [score(lead, weights) for lead in leads]
+    write_jsonl(scored_path, scored)
+    CsvSink(run_dir / "scored.csv").write(scored)
+
+    by_type: dict[str, int] = {}
+    for lead in scored:
+        by_type[lead.lead_type] = by_type.get(lead.lead_type, 0) + 1
+
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {"run_id": args.run}
+    manifest["stage"] = "score"
+    manifest["score"] = {
+        "config_snapshot": {"scoring": weights, "limit": args.limit},
+        "counts": {
+            "input": len(leads),
+            "scored": len(scored),
+            "by_lead_type": by_type,
+            "with_intent": sum(1 for lead in scored if lead.intent_score),
+        },
+        "started_at": started_at,
+        "finished_at": _now_iso(),
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    type_summary = ", ".join(f"{t}: {n}" for t, n in sorted(by_type.items()))
+    print(f"run {args.run}: {len(scored)} scored (v{weights['version']}) — {type_summary}")
+    for lead in sorted(scored, key=lambda l: l.total_score, reverse=True)[:5]:
+        print(
+            f"  {lead.total_score:5.1f}  {lead.company} "
+            f"({lead.domain or 'no website'}, {lead.lead_type})"
+        )
+    print(f"  {run_dir}/scored.jsonl (+ scored.csv, manifest.json)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m pipeline.runner")
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
@@ -207,6 +275,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--limit", type=int, help="process only the first N pending leads — dry-run"
     )
     enrich.set_defaults(func=cmd_enrich)
+
+    score_cmd = sub.add_parser(
+        "score", help="apply scoring weights from config.yaml to an enriched run"
+    )
+    score_cmd.add_argument("--run", required=True, help="run id under data/runs/")
+    score_cmd.add_argument(
+        "--limit", type=int, help="score only the first N leads — dry-run"
+    )
+    score_cmd.set_defaults(func=cmd_score)
 
     return parser
 

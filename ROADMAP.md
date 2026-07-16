@@ -80,12 +80,22 @@ Lands as: `pipeline/scoring/scorer.py` — a pure function, `score(lead, weights
 -> lead`, no I/O — see ARCHITECTURE.md §13 on why this is the highest-value
 thing in the whole project to unit test.
 
-- [ ] Expand `website_audit_score` in `score.py` to weight accessibility/SEO/
+- [x] Expand `website_audit_score` in `score.py` to weight accessibility/SEO/
       best-practices alongside performance (right now it's performance-only)
-- [ ] Add a manual "Intent Score" workflow: quick LinkedIn/news check on your
+      (landed as `pipeline/scoring/scorer.py` — all four Lighthouse categories
+      weighted per `config.yaml`, plus fixed scores for no-website and
+      unreachable-domain leads and a `lead_type` field (schema v4) separating
+      the new-build vs. redesign pitch; design rationale in SCORING.md;
+      runs via `python -m pipeline.runner score --run <run_id>`)
+- [x] Add a manual "Intent Score" workflow: quick LinkedIn/news check on your
       top 20 candidates before final ranking, entered by hand
+      (mechanism landed: `scorer.py` passes `intent_score` through untouched,
+      and `runner.py score` carries hand-edited values in `scored.jsonl`
+      forward across re-runs — workflow steps in SCORING.md §5; the actual
+      per-batch research stays manual by design)
 - [ ] After the first real batch, tune `icp_scoring` weights in `config.yaml`
       against which leads actually replied — don't guess the weights twice
+      (tuning procedure written up ahead of time in SCORING.md §7)
 
 ## Phase 4 — Notion sync
 

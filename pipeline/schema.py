@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Iterable
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 SCORING_VERSION = 1
 
 
@@ -44,6 +44,10 @@ class Lead:
     website_audit_score: float | None = None
     intent_score: float = 0.0
     total_score: float | None = None
+    lead_type: str | None = None  # "new_build" | "redesign" | "unclear" — set by
+    # scorer.py alongside website_audit_score (same _audit_case branch, different
+    # pitch implication). Never set at collection/enrichment time. v3 JSONL loads
+    # as None via the default — re-running score() fills it in (SCORING.md §8).
 
     # pipeline bookkeeping
     run_id: str = ""

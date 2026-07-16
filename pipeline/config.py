@@ -41,6 +41,34 @@ DEFAULTS: dict = {
             "timeout_s": 120,
         },
     },
+    "scoring": {
+        "version": 1,
+        "icp_fit": {
+            "has_email": 30,
+            "has_phone": 25,
+            "has_social": 15,
+            "established_bonus": 15,
+            "established_threshold": 2,
+            "industry_match": 15,
+        },
+        "website_audit": {
+            "no_website_score": 90,
+            "unreachable_domain_score": 65,
+            "no_https_bonus": 10,
+            "not_mobile_friendly_bonus": 10,
+            "lighthouse_weights": {
+                "performance": 0.40,
+                "best_practices": 0.25,
+                "accessibility": 0.20,
+                "seo": 0.15,
+            },
+        },
+        "total": {
+            "icp_fit": 0.35,
+            "website_audit": 0.50,
+            "intent": 0.15,
+        },
+    },
 }
 
 
@@ -97,3 +125,34 @@ def _validate(config: dict, path: Path) -> None:
         raise ConfigError(f"{path}: enrich.lighthouse.binary must be a non-empty string")
     if not isinstance(lighthouse.get("timeout_s"), int) or lighthouse["timeout_s"] <= 0:
         raise ConfigError(f"{path}: enrich.lighthouse.timeout_s must be a positive integer")
+
+    scoring = config["scoring"]
+    if not isinstance(scoring.get("version"), int) or scoring["version"] <= 0:
+        raise ConfigError(f"{path}: scoring.version must be a positive integer")
+    for section in ("icp_fit", "website_audit", "total"):
+        if not isinstance(scoring.get(section), dict):
+            raise ConfigError(f"{path}: scoring.{section} must be a mapping")
+    for key, value in scoring["icp_fit"].items():
+        if not isinstance(value, (int, float)) or value < 0:
+            raise ConfigError(f"{path}: scoring.icp_fit.{key} must be a non-negative number")
+    audit = scoring["website_audit"]
+    for key, value in audit.items():
+        if key == "lighthouse_weights":
+            continue
+        if not isinstance(value, (int, float)) or value < 0:
+            raise ConfigError(
+                f"{path}: scoring.website_audit.{key} must be a non-negative number"
+            )
+    # both weight groups must sum to 1.0 — a tuning typo here would silently
+    # inflate or deflate every score in the batch, so fail loudly at startup
+    for name, group in (
+        ("website_audit.lighthouse_weights", audit.get("lighthouse_weights")),
+        ("total", scoring["total"]),
+    ):
+        if not isinstance(group, dict) or not group:
+            raise ConfigError(f"{path}: scoring.{name} must be a non-empty mapping")
+        for key, value in group.items():
+            if not isinstance(value, (int, float)) or value < 0:
+                raise ConfigError(f"{path}: scoring.{name}.{key} must be a non-negative number")
+        if abs(sum(group.values()) - 1.0) > 0.001:
+            raise ConfigError(f"{path}: scoring.{name} weights must sum to 1.0")
