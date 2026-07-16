@@ -27,12 +27,18 @@ _LEAD_TYPES = {
 }
 
 
-def _audit_case(lead: Lead) -> str:
+def _audit_case(lead: Lead, lighthouse_weights: dict) -> str:
     """The single branch website_audit_score and lead_type both derive from —
-    one helper so the two can never disagree about which case a lead is."""
+    one helper so the two can never disagree about which case a lead is.
+
+    A lighthouse dict sharing no categories with the configured weights has
+    nothing to compute from, so it lands in "unreachable" too — degrade,
+    don't crash on a divide-by-zero (and "unclear" is the honest lead_type
+    when the audit produced no usable data).
+    """
     if not lead.domain:
         return "no_website"
-    if not lead.lighthouse:
+    if not lead.lighthouse or not any(m in lead.lighthouse for m in lighthouse_weights):
         return "unreachable"
     return "audited"
 
@@ -100,7 +106,7 @@ def score(lead: Lead, weights: dict) -> Lead:
     hand after researching the top candidates (SCORING.md §5). scorer.py
     never writes it.
     """
-    case = _audit_case(lead)
+    case = _audit_case(lead, weights["website_audit"]["lighthouse_weights"])
     icp_fit = _icp_fit_score(lead, weights["icp_fit"])
     website_audit = _website_audit_score(lead, case, weights["website_audit"])
     total_weights = weights["total"]

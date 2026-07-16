@@ -184,35 +184,49 @@ def cmd_score(args: argparse.Namespace) -> int:
     if not enriched_path.exists():
         raise ValueError(f"no enriched.jsonl in {run_dir} — run enrich first")
     leads = read_jsonl(enriched_path)
-    if args.limit is not None:
-        leads = leads[: args.limit]
 
-    # the intent workflow (SCORING.md §5): intent_score is hand-edited in
-    # scored.jsonl after manual research, so a re-score must carry those
-    # edits forward instead of resetting them from enriched.jsonl
+    # scored.jsonl may hold hand-edited intent_score values (the manual
+    # workflow in SCORING.md §5) — the only hand-entered data in the
+    # pipeline, so a re-score must never drop or reset those rows
     scored_path = run_dir / "scored.jsonl"
+    previous = {}
     if scored_path.exists():
-        intents = {
-            lead_key(lead): lead.intent_score
-            for lead in read_jsonl(scored_path)
-            if lead.intent_score
-        }
-        leads = [
-            replace(lead, intent_score=intents[lead_key(lead)])
-            if lead_key(lead) in intents
-            else lead
-            for lead in leads
-        ]
+        previous = {lead_key(lead): lead for lead in read_jsonl(scored_path)}
 
     weights = config["scoring"]
     started_at = _now_iso()
-    scored = [score(lead, weights) for lead in leads]
-    write_jsonl(scored_path, scored)
-    CsvSink(run_dir / "scored.csv").write(scored)
 
+    results = []
+    scored_count = pending = 0
+    for lead in leads:
+        # a lead enrichment never reached (status still "collected" after a
+        # limited enrich run) has a domain but no audit data — scoring it
+        # would fabricate an "unreachable domain" signal for a site nobody
+        # tried. Pass it through unscored; a full enrich run picks it up.
+        if lead.status not in ("enriched", "enrich_failed"):
+            results.append(previous.get(lead_key(lead), lead))
+            pending += 1
+            continue
+        # --limit dry-runs must not truncate scored.jsonl: rows beyond the
+        # limit keep their previous scored values (including intent) rather
+        # than being dropped from the file
+        if args.limit is not None and scored_count >= args.limit:
+            results.append(previous.get(lead_key(lead), lead))
+            continue
+        prev = previous.get(lead_key(lead))
+        if prev is not None and prev.intent_score:
+            lead = replace(lead, intent_score=prev.intent_score)
+        results.append(score(lead, weights))
+        scored_count += 1
+
+    write_jsonl(scored_path, results)
+    CsvSink(run_dir / "scored.csv").write(results)
+
+    carried = len(leads) - scored_count - pending
     by_type: dict[str, int] = {}
-    for lead in scored:
-        by_type[lead.lead_type] = by_type.get(lead.lead_type, 0) + 1
+    for lead in results:
+        if lead.lead_type is not None:
+            by_type[lead.lead_type] = by_type.get(lead.lead_type, 0) + 1
 
     manifest_path = run_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {"run_id": args.run}
@@ -221,9 +235,11 @@ def cmd_score(args: argparse.Namespace) -> int:
         "config_snapshot": {"scoring": weights, "limit": args.limit},
         "counts": {
             "input": len(leads),
-            "scored": len(scored),
+            "scored": scored_count,
+            "pending_enrichment": pending,
+            "beyond_limit": carried,
             "by_lead_type": by_type,
-            "with_intent": sum(1 for lead in scored if lead.intent_score),
+            "with_intent": sum(1 for lead in results if lead.intent_score),
         },
         "started_at": started_at,
         "finished_at": _now_iso(),
@@ -233,8 +249,16 @@ def cmd_score(args: argparse.Namespace) -> int:
     )
 
     type_summary = ", ".join(f"{t}: {n}" for t, n in sorted(by_type.items()))
-    print(f"run {args.run}: {len(scored)} scored (v{weights['version']}) — {type_summary}")
-    for lead in sorted(scored, key=lambda l: l.total_score, reverse=True)[:5]:
+    print(f"run {args.run}: {scored_count} scored (v{weights['version']}) — {type_summary}")
+    if pending:
+        print(
+            f"  warning: {pending} leads still pending enrichment were passed "
+            f"through unscored — finish `enrich --run {args.run}` first"
+        )
+    if carried:
+        print(f"  {carried} beyond --limit kept their previous scored values")
+    ranked = [lead for lead in results if lead.total_score is not None]
+    for lead in sorted(ranked, key=lambda l: l.total_score, reverse=True)[:5]:
         print(
             f"  {lead.total_score:5.1f}  {lead.company} "
             f"({lead.domain or 'no website'}, {lead.lead_type})"

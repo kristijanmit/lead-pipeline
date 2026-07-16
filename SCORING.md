@@ -101,8 +101,10 @@ opportunity      += not_mobile_friendly bonus if mobile_friendly is False
 
 (In the implementation, if Lighthouse returned only some categories, the
 weights are renormalized over the categories present — a missing category
-reads as "no signal", not as fake opportunity. The result is clamped to
-[0, 100] so the flat bonuses can't push a sub-score past the scale.)
+reads as "no signal", not as fake opportunity. If *none* of the weighted
+categories are present, there is nothing to compute from and the lead falls
+back to the unreachable case above. The result is clamped to [0, 100] so
+the flat bonuses can't push a sub-score past the scale.)
 
 Default Lighthouse weights:
 

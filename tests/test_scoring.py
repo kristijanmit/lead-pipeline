@@ -87,6 +87,14 @@ def test_missing_lighthouse_category_renormalizes_instead_of_faking_opportunity(
     assert scored.website_audit_score == 50
 
 
+def test_lighthouse_with_no_weighted_categories_falls_back_to_unreachable():
+    # nothing to compute from — must not divide by zero, and "unclear" is
+    # the honest lead_type when the audit produced no usable data
+    scored = score(_lead(lighthouse={"pwa": 30}), WEIGHTS)
+    assert scored.website_audit_score == 65
+    assert scored.lead_type == "unclear"
+
+
 def test_terrible_audited_site_clamps_at_100():
     lead = _lead(
         lighthouse={"performance": 0, "accessibility": 0, "best_practices": 0, "seo": 0},
