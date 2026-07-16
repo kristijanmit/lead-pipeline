@@ -1,0 +1,23 @@
+{
+  "lighthouseVersion": "12.6.0",
+  "requestedUrl": "https://dentalnovak.rs/",
+  "finalDisplayedUrl": "https://dentalnovak.rs/",
+  "categories": {
+    "performance": { "id": "performance", "title": "Performance", "score": 0.42 },
+    "accessibility": { "id": "accessibility", "title": "Accessibility", "score": 0.88 },
+    "best-practices": { "id": "best-practices", "title": "Best Practices", "score": 0.75 },
+    "seo": { "id": "seo", "title": "SEO", "score": 0.91 }
+  },
+  "audits": {
+    "viewport": {
+      "id": "viewport",
+      "title": "Has a <meta name=\"viewport\"> tag with width or initial-scale",
+      "score": 1
+    },
+    "first-contentful-paint": {
+      "id": "first-contentful-paint",
+      "score": 0.31,
+      "displayValue": "4.2 s"
+    }
+  }
+}

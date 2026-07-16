@@ -104,7 +104,7 @@ A single canonical record flows through every stage. Defined once in
 ```python
 @dataclass
 class Lead:
-    schema_version: int = 2        # bump whenever fields are added/changed
+    schema_version: int = 3        # bump whenever fields are added/changed
 
     # identity — set at collection, never changes after
     company: str
@@ -114,7 +114,7 @@ class Lead:
 
     # contact enrichment (Phase 2, step 1)
     contact_emails: list[str] = field(default_factory=list)   # info@, sales@, etc — don't collapse to one
-    contact_phone: str | None = None
+    contact_phones: list[str] = field(default_factory=list)   # same rule as emails — keep every number (v3)
     social_links: dict[str, str] = field(default_factory=dict)  # {"linkedin": "...", ...}
 
     # website audit (Phase 2, step 2)
@@ -143,6 +143,12 @@ class Lead:
   and `sales@` on the same page — collapsing to one email means the enricher
   silently picks a winner and throws data away. Same reasoning as
   `social_links` already being a dict.
+- `contact_phones` (schema v3) follows the same rule — an office landline and
+  a mobile number on the contact page are both worth keeping. Duplicate
+  spellings of one number ("021/452-333" vs "+381 21 452 333") are collapsed
+  by a comparison key (`dedupe.phone_key`), never by rewriting the stored
+  formatting. v2 JSONL with a single `contact_phone` string still loads —
+  `Lead.from_dict` migrates it into the list.
 - `status` is an explicit small enum, not just "did it work or not." A site
   that 403'd, one that timed out, and one with simply no email found are
   different situations — a future retry policy or manual-review queue needs
@@ -214,6 +220,7 @@ has to flatten a few `Lead` fields deliberately rather than fail on them:
 | ------------------------------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ------------------------------- | ------------------------------------------------------------------- |
 | `contact_emails[0]`                                     | `Primary Email` (Email)         | First address, since Notion's Email type validates a single string                                                                                          |
 | `contact_emails[1:]`                                    | `Additional Emails` (Rich text) | Joined with `, ` — informational only, not clickable as mailto                                                                                              |
+| `contact_phones[0]`                                     | `Phone` (Phone number)          | Same rule as emails: first number, since Notion's Phone type is a single string; the rest stay queryable in the JSONL until an `Additional Phones` rich-text property earns its place |
 | `social_links`                                          | `Social Links` (Rich text)      | Rendered as Markdown links, one per line: `[LinkedIn](url)`                                                                                                 |
 | `lighthouse["performance"                               | "accessibility"                 | "seo"                                                                                                                                                       | "best_practices"]` | four separate Number properties | Flattened one key per column — Notion has no nested-object property |
 | `schema_version`, `scoring_version`, `run_id`, `errors` | _(none)_                        | Deliberately not synced — Notion is a sink for humans to act on, not the source of truth; this bookkeeping stays in the JSONL manifest where it's queryable |

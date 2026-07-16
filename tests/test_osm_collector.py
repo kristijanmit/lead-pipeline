@@ -64,7 +64,7 @@ def test_parse_elements(overpass_sample):
     schmidt = by_company["Bäckerei Schmidt"]
     assert schmidt.domain == "baeckerei-schmidt.de"  # normalized
     assert schmidt.industry == "bakery"
-    assert schmidt.contact_phone == "+49 30 1234567"
+    assert schmidt.contact_phones == ["+49 30 1234567"]
     assert schmidt.source == "osm"
     assert schmidt.status == "collected"
 
@@ -76,4 +76,4 @@ def test_parse_elements(overpass_sample):
 
     bistro = by_company["No Web Bistro"]
     assert bistro.domain == ""  # no website is data, not a dropped lead
-    assert bistro.contact_phone == "+49 30 7654321"
+    assert bistro.contact_phones == ["+49 30 7654321"]

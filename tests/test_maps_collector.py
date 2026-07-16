@@ -34,7 +34,7 @@ def test_parse_results_csv():
     assert novak.industry == "dentist"  # via #!# custom-ID round trip
     # comma-joined emails split and case-insensitively deduped
     assert novak.contact_emails == ["info@dentalnovak.rs", "office@dentalnovak.rs"]
-    assert novak.contact_phone == "+381 21 123 456"
+    assert novak.contact_phones == ["+381 21 123 456"]
 
     nina = by_company["Salon Nina"]
     assert nina.industry == "hairdresser"

@@ -13,7 +13,7 @@ from typing import Iterable
 import requests
 
 from pipeline.collectors.base import register
-from pipeline.dedupe import normalize_domain
+from pipeline.dedupe import normalize_domain, phone_key
 from pipeline.schema import Lead
 
 # Friendly category names -> the OSM tag that marks them. Anything not in
@@ -116,6 +116,13 @@ def parse_elements(data: dict, categories_by_tag: dict[tuple[str, str], str]) ->
         for tag in _EMAIL_TAGS:
             if tags.get(tag):
                 emails.setdefault(tags[tag].lower(), tags[tag])
+        # keep every number; tags may hold several, ";"-separated per OSM convention
+        phones: dict[str, str] = {}
+        for tag in _PHONE_TAGS:
+            for number in (tags.get(tag) or "").split(";"):
+                number = number.strip()
+                if number:
+                    phones.setdefault(phone_key(number), number)
         industry = next(
             (cat for (key, value), cat in categories_by_tag.items() if tags.get(key) == value),
             "other",
@@ -127,7 +134,7 @@ def parse_elements(data: dict, categories_by_tag: dict[tuple[str, str], str]) ->
                 source="osm",
                 industry=industry,
                 contact_emails=list(emails.values()),
-                contact_phone=next((tags[t] for t in _PHONE_TAGS if tags.get(t)), None),
+                contact_phones=list(phones.values()),
             )
         )
     return leads

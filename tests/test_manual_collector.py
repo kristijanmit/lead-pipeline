@@ -27,14 +27,14 @@ def test_read_manual_csv(tmp_path):
     assert alfa.source == "manual"
     assert alfa.industry == "it_company"
     assert alfa.contact_emails == ["hello@studioalfa.rs", "sales@studioalfa.rs"]
-    assert alfa.contact_phone == "+381 60 111 2222"
+    assert alfa.contact_phones == ["+381 60 111 2222"]
 
     bob = leads[1]
     assert bob.company == "Referral Bob"
     assert bob.domain == ""
     assert bob.industry == "other"
     assert bob.contact_emails == []
-    assert bob.contact_phone is None
+    assert bob.contact_phones == []
 
 
 def test_missing_company_column_raises(tmp_path):

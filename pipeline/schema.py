@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Iterable
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SCORING_VERSION = 1
 
 
@@ -28,7 +28,7 @@ class Lead:
 
     # contact enrichment (Phase 2, step 1)
     contact_emails: list[str] = field(default_factory=list)  # keep every address found
-    contact_phone: str | None = None
+    contact_phones: list[str] = field(default_factory=list)  # keep every number found
     social_links: dict[str, str] = field(default_factory=dict)  # {"linkedin": "...", ...}
 
     # website audit (Phase 2, step 2)
@@ -55,6 +55,9 @@ class Lead:
 
     @classmethod
     def from_dict(cls, data: dict) -> Lead:
+        # schema v2 stored a single contact_phone string
+        if data.get("contact_phone") and not data.get("contact_phones"):
+            data = {**data, "contact_phones": [data["contact_phone"]]}
         # Tolerate unknown keys so newer JSONL files load under older code
         known = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in data.items() if k in known})

@@ -50,18 +50,28 @@ each satisfying the `Enricher.enrich(lead: Lead) -> Lead` interface.
       `Additional Emails`, `Phone`, `Social Links`, `CMS`, `HTTPS`,
       `Mobile Friendly`, and the four Lighthouse breakdown scores all exist
       in AGENCY Leads Pipeline now, so this phase just needs to produce the data
-- [ ] Expand contact enrichment in `enrich.py` (-> `enrichers/contact.py`): pull
+- [x] Expand contact enrichment in `enrich.py` (-> `enrichers/contact.py`): pull
       phone numbers (regex) and social media links (LinkedIn, Instagram,
       Facebook, X) from the homepage/contact page, alongside the existing
       email scrape — and keep every email found, not just the first one
-- [ ] Only once contact data is gathered, run the website audit
+      (landed as `pipeline/enrichers/contact.py` behind the `Enricher`
+      protocol; homepage + one kontakt page, robots.txt-checked; every email
+      AND every phone number kept — `contact_phones` list, schema v3;
+      runs via `python -m pipeline.runner enrich --run <run_id>`)
+- [x] Only once contact data is gathered, run the website audit
       (-> `enrichers/audit.py`): install Lighthouse CLI
       (`npm install -g lighthouse`), replace the PageSpeed API call in
       `enrich.py` with a local `lighthouse <url> --output=json` run — same
       engine, no API key, no quota, plus accessibility, SEO, and
       best-practices scores (PageSpeed API only gave you performance)
-- [ ] Update `Audit Notes` to summarize contact-data completeness alongside
+      (landed as `pipeline/enrichers/audit.py`, runs second in the enrich
+      chain; Lighthouse 12.8.2 installed; also sets https/cms/mobile_friendly
+      from a cheap probe so dead sites don't cost a Lighthouse run)
+- [x] Update `Audit Notes` to summarize contact-data completeness alongside
       all four Lighthouse categories, not just speed
+      (`build_audit_notes` in `audit.py` — e.g. "1 emails, 2 phones, 3
+      socials; LH perf 47 / a11y 88 / bp 68 / seo 92; https ok; cms:
+      WordPress"; verified live on Novi Sad dentists, 2026-07-16)
 
 ## Phase 3 — Scoring refinement
 

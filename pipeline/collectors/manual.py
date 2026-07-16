@@ -4,7 +4,8 @@ Reads leads_manual.csv (see leads_manual.csv.example for the header) so
 hand-found leads flow through the same dedupe/enrich/score path as the
 automated sources instead of living in a separate spreadsheet.
 
-Columns: company (required), website, industry, emails (";"-separated), phone.
+Columns: company (required), website, industry, emails (";"-separated),
+phone (also ";"-separated — keep every number, same as emails).
 """
 
 from __future__ import annotations
@@ -39,6 +40,9 @@ def read_manual_csv(path: str | Path) -> list[Lead]:
             emails = [
                 e.strip() for e in (row.get("emails") or "").split(";") if e.strip()
             ]
+            phones = [
+                p.strip() for p in (row.get("phone") or "").split(";") if p.strip()
+            ]
             leads.append(
                 Lead(
                     company=company,
@@ -46,7 +50,7 @@ def read_manual_csv(path: str | Path) -> list[Lead]:
                     source="manual",
                     industry=(row.get("industry") or "").strip() or "other",
                     contact_emails=emails,
-                    contact_phone=(row.get("phone") or "").strip() or None,
+                    contact_phones=phones,
                 )
             )
     return leads

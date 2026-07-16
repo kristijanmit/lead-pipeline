@@ -60,7 +60,9 @@ def parse_results_csv(path: str | Path, categories: set[str]) -> list[Lead]:
                     source="maps",
                     industry=industry,
                     contact_emails=_split_emails(row.get("emails") or ""),
-                    contact_phone=(row.get("phone") or "").strip() or None,
+                    contact_phones=(
+                        [phone] if (phone := (row.get("phone") or "").strip()) else []
+                    ),
                 )
             )
     return leads

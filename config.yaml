@@ -20,4 +20,13 @@ maps:
   extract_emails: true
   timeout_s: 900
 
+# Phase 2 — contact scraping + Lighthouse audit.
+# Install the audit engine once: npm install -g lighthouse (see RESOURCES.md).
+enrich:
+  delay_s: 2           # pause between leads' sites — shared courtesy, keep >= 1
+  http_timeout_s: 20
+  lighthouse:
+    binary: lighthouse
+    timeout_s: 120     # per-site cap; slow sites fail into Lead.errors, not hang the batch
+
 # scoring weights and ICP definitions land here in Phase 3

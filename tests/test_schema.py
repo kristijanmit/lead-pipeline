@@ -32,6 +32,19 @@ def test_from_dict_ignores_unknown_fields():
     assert lead.schema_version == SCHEMA_VERSION
 
 
+def test_from_dict_migrates_legacy_contact_phone():
+    # schema v2 JSONL (the first real runs) stored a single string
+    lead = Lead.from_dict(
+        {
+            "company": "A",
+            "domain": "a.com",
+            "source": "osm",
+            "contact_phone": "+381 21 123 456",
+        }
+    )
+    assert lead.contact_phones == ["+381 21 123 456"]
+
+
 def test_defaults():
     lead = Lead(company="A", domain="a.com", source="osm")
     assert lead.status == "collected"

@@ -33,6 +33,14 @@ DEFAULTS: dict = {
         "extract_emails": True,
         "timeout_s": 900,
     },
+    "enrich": {
+        "delay_s": 2,
+        "http_timeout_s": 20,
+        "lighthouse": {
+            "binary": "lighthouse",
+            "timeout_s": 120,
+        },
+    },
 }
 
 
@@ -77,3 +85,15 @@ def _validate(config: dict, path: Path) -> None:
     for key in ("depth", "timeout_s"):
         if not isinstance(maps.get(key), int) or maps[key] <= 0:
             raise ConfigError(f"{path}: maps.{key} must be a positive integer")
+    enrich = config["enrich"]
+    if not isinstance(enrich.get("delay_s"), (int, float)) or enrich["delay_s"] < 0:
+        raise ConfigError(f"{path}: enrich.delay_s must be a non-negative number")
+    if not isinstance(enrich.get("http_timeout_s"), int) or enrich["http_timeout_s"] <= 0:
+        raise ConfigError(f"{path}: enrich.http_timeout_s must be a positive integer")
+    lighthouse = enrich.get("lighthouse")
+    if not isinstance(lighthouse, dict):
+        raise ConfigError(f"{path}: enrich.lighthouse must be a mapping")
+    if not isinstance(lighthouse.get("binary"), str) or not lighthouse["binary"]:
+        raise ConfigError(f"{path}: enrich.lighthouse.binary must be a non-empty string")
+    if not isinstance(lighthouse.get("timeout_s"), int) or lighthouse["timeout_s"] <= 0:
+        raise ConfigError(f"{path}: enrich.lighthouse.timeout_s must be a positive integer")

@@ -28,20 +28,34 @@ def normalize_domain(raw: str | None) -> str:
     return host.rstrip(".")
 
 
-def dedupe_leads(leads: Iterable[Lead]) -> list[Lead]:
-    """Drop duplicates, first occurrence wins.
-
-    Leads with a domain dedupe on it. Leads without one (real businesses
-    with no website are still outreach targets) fall back to the
-    case-folded company name so they aren't all collapsed together.
+def phone_key(raw: str) -> str:
+    """Dedup key for one phone number: last 8 digits (leading zeros stripped
+    first), so local and international spellings of the same number —
+    "021/452-333" vs "+381 21 452 333" — collapse without any country-code
+    table. Formatting is never normalized for display, only for comparison.
     """
+    digits = "".join(c for c in raw if c.isdigit()).lstrip("0")
+    return digits[-8:]
+
+
+def lead_key(lead: Lead) -> tuple[str, str]:
+    """Identity key for one lead across stages and re-runs.
+
+    Leads with a domain key on it. Leads without one (real businesses with
+    no website are still outreach targets) fall back to the case-folded
+    company name so they aren't all collapsed together.
+    """
+    if lead.domain:
+        return ("domain", lead.domain)
+    return ("company", lead.company.strip().lower())
+
+
+def dedupe_leads(leads: Iterable[Lead]) -> list[Lead]:
+    """Drop duplicates by lead_key, first occurrence wins."""
     seen: set[tuple[str, str]] = set()
     out: list[Lead] = []
     for lead in leads:
-        if lead.domain:
-            key = ("domain", lead.domain)
-        else:
-            key = ("company", lead.company.strip().lower())
+        key = lead_key(lead)
         if key in seen:
             continue
         seen.add(key)
