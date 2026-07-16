@@ -57,14 +57,19 @@ def _icp_fit_score(lead: Lead, weights: dict) -> float:
         score += weights["has_phone"]
     if lead.social_links:
         score += weights["has_social"]
-    contact_surface = (
-        len(lead.contact_emails) + len(lead.contact_phones) + len(lead.social_links)
+    # distinct channel *types* present, not total item count — two phone
+    # numbers and nothing else isn't "established" the same way one phone
+    # plus one email is; this is about breadth of reachability, not depth
+    channels_present = sum(
+        [bool(lead.contact_emails), bool(lead.contact_phones), bool(lead.social_links)]
     )
-    if contact_surface >= weights["established_threshold"]:
+    if channels_present >= weights["established_threshold"]:
         score += weights["established_bonus"]
-    # full credit while collection is single-industry per run — a named
-    # component now so mixing industries later is a weight change, not a
-    # schema change (SCORING.md §3)
+    # currently a flat, always-awarded credit while collection is
+    # single-industry per run, so it contributes no discriminating signal
+    # today — schema-forward for when a run mixes industries, kept as a
+    # named component now so that becomes a weight change, not a schema
+    # change (SCORING.md §3)
     score += weights["industry_match"]
     return _clamp(score)
 
@@ -96,7 +101,36 @@ def _website_audit_score(lead: Lead, case: str, weights: dict) -> float:
         opportunity += weights["no_https_bonus"]
     if lead.mobile_friendly is False:
         opportunity += weights["not_mobile_friendly_bonus"]
-    return _clamp(opportunity)
+
+    # A bad audited site is still an easier sell than no website at all —
+    # there's already an owner convinced they need a site, no domain/DNS
+    # setup, and a live baseline to point at. Capping here keeps even the
+    # worst audited site below no_website_score so the ranking can never
+    # invert that (SCORING.md §4.2). Config validation already rejects a
+    # cap >= no_website_score at startup; this assertion is a second guard
+    # for weights dicts built by hand (e.g. in tests) that skip that check.
+    cap = weights["audited_score_cap"]
+    assert cap < weights["no_website_score"], (
+        "audited_score_cap must stay below no_website_score, or a bad "
+        "audited site could outrank a lead with no website at all"
+    )
+    return _clamp(min(opportunity, cap))
+
+
+def research_rank(lead: Lead, weights: dict) -> float:
+    """icp_fit and website_audit only, excluding intent — used to build the
+    manual intent-research candidate pool (SCORING.md §5).
+
+    Pre-research, intent_score is 0.0 for every lead, so total_score is just
+    this same weighted sum plus a uniform zero. Exposing the sum on its own
+    (rather than reusing total_score) makes that explicit at the call site
+    instead of relying on the reader to know intent contributes nothing yet.
+    """
+    total_weights = weights["total"]
+    return (
+        lead.icp_fit_score * total_weights["icp_fit"]
+        + lead.website_audit_score * total_weights["website_audit"]
+    )
 
 
 def score(lead: Lead, weights: dict) -> Lead:

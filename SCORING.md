@@ -45,15 +45,22 @@ Components (see `icp_fit` weights in `config.yaml`):
   phone and nothing else — that's still a workable lead.
 - **Has at least one social link** — signals an actively maintained public
   presence, not just a stale directory listing.
-- **Established-practice bonus** — triggered when the combined count of
-  emails + phones + socials crosses a threshold (default: 2). More contact
-  surface tends to mean a multi-person practice with a bigger budget and
-  someone who plausibly owns "fix the website" as a task, rather than a
-  solo practitioner running everything themselves.
+- **Established-practice bonus** — triggered when the count of *distinct
+  channel types* present (email, phone, social — each counts once,
+  regardless of how many emails/phones/socials were found) crosses a
+  threshold (default: 2). This is deliberately about breadth of
+  reachability, not depth: two phone numbers and nothing else doesn't
+  qualify, but one phone plus one email does. Breadth tends to mean a
+  multi-person practice with a bigger budget and someone who plausibly owns
+  "fix the website" as a task, rather than a solo practitioner running
+  everything themselves — a count of raw items doesn't carry that signal
+  the same way (a practice that listed the same phone number twice isn't
+  more established than one that didn't).
 - **Industry match** — currently full credit, since collection is
-  single-industry per run (see ARCHITECTURE.md §2, non-goals). This becomes
-  a real filter once a run mixes industries; kept as a named field now
-  rather than added later as a schema change.
+  single-industry per run (see ARCHITECTURE.md §2, non-goals). It
+  contributes no discriminating signal today — every lead in a run gets the
+  same +15. This becomes a real filter once a run mixes industries; kept as
+  a named field now rather than added later as a schema change.
 
 `icp_fit_score` intentionally ignores company size proxies beyond contact
 count (headcount, revenue) — that data isn't in the `Lead` schema and isn't
@@ -72,7 +79,7 @@ site.
 | ------------------------------------------------------------------ | ---------------------------------------------------------- | ----------------------------------------- |
 | **No domain at all**                                             | "Веселин", "Рисус", "Otro4u"                                | Fixed `no_website_score` (default 90)     |
 | **Domain exists, unreachable during audit**                      | "Komnenović" (`stomatolognovisad-komnenovic.in.rs`), "Pro Dental Solution" | Fixed `unreachable_domain_score` (default 65) |
-| **Domain exists, audited**                                        | "Bobić", "Markov Dental", "Prosmile"                        | Computed from Lighthouse + flags (below)  |
+| **Domain exists, audited**                                        | "Bobić", "Markov Dental", "Prosmile"                        | Computed from Lighthouse + flags, capped at `audited_score_cap` (default 85, below)  |
 
 The no-domain and unreachable-domain cases exist because
 `lead.lighthouse is None` in both, and letting that fall through to a
@@ -97,6 +104,7 @@ weighted_quality = Σ (lighthouse[metric] × lighthouse_weight[metric])
 opportunity       = 100 − weighted_quality
 opportunity      += no_https bonus            if https is False
 opportunity      += not_mobile_friendly bonus if mobile_friendly is False
+opportunity       = min(opportunity, audited_score_cap)
 ```
 
 (In the implementation, if Lighthouse returned only some categories, the
@@ -105,6 +113,20 @@ reads as "no signal", not as fake opportunity. If *none* of the weighted
 categories are present, there is nothing to compute from and the lead falls
 back to the unreachable case above. The result is clamped to [0, 100] so
 the flat bonuses can't push a sub-score past the scale.)
+
+**The cap:** without it, a terrible audited site (very low Lighthouse
+quality plus both the `no_https` and `not_mobile_friendly` bonuses) can
+compute to 100 — beating `no_website_score`'s fixed 90. That's backwards.
+A lead with no website at all is the strongest new-build signal in the
+batch and should never be outranked by an audited-but-bad site: a bad
+audited site is still a warmer, easier sell than a blank slate — there's
+already an owner who plausibly knows they need a working site, no
+domain/DNS setup required, and a live baseline to point at in the pitch.
+`audited_score_cap` (default 85) enforces that by construction rather than
+by hoping the Lighthouse weights and bonuses never combine badly: it must
+always stay below `no_website_score`, and both `config.py`'s startup
+validation and an assertion in `scorer.py` enforce that ordering so it
+can't silently regress if someone retunes either constant later.
 
 Default Lighthouse weights:
 
@@ -130,13 +152,35 @@ through whatever value is already on the `Lead`. This is deliberate:
 
 1. Run `score()` once with `intent_score` at its default (`0.0`) to get an
    initial ranking from `icp_fit` and `website_audit` alone.
-2. Manually research the top ~20 by `total_score` — recent activity,
-   reviews, anything suggesting they're actively looking to invest right
-   now.
+2. Manually research the candidate pool — recent activity, reviews,
+   anything suggesting they're actively looking to invest right now.
 3. Hand-edit `intent_score` on those leads in the JSONL (or a review sheet),
    then re-run `score()` — `total_score` updates, `icp_fit_score` and
    `website_audit_score` are recomputed identically since they don't depend
    on `intent_score`.
+
+**The candidate pool:** since `intent_score` is `0.0` for every lead before
+step 2 happens, `total_score` at that point is really just
+`icp_fit_score × 0.35 + website_audit_score × 0.50` — intent's weight
+contributes nothing yet. Ranking the research pool by `total_score` would
+therefore be equivalent to ranking by fit+audit alone, just with an
+unnecessarily narrow cutoff: a lead with a strong buying signal (a recent
+expansion, a bad review asking "when's the new site coming") but only
+average fit/audit scores could rank outside a top-20 cutoff and never get
+looked at, even though intent research is exactly the step meant to catch
+it.
+
+`cmd_score` (`python -m pipeline.runner score --run <run_id>`) builds this
+pool automatically: every scored run writes `research_pool.csv` alongside
+`scored.csv`, containing the top `scoring.intent_research_pool_size`
+leads (default 50, was effectively ~20 before this was made explicit and
+configurable) ranked by `icp_fit_score × weights.total.icp_fit +
+website_audit_score × weights.total.website_audit` — the same formula
+`total_score` uses, minus the `intent` term, computed by
+`pipeline.scoring.research_rank()`. Widening the pool from ~20 to 50 trades
+a bit more manual research time for meaningfully fewer missed high-intent
+leads; retune `intent_research_pool_size` in `config.yaml` if that trade
+stops feeling right for your batch size.
 
 In practice: edit `intent_score` directly in `scored.jsonl` and re-run
 `python -m pipeline.runner score --run <run_id>` — the score command carries
@@ -237,3 +281,32 @@ hand-built `Lead` objects, no mocking (see `tests/test_scoring.py`):
   fell into — e.g. a lead can never come back `lead_type="new_build"` with
   a `website_audit_score` computed from Lighthouse data, since both are
   derived from the single `_audit_case()` branch
+- A terrible audited site (near-zero Lighthouse quality plus both flat
+  bonuses) never exceeds `audited_score_cap`, and that cap stays below
+  `no_website_score` — both directly, and via an assertion that a
+  misconfigured `audited_score_cap >= no_website_score` raises
+- The established bonus is withheld for two phone numbers and nothing else,
+  and awarded for one email plus one phone — distinct channel types, not
+  raw item count
+- `research_rank()` matches `icp_fit_score × weights.total.icp_fit +
+  website_audit_score × weights.total.website_audit` exactly, excluding
+  `intent`, and `cmd_score`'s `research_pool.csv` respects
+  `intent_research_pool_size` and ranks by `research_rank()` rather than
+  `total_score` — a high-intent, average-fit lead must not silently bump a
+  better-fit, zero-intent lead out of the pool
+
+## 10. Changelog
+
+- **v2** — capped the audited-site computed score below `no_website_score`
+  (`audited_score_cap`, default 85) so a bad audited site can never outrank
+  a lead with no website at all; changed the established-practice bonus to
+  require distinct channel *types* rather than a raw item count; made the
+  manual intent-research pool size explicit and configurable
+  (`intent_research_pool_size`, default 50, up from an implicit ~20).
+  `scoring_version` bumped because the audit and fit sub-score formulas
+  changed shape, not just their numbers — v1 and v2 `total_score`s are not
+  directly comparable for leads that hit the cap or the old item-count
+  bonus.
+- **v1** — initial weighted scoring: `icp_fit` (contact channels + industry
+  match), `website_audit` (Lighthouse + https/mobile flags, fixed scores for
+  no-website/unreachable), manual `intent_score`, `lead_type`.

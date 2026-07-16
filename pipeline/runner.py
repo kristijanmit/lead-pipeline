@@ -20,7 +20,7 @@ from pipeline.config import ConfigError, load_config
 from pipeline.dedupe import dedupe_leads, lead_key
 from pipeline.enrichers import apply_enrichers, get_enricher
 from pipeline.schema import read_jsonl, write_jsonl
-from pipeline.scoring import score
+from pipeline.scoring import research_rank, score
 from pipeline.sinks import get_sink
 from pipeline.sinks.csv_sink import CsvSink
 
@@ -233,6 +233,17 @@ def cmd_score(args: argparse.Namespace) -> int:
         if lead.lead_type is not None:
             by_type[lead.lead_type] = by_type.get(lead.lead_type, 0) + 1
 
+    # candidate pool for the manual intent-research pass (SCORING.md §5),
+    # ranked by icp_fit/website_audit only — intent is 0.0 for everyone
+    # pre-research, so total_score would bury high-signal leads whose fit
+    # and audit alone don't crack a narrower cutoff
+    ranked = [lead for lead in results if lead.total_score is not None]
+    pool_size = weights["intent_research_pool_size"]
+    research_pool = sorted(
+        ranked, key=lambda l: research_rank(l, weights), reverse=True
+    )[:pool_size]
+    CsvSink(run_dir / "research_pool.csv").write(research_pool)
+
     manifest_path = run_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {"run_id": args.run}
     manifest["stage"] = "score"
@@ -245,6 +256,7 @@ def cmd_score(args: argparse.Namespace) -> int:
             "beyond_limit": carried,
             "by_lead_type": by_type,
             "with_intent": sum(1 for lead in results if lead.intent_score),
+            "research_pool_size": len(research_pool),
         },
         "started_at": started_at,
         "finished_at": _now_iso(),
@@ -262,13 +274,16 @@ def cmd_score(args: argparse.Namespace) -> int:
         )
     if carried:
         print(f"  {carried} beyond --limit kept their previous scored values")
-    ranked = [lead for lead in results if lead.total_score is not None]
     for lead in sorted(ranked, key=lambda l: l.total_score, reverse=True)[:5]:
         print(
             f"  {lead.total_score:5.1f}  {lead.company} "
             f"({lead.domain or 'no website'}, {lead.lead_type})"
         )
     print(f"  {run_dir}/scored.jsonl (+ scored.csv, manifest.json)")
+    print(
+        f"  top {len(research_pool)} candidates for manual intent research "
+        f"-> {run_dir}/research_pool.csv"
+    )
     return 0
 
 

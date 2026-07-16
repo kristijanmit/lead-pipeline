@@ -42,8 +42,11 @@ notion:
 # SCORING.md; tune here after the first real outreach batch (SCORING.md §7),
 # and bump version whenever weights or formula shape change so old and new
 # total_scores are never silently compared as if they meant the same thing.
+# v2: capped the audited-site score below no_website_score, changed the
+# established bonus to require distinct channel types, and widened the
+# manual intent-research pool (SCORING.md changelog).
 scoring:
-  version: 1
+  version: 2
 
   # icp_fit_score: reachability + legitimacy of the business itself —
   # deliberately ignores the website (that's website_audit). Sums to 100
@@ -52,17 +55,23 @@ scoring:
     has_email: 30
     has_phone: 25
     has_social: 15
-    established_bonus: 15      # awarded when emails+phones+socials >= threshold
-    established_threshold: 2   # more contact surface ~ multi-person practice
+    established_bonus: 15      # awarded when >= threshold distinct channel
+                                # types are present (email/phone/social)
+    established_threshold: 2   # distinct channel *types*, not raw item count —
+                                # two phone numbers alone don't qualify
     industry_match: 15         # full credit while runs are single-industry
 
   # website_audit_score: opportunity, not quality — higher = more to sell
   # into. Computed case is 100 - weighted Lighthouse quality + flat bonuses,
-  # clamped to [0, 100].
+  # capped at audited_score_cap.
   website_audit:
     no_website_score: 90           # no domain at all — strongest new-build signal
     unreachable_domain_score: 65   # domain exists, audit failed — discounted: the
                                    # practice may be gone or the domain abandoned
+    audited_score_cap: 85          # must stay below no_website_score — a bad
+                                   # audited site is still an easier sell than a
+                                   # blank slate, so it must never outrank
+                                   # "no website at all" (SCORING.md §4.2)
     no_https_bonus: 10             # flat add-ons: easy one-sentence pitch hooks
     not_mobile_friendly_bonus: 10  # that Lighthouse doesn't penalize cleanly
     lighthouse_weights:            # must sum to 1.0
@@ -78,3 +87,9 @@ scoring:
     icp_fit: 0.35
     website_audit: 0.50
     intent: 0.15
+
+  # size of the candidate pool for the manual intent-research pass
+  # (SCORING.md §5) — ranked by icp_fit/website_audit only, since intent is
+  # 0.0 for everyone pre-research and total_score would bury high-signal
+  # leads that don't crack a narrower cutoff.
+  intent_research_pool_size: 50

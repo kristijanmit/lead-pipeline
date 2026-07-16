@@ -50,7 +50,7 @@ DEFAULTS: dict = {
         "cache_path": "data/seen_domains.json",
     },
     "scoring": {
-        "version": 1,
+        "version": 2,
         "icp_fit": {
             "has_email": 30,
             "has_phone": 25,
@@ -62,6 +62,7 @@ DEFAULTS: dict = {
         "website_audit": {
             "no_website_score": 90,
             "unreachable_domain_score": 65,
+            "audited_score_cap": 85,
             "no_https_bonus": 10,
             "not_mobile_friendly_bonus": 10,
             "lighthouse_weights": {
@@ -76,6 +77,7 @@ DEFAULTS: dict = {
             "website_audit": 0.50,
             "intent": 0.15,
         },
+        "intent_research_pool_size": 50,
     },
 }
 
@@ -182,6 +184,13 @@ def _validate(config: dict, path: Path) -> None:
             raise ConfigError(
                 f"{path}: scoring.website_audit.{key} must be a non-negative number"
             )
+    # a bad audited site must never outrank "no website at all" — the
+    # strongest new-build signal in the batch (SCORING.md §4.2)
+    if audit["audited_score_cap"] >= audit["no_website_score"]:
+        raise ConfigError(
+            f"{path}: scoring.website_audit.audited_score_cap must be less than "
+            "no_website_score"
+        )
     # both weight groups must sum to 1.0 — a tuning typo here would silently
     # inflate or deflate every score in the batch, so fail loudly at startup
     for name, group in (
@@ -195,3 +204,8 @@ def _validate(config: dict, path: Path) -> None:
                 raise ConfigError(f"{path}: scoring.{name}.{key} must be a non-negative number")
         if abs(sum(group.values()) - 1.0) > 0.001:
             raise ConfigError(f"{path}: scoring.{name} weights must sum to 1.0")
+    pool_size = scoring.get("intent_research_pool_size")
+    if not isinstance(pool_size, int) or pool_size <= 0:
+        raise ConfigError(
+            f"{path}: scoring.intent_research_pool_size must be a positive integer"
+        )

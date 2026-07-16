@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Iterable
 
 SCHEMA_VERSION = 5
-SCORING_VERSION = 1
+SCORING_VERSION = 2
 
 
 @dataclass

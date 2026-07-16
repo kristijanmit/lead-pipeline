@@ -8,11 +8,11 @@ import pytest
 
 from pipeline.config import DEFAULTS
 from pipeline.schema import Lead
-from pipeline.scoring import score
+from pipeline.scoring import research_rank, score
 
 # hand-built mirror of the config.yaml defaults — tests must not load config
 WEIGHTS = {
-    "version": 1,
+    "version": 2,
     "icp_fit": {
         "has_email": 30,
         "has_phone": 25,
@@ -24,6 +24,7 @@ WEIGHTS = {
     "website_audit": {
         "no_website_score": 90,
         "unreachable_domain_score": 65,
+        "audited_score_cap": 85,
         "no_https_bonus": 10,
         "not_mobile_friendly_bonus": 10,
         "lighthouse_weights": {
@@ -34,6 +35,7 @@ WEIGHTS = {
         },
     },
     "total": {"icp_fit": 0.35, "website_audit": 0.50, "intent": 0.15},
+    "intent_research_pool_size": 50,
 }
 
 
@@ -95,13 +97,28 @@ def test_lighthouse_with_no_weighted_categories_falls_back_to_unreachable():
     assert scored.lead_type == "unclear"
 
 
-def test_terrible_audited_site_clamps_at_100():
+def test_terrible_audited_site_is_capped_below_no_website_score():
+    # raw would be 100 - 0 + 10 + 10 = 120 — must be capped, and the cap
+    # must stay below no_website_score so a bad audited site never outranks
+    # a lead with no website at all (SCORING.md §4.2)
     lead = _lead(
         lighthouse={"performance": 0, "accessibility": 0, "best_practices": 0, "seo": 0},
         https=False,
         mobile_friendly=False,
     )
-    assert score(lead, WEIGHTS).website_audit_score == 100
+    scored = score(lead, WEIGHTS)
+    assert scored.website_audit_score == WEIGHTS["website_audit"]["audited_score_cap"]
+    assert scored.website_audit_score < WEIGHTS["website_audit"]["no_website_score"]
+
+
+def test_audited_score_cap_must_stay_below_no_website_score():
+    bad_weights = {
+        **WEIGHTS,
+        "website_audit": {**WEIGHTS["website_audit"], "audited_score_cap": 95},
+    }
+    lead = _lead(lighthouse={"performance": 0, "accessibility": 0, "best_practices": 0, "seo": 0})
+    with pytest.raises(AssertionError):
+        score(lead, bad_weights)
 
 
 def test_icp_fit_full_contact_surface():
@@ -118,6 +135,20 @@ def test_icp_fit_phone_only_practice():
     lead = _lead(contact_phones=["+381 21 111 222"])
     # 25 (phone) + 15 (industry); surface 1 < threshold 2, no established bonus
     assert score(lead, WEIGHTS).icp_fit_score == 40
+
+
+def test_established_bonus_requires_distinct_channel_types_not_item_count():
+    # two phone numbers, nothing else — one channel type, bonus withheld
+    two_phones = _lead(contact_phones=["+381 21 111 222", "+381 21 333 444"])
+    # 25 (phone) + 15 (industry), no established bonus
+    assert score(two_phones, WEIGHTS).icp_fit_score == 40
+
+    # one email, one phone — two distinct channel types, bonus awarded
+    email_and_phone = _lead(
+        contact_emails=["office@test-dental.rs"], contact_phones=["+381 21 111 222"]
+    )
+    # 30 (email) + 25 (phone) + 15 (established) + 15 (industry) = 85
+    assert score(email_and_phone, WEIGHTS).icp_fit_score == 85
 
 
 def test_icp_fit_ignores_website_quality_entirely():
@@ -157,7 +188,7 @@ def test_total_score_hand_computed():
 
 def test_scoring_version_stamped_from_weights_and_nothing_else_changes():
     lead = _lead(domain="", contact_emails=["a@b.rs"])
-    v1 = score(lead, WEIGHTS)
+    v1 = score(lead, {**WEIGHTS, "version": 1})
     v2 = score(lead, {**WEIGHTS, "version": 2})
     assert v1.scoring_version == 1
     assert v2.scoring_version == 2
@@ -207,3 +238,15 @@ def test_every_scored_lead_has_all_score_fields_set(case_domain):
     assert scored.website_audit_score is not None
     assert scored.total_score is not None
     assert scored.lead_type in {"new_build", "redesign", "unclear"}
+
+
+def test_research_rank_excludes_intent_weight():
+    # high intent, mediocre fit/audit — total_score would rank it above a
+    # lead with better fit/audit and zero intent, but research_rank must
+    # not: it's used to build the pool *before* intent is known
+    lead = _lead(domain="", contact_phones=["+381 21 111 222"], intent_score=100.0)
+    scored = score(lead, WEIGHTS)
+    total = WEIGHTS["total"]
+    expected = scored.icp_fit_score * total["icp_fit"] + scored.website_audit_score * total["website_audit"]
+    assert research_rank(scored, WEIGHTS) == pytest.approx(expected)
+    assert research_rank(scored, WEIGHTS) < scored.total_score  # intent's +15 excluded
