@@ -55,10 +55,25 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
     raw_leads: list = []
     raw_by_source: dict[str, int] = {}
+    errors_by_source: dict[str, str] = {}
     for source, collector in collectors.items():
-        collected = list(collector.collect(params))
+        # a single source's operational failure (timeout, dead binary, ...)
+        # shouldn't sink sources listed alongside it as a fallback/supplement
+        # (e.g. --source osm,maps when Overpass is down) — collect what we
+        # can and record the rest; ValueError (misconfiguration) still
+        # propagates since no other source can compensate for that
+        try:
+            collected = list(collector.collect(params))
+        except RuntimeError as e:
+            errors_by_source[source] = str(e)
+            raw_by_source[source] = 0
+            print(f"  warning: {source} collector failed: {e}", file=sys.stderr)
+            continue
         raw_by_source[source] = len(collected)
         raw_leads.extend(collected)
+    if not raw_leads and errors_by_source:
+        details = "; ".join(f"{s}: {e}" for s, e in errors_by_source.items())
+        raise RuntimeError(f"all collectors failed: {details}")
     deduped = dedupe_leads(raw_leads)
     leads = deduped if args.limit is None else deduped[: args.limit]
     for lead in leads:
@@ -67,6 +82,8 @@ def cmd_collect(args: argparse.Namespace) -> int:
         # (the manual CSV's optional "location" column) wins
         if not lead.location:
             lead.location = params["location"]
+
+    args.run = run_id  # lets `run` (collect+enrich+score+sync chained) find it
 
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -88,6 +105,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
             "after_dedupe": len(deduped),
             "written": len(leads),
         },
+        "errors_by_source": errors_by_source,
         "started_at": started_at,
         "finished_at": _now_iso(),
     }
@@ -98,6 +116,8 @@ def cmd_collect(args: argparse.Namespace) -> int:
     with_domain = sum(1 for lead in leads if lead.domain)
     source_summary = ", ".join(f"{s}: {n}" for s, n in raw_by_source.items())
     print(f"run {run_id}: {len(raw_leads)} raw ({source_summary}) -> {len(leads)} written")
+    if errors_by_source:
+        print(f"  {len(errors_by_source)} source(s) failed: {', '.join(errors_by_source)} (see manifest.json)")
     print(f"  {with_domain} with a website, {len(leads) - with_domain} without")
     print(f"  {run_dir}/collected.jsonl (+ collected.csv, manifest.json)")
     return 0
@@ -363,6 +383,17 @@ def cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run(args: argparse.Namespace) -> int:
+    """collect -> enrich -> score -> sync, chained via the shared args
+    namespace (collect stamps args.run for the later stages to read)."""
+    for stage in (cmd_collect, cmd_enrich, cmd_score, cmd_sync):
+        code = stage(args)
+        if code != 0:
+            return code
+        print()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m pipeline.runner")
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
@@ -419,6 +450,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="rebuild seen_domains.json from Notion, then exit",
     )
     sync_cmd.set_defaults(func=cmd_sync)
+
+    run_cmd = sub.add_parser(
+        "run", help="collect, enrich, score, and sync in one go"
+    )
+    run_cmd.add_argument(
+        "--source",
+        required=True,
+        help='comma-separated: "osm", "maps", "manual" — e.g. "osm,manual"',
+    )
+    run_cmd.add_argument("--location", help='OSM area name, e.g. "Berlin"')
+    run_cmd.add_argument(
+        "--input", help="manual collector: path to the hand-gathered leads CSV"
+    )
+    run_cmd.add_argument(
+        "--categories",
+        help='comma-separated, e.g. "restaurant,hairdresser" or raw "craft=roofer"',
+    )
+    run_cmd.add_argument(
+        "--limit",
+        type=int,
+        help="cap leads collected, and dry-run enrich/score/sync to the same count",
+    )
+    run_cmd.add_argument(
+        "--sink", default="notion", help='sink name, e.g. "notion" (default)'
+    )
+    run_cmd.set_defaults(func=cmd_run, refresh_cache=False)
 
     return parser
 
