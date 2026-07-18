@@ -1,21 +1,22 @@
-"""cmd_score file handling — the two invariants the scorer itself can't
-enforce: leads enrichment never reached are passed through unscored, and a
---limit dry-run never truncates scored.jsonl (which may hold hand-edited
-intent_score values, the only hand-entered data in the pipeline)."""
+"""cmd_score file handling — the invariants the scorer itself can't
+enforce: leads enrichment never reached are passed through unscored, a
+--limit dry-run never truncates scored.jsonl, and qualification config from
+config.yaml actually reaches score()."""
 
-import csv
 import json
-from dataclasses import replace
-
-import pytest
 
 from pipeline.runner import main
 from pipeline.schema import Lead, read_jsonl, write_jsonl
 
 
 def _lead(company, domain, status="enriched", **overrides):
+    defaults = dict(industry="dentist", country="Serbia")
     return Lead(
-        company=company, domain=domain, source="osm", status=status, **overrides
+        company=company,
+        domain=domain,
+        source="osm",
+        status=status,
+        **{**defaults, **overrides},
     )
 
 
@@ -57,11 +58,11 @@ def test_enrich_failed_leads_are_scored():
     from pipeline.config import DEFAULTS
     from pipeline.scoring import score
 
-    scored = score(lead, DEFAULTS["scoring"])
+    scored = score(lead, DEFAULTS["scoring"], DEFAULTS["qualification"])
     assert scored.lead_type == "unclear"
 
 
-def test_limit_rerun_keeps_all_rows_and_hand_edited_intent(tmp_path, monkeypatch):
+def test_limit_dry_run_keeps_all_rows_untouched(tmp_path, monkeypatch):
     leads = [
         _lead("A", "a.rs", lighthouse={"performance": 40}),
         _lead("B", "b.rs", lighthouse={"performance": 50}),
@@ -69,71 +70,52 @@ def test_limit_rerun_keeps_all_rows_and_hand_edited_intent(tmp_path, monkeypatch
     ]
     run_dir = _make_run(tmp_path, monkeypatch, leads)
     assert main(["score", "--run", "test-run"]) == 0
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    assert manifest["score"]["counts"]["scored"] == 3
 
-    # the manual workflow (SCORING.md §5): hand-edit intent in scored.jsonl
     scored_path = run_dir / "scored.jsonl"
-    rows = read_jsonl(scored_path)
-    write_jsonl(
-        scored_path,
-        [replace(r, intent_score=70.0) if r.company == "C" else r for r in rows],
-    )
-    c_before = next(r for r in read_jsonl(scored_path) if r.company == "C")
+    b_before = next(r for r in read_jsonl(scored_path) if r.company == "B")
 
     # a --limit dry-run must not drop B and C from the file
     assert main(["score", "--run", "test-run", "--limit", "1"]) == 0
     after = {lead.company: lead for lead in read_jsonl(scored_path)}
     assert set(after) == {"A", "B", "C"}
-    assert after["C"] == replace(c_before, intent_score=70.0)  # untouched
-    assert after["B"].total_score is not None  # previous scored row kept
-
-    # and a full re-run recomputes C's total from the carried intent
-    assert main(["score", "--run", "test-run"]) == 0
-    c_rescored = next(r for r in read_jsonl(scored_path) if r.company == "C")
-    assert c_rescored.intent_score == 70.0
-    # c_before was scored with intent 0, so the recomputed total gains 70 x 0.15
-    assert c_rescored.total_score == pytest.approx(c_before.total_score + 10.5, abs=0.1)
+    assert after["B"] == b_before  # previously scored row kept untouched
 
     manifest = json.loads((run_dir / "manifest.json").read_text())
-    assert manifest["score"]["counts"]["scored"] == 3
-    assert manifest["score"]["counts"]["with_intent"] == 1
+    assert manifest["score"]["counts"]["scored"] == 1
+    assert manifest["score"]["counts"]["beyond_limit"] == 2
 
 
-def test_research_pool_ranks_by_fit_and_audit_not_total_score(tmp_path, monkeypatch):
-    contacts = dict(
-        contact_emails=["office@x.rs"],
-        contact_phones=["+381 21 111 222"],
-        social_links={"instagram": "https://instagram.com/x"},
-    )
-    # X: no intent, audit 50 -> research_rank 100*.35 + 50*.50 = 60, total 60
-    x = _lead(
-        "X", "x.rs", **contacts,
-        lighthouse={"performance": 50, "accessibility": 50, "best_practices": 50, "seo": 50},
-        https=True, mobile_friendly=True,
-    )
-    # Y: intent 100, audit 40 -> research_rank 100*.35 + 40*.50 = 55, total 55 + 15 = 70
-    # total_score ranks Y above X, but research_rank must rank X above Y —
-    # the whole point of excluding intent from the research-pool ranking
-    y = _lead(
-        "Y", "y.rs", **contacts,
-        lighthouse={"performance": 60, "accessibility": 60, "best_practices": 60, "seo": 60},
-        https=True, mobile_friendly=True, intent_score=100.0,
-    )
+def test_qualification_config_threaded_from_config_yaml(tmp_path, monkeypatch):
+    # "plumbing_shop" isn't in the built-in DEFAULTS industry_map at all —
+    # only qualifying here proves config.yaml's qualification: section is
+    # what score() actually consulted, not a hardcoded default
+    lead = _lead("Plumbing Co", "plumbingco.rs", industry="plumbing_shop", contact_emails=["a@b.rs"])
     run_dir = _make_run(
-        tmp_path, monkeypatch, [x, y],
-        config_extra="scoring:\n  intent_research_pool_size: 1\n",
+        tmp_path,
+        monkeypatch,
+        [lead],
+        config_extra=(
+            "qualification:\n"
+            "  target_countries: [Serbia]\n"
+            "  industry_map:\n"
+            "    construction: [plumbing_shop]\n"
+        ),
     )
     assert main(["score", "--run", "test-run"]) == 0
+    scored = read_jsonl(run_dir / "scored.jsonl")[0]
+    assert scored.qualified is True
+    assert scored.industry == "construction"
 
-    scored = {lead.company: lead for lead in read_jsonl(run_dir / "scored.jsonl")}
-    assert scored["Y"].total_score > scored["X"].total_score  # by total_score, Y wins
-    assert scored["X"].icp_fit_score * 0.35 + scored["X"].website_audit_score * 0.50 > (
-        scored["Y"].icp_fit_score * 0.35 + scored["Y"].website_audit_score * 0.50
-    )  # by fit+audit alone, X wins
 
-    with open(run_dir / "research_pool.csv", newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-    # pool_size 1 keeps only the top fit+audit candidate — X, not Y
-    assert [row["company"] for row in rows] == ["X"]
+def test_qualification_config_can_disqualify_leads(tmp_path, monkeypatch):
+    lead = _lead("Out of scope", "oos.rs", country="Croatia", contact_emails=["a@b.rs"])
+    run_dir = _make_run(tmp_path, monkeypatch, [lead])
+    assert main(["score", "--run", "test-run"]) == 0
+    scored = read_jsonl(run_dir / "scored.jsonl")[0]
+    assert scored.qualified is False
+    assert scored.total_score is None
 
     manifest = json.loads((run_dir / "manifest.json").read_text())
-    assert manifest["score"]["counts"]["research_pool_size"] == 1
+    assert manifest["score"]["counts"]["qualified"] == 0

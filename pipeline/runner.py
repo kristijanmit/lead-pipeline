@@ -20,7 +20,7 @@ from pipeline.config import ConfigError, load_config
 from pipeline.dedupe import dedupe_leads, lead_key
 from pipeline.enrichers import apply_enrichers, get_enricher
 from pipeline.schema import read_jsonl, write_jsonl
-from pipeline.scoring import research_rank, score
+from pipeline.scoring import score
 from pipeline.sinks import get_sink
 from pipeline.sinks.csv_sink import CsvSink
 
@@ -34,10 +34,18 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _has_no_contact_info(lead) -> bool:
+    """No email, phone, social link, or website — nothing to outreach through."""
+    return not (
+        lead.contact_emails or lead.contact_phones or lead.social_links or lead.domain
+    )
+
+
 def cmd_collect(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     params = {
         "location": args.location or config["collect"]["location"],
+        "country": args.country or config["collect"]["country"],
         "categories": (
             [c.strip() for c in args.categories.split(",") if c.strip()]
             if args.categories
@@ -78,10 +86,12 @@ def cmd_collect(args: argparse.Namespace) -> int:
     leads = deduped if args.limit is None else deduped[: args.limit]
     for lead in leads:
         lead.run_id = run_id
-        # stamp the market the run targeted; a collector that set its own
-        # (the manual CSV's optional "location" column) wins
+        # stamp the market/country the run targeted; a collector that set
+        # its own (the manual CSV's optional "location" column) wins
         if not lead.location:
             lead.location = params["location"]
+        if not lead.country:
+            lead.country = params["country"]
 
     args.run = run_id  # lets `run` (collect+enrich+score+sync chained) find it
 
@@ -142,17 +152,31 @@ def cmd_enrich(args: argparse.Namespace) -> int:
             if lead.status == "enriched"
         }
 
+    # leads with no email/phone/social/website are nothing to outreach
+    # through — filtered out entirely, but tracked in filtered.jsonl (not
+    # silently dropped, per manifest.json being the only observability
+    # here) and, once known, excluded on re-runs same as "enriched" above
+    filtered_path = run_dir / "filtered.jsonl"
+    previous_filtered = {}
+    if filtered_path.exists():
+        previous_filtered = {lead_key(lead): lead for lead in read_jsonl(filtered_path)}
+
     enrichers = [(name, get_enricher(name, config)) for name in _ENRICH_STEPS]
     delay_s = config["enrich"]["delay_s"]
     started_at = _now_iso()
 
     results = []
-    processed = skipped = failed = 0
+    newly_filtered = []
+    processed = skipped = already_filtered = failed = filtered_count = 0
     for lead in leads:
-        done = previous.get(lead_key(lead))
+        key = lead_key(lead)
+        done = previous.get(key)
         if done is not None:
             results.append(done)
             skipped += 1
+            continue
+        if key in previous_filtered:
+            already_filtered += 1
             continue
         if args.limit is not None and processed >= args.limit:
             results.append(lead)  # still pending — a re-run picks it up
@@ -163,14 +187,21 @@ def cmd_enrich(args: argparse.Namespace) -> int:
         processed += 1
         if enriched.status == "enrich_failed":
             failed += 1
+        no_contact = _has_no_contact_info(enriched)
         print(
             f"  [{processed}] {lead.company} "
-            f"({lead.domain or 'no website'}): {enriched.status}"
+            f"({lead.domain or 'no website'}): "
+            f"{'filtered (no contact info)' if no_contact else enriched.status}"
         )
-        results.append(enriched)
+        if no_contact:
+            newly_filtered.append(enriched)
+            filtered_count += 1
+        else:
+            results.append(enriched)
 
     write_jsonl(enriched_path, results)
     CsvSink(run_dir / "enriched.csv").write(results)
+    write_jsonl(filtered_path, [*previous_filtered.values(), *newly_filtered])
 
     # collect wrote the manifest flat; enrich adds its own section so the
     # run keeps both stages' snapshots (§12 — the only observability here)
@@ -182,9 +213,11 @@ def cmd_enrich(args: argparse.Namespace) -> int:
         "counts": {
             "input": len(leads),
             "already_enriched": skipped,
+            "already_filtered": already_filtered,
             "processed": processed,
             "failed": failed,
-            "pending": len(leads) - skipped - processed,
+            "filtered_no_contact": filtered_count,
+            "pending": len(leads) - skipped - already_filtered - processed,
         },
         "started_at": started_at,
         "finished_at": _now_iso(),
@@ -193,12 +226,17 @@ def cmd_enrich(args: argparse.Namespace) -> int:
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
-    pending = len(leads) - skipped - processed
+    pending = len(leads) - skipped - already_filtered - processed
     print(
-        f"run {args.run}: {processed} enriched ({failed} failed), "
-        f"{skipped} already done, {pending} pending"
+        f"run {args.run}: {processed} enriched ({failed} failed, {filtered_count} filtered — no contact info), "
+        f"{skipped} already done, {already_filtered} already filtered, {pending} pending"
     )
     print(f"  {run_dir}/enriched.jsonl (+ enriched.csv, manifest.json)")
+    if filtered_count or already_filtered:
+        print(
+            f"  {run_dir}/filtered.jsonl: "
+            f"{len(previous_filtered) + filtered_count} lead(s) with no email/phone/social/website"
+        )
     return 0
 
 
@@ -210,15 +248,15 @@ def cmd_score(args: argparse.Namespace) -> int:
         raise ValueError(f"no enriched.jsonl in {run_dir} — run enrich first")
     leads = read_jsonl(enriched_path)
 
-    # scored.jsonl may hold hand-edited intent_score values (the manual
-    # workflow in SCORING.md §5) — the only hand-entered data in the
-    # pipeline, so a re-score must never drop or reset those rows
+    # scored.jsonl carries forward previously scored rows for pass-through
+    # cases below (not yet enriched, or beyond --limit)
     scored_path = run_dir / "scored.jsonl"
     previous = {}
     if scored_path.exists():
         previous = {lead_key(lead): lead for lead in read_jsonl(scored_path)}
 
     weights = config["scoring"]
+    qualification = config["qualification"]
     started_at = _now_iso()
 
     results = []
@@ -233,15 +271,11 @@ def cmd_score(args: argparse.Namespace) -> int:
             pending += 1
             continue
         # --limit dry-runs must not truncate scored.jsonl: rows beyond the
-        # limit keep their previous scored values (including intent) rather
-        # than being dropped from the file
+        # limit keep their previous scored values rather than being dropped
         if args.limit is not None and scored_count >= args.limit:
             results.append(previous.get(lead_key(lead), lead))
             continue
-        prev = previous.get(lead_key(lead))
-        if prev is not None and prev.intent_score:
-            lead = replace(lead, intent_score=prev.intent_score)
-        results.append(score(lead, weights))
+        results.append(score(lead, weights, qualification))
         scored_count += 1
 
     write_jsonl(scored_path, results)
@@ -252,31 +286,20 @@ def cmd_score(args: argparse.Namespace) -> int:
     for lead in results:
         if lead.lead_type is not None:
             by_type[lead.lead_type] = by_type.get(lead.lead_type, 0) + 1
-
-    # candidate pool for the manual intent-research pass (SCORING.md §5),
-    # ranked by icp_fit/website_audit only — intent is 0.0 for everyone
-    # pre-research, so total_score would bury high-signal leads whose fit
-    # and audit alone don't crack a narrower cutoff
-    ranked = [lead for lead in results if lead.total_score is not None]
-    pool_size = weights["intent_research_pool_size"]
-    research_pool = sorted(
-        ranked, key=lambda l: research_rank(l, weights), reverse=True
-    )[:pool_size]
-    CsvSink(run_dir / "research_pool.csv").write(research_pool)
+    qualified_count = sum(1 for lead in results if lead.qualified)
 
     manifest_path = run_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {"run_id": args.run}
     manifest["stage"] = "score"
     manifest["score"] = {
-        "config_snapshot": {"scoring": weights, "limit": args.limit},
+        "config_snapshot": {"scoring": weights, "qualification": qualification, "limit": args.limit},
         "counts": {
             "input": len(leads),
             "scored": scored_count,
             "pending_enrichment": pending,
             "beyond_limit": carried,
             "by_lead_type": by_type,
-            "with_intent": sum(1 for lead in results if lead.intent_score),
-            "research_pool_size": len(research_pool),
+            "qualified": qualified_count,
         },
         "started_at": started_at,
         "finished_at": _now_iso(),
@@ -286,7 +309,10 @@ def cmd_score(args: argparse.Namespace) -> int:
     )
 
     type_summary = ", ".join(f"{t}: {n}" for t, n in sorted(by_type.items()))
-    print(f"run {args.run}: {scored_count} scored (v{weights['version']}) — {type_summary}")
+    print(
+        f"run {args.run}: {scored_count} scored (v{weights['version']}), "
+        f"{qualified_count} qualified — {type_summary}"
+    )
     if pending:
         print(
             f"  warning: {pending} leads still pending enrichment were passed "
@@ -294,16 +320,13 @@ def cmd_score(args: argparse.Namespace) -> int:
         )
     if carried:
         print(f"  {carried} beyond --limit kept their previous scored values")
+    ranked = [lead for lead in results if lead.total_score is not None]
     for lead in sorted(ranked, key=lambda l: l.total_score, reverse=True)[:5]:
         print(
             f"  {lead.total_score:5.1f}  {lead.company} "
             f"({lead.domain or 'no website'}, {lead.lead_type})"
         )
     print(f"  {run_dir}/scored.jsonl (+ scored.csv, manifest.json)")
-    print(
-        f"  top {len(research_pool)} candidates for manual intent research "
-        f"-> {run_dir}/research_pool.csv"
-    )
     return 0
 
 
@@ -407,6 +430,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     collect.add_argument("--location", help='OSM area name, e.g. "Berlin"')
     collect.add_argument(
+        "--country", help='qualification-filter country, e.g. "Serbia" (default from config.yaml)'
+    )
+    collect.add_argument(
         "--input", help="manual collector: path to the hand-gathered leads CSV"
     )
     collect.add_argument(
@@ -460,6 +486,9 @@ def build_parser() -> argparse.ArgumentParser:
         help='comma-separated: "osm", "maps", "manual" — e.g. "osm,manual"',
     )
     run_cmd.add_argument("--location", help='OSM area name, e.g. "Berlin"')
+    run_cmd.add_argument(
+        "--country", help='qualification-filter country, e.g. "Serbia" (default from config.yaml)'
+    )
     run_cmd.add_argument(
         "--input", help="manual collector: path to the hand-gathered leads CSV"
     )

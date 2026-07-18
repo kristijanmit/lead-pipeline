@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import csv
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -21,6 +22,10 @@ from pathlib import Path
 from pipeline.collectors.base import register
 from pipeline.dedupe import normalize_domain
 from pipeline.schema import Lead
+
+# the scraper sometimes pulls an email out of a "//foo@bar.com" JS comment
+# line in raw page source, leading-slash and all
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
 
 def build_queries(location: str, categories: list[str]) -> str:
@@ -38,8 +43,8 @@ def _split_emails(raw: str) -> list[str]:
     cleaned = raw.strip().strip("[]")
     seen: dict[str, str] = {}
     for part in cleaned.split(","):
-        email = part.strip().strip("'\"")
-        if email and "@" in email:
+        email = part.strip().strip("'\"").lstrip("/")
+        if email and _EMAIL_RE.fullmatch(email):
             seen.setdefault(email.lower(), email)
     return list(seen.values())
 

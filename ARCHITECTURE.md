@@ -104,7 +104,7 @@ A single canonical record flows through every stage. Defined once in
 ```python
 @dataclass
 class Lead:
-    schema_version: int = 5        # bump whenever fields are added/changed
+    schema_version: int = 6        # bump whenever fields are added/changed
 
     # identity — set at collection, never changes after
     company: str
@@ -112,6 +112,7 @@ class Lead:
     source: str                    # "osm" | "maps" | "manual"
     industry: str = "other"
     location: str = ""             # the market the lead was collected in, e.g. "Novi Sad" (v5)
+    country: str = ""              # v6 — the qualification filter's location gate checks this
 
     # contact enrichment (Phase 2, step 1)
     contact_emails: list[str] = field(default_factory=list)   # info@, sales@, etc — don't collapse to one
@@ -123,16 +124,16 @@ class Lead:
     mobile_friendly: bool | None = None
     cms: str | None = None
     lighthouse: dict[str, int] | None = None   # {"performance": 42, "accessibility": 88, ...}
-    audit_notes: str = ""
+    audit_notes: str = ""          # overwritten with the scoring explainability string once scored (SCORING.md §5)
 
-    # scoring
-    scoring_version: int = 1       # bump whenever the weighting formula changes
-    icp_fit_score: float | None = None
-    website_audit_score: float | None = None
-    intent_score: float = 0.0
+    # scoring (v6 — see SCORING.md for the full model)
+    scoring_version: int = 3       # bump whenever the weighting formula changes
+    reachability_score: float | None = None
+    opportunity_score: float | None = None
     total_score: float | None = None
     lead_type: str | None = None   # "new_build" | "redesign" | "unclear" (v4) —
                                    # set by scorer.py, see SCORING.md §8
+    qualified: bool = False        # industry + country filters passed AND reachability_score > 0
 
     # pipeline bookkeeping
     run_id: str = ""
@@ -189,7 +190,7 @@ pipeline/
     audit.py           # Lighthouse CLI wrapper
 
   scoring/
-    scorer.py          # score(lead: Lead, weights: dict) -> Lead — pure function
+    scorer.py          # score(lead: Lead, weights: dict, qualification: dict) -> Lead — pure function
 
   sinks/
     base.py           # Sink protocol: write(leads: list[Lead]) -> None
@@ -230,6 +231,9 @@ has to flatten a few `Lead` fields deliberately rather than fail on them:
 | `lead_type`                                             | `Lead Type` (Select)            | `new_build` / `redesign` / `unclear` — the outreach step filters on it                                                                                      |
 | `source`                                                | `Source` (Select)               | `osm`/`maps` → "OSM/Maps", `manual` → "Manual"; `industry`, `location`, and `cms` go out raw and Notion auto-creates select options                         |
 | `lighthouse["performance"                               | "accessibility"                 | "seo"                                                                                                                                                       | "best_practices"]` | four separate Number properties | Flattened one key per column — Notion has no nested-object property |
+| `reachability_score`                                    | `Reachability Score` (Number)   | Only sent when not `None` (a lead that failed the qualification filters gets no score at all — SCORING.md §1)                                              |
+| `opportunity_score`                                     | `Opportunity Score` (Number)    | Only sent when not `None` — an `unclear` lead_type leaves this blank rather than guessing which formula applies (SCORING.md §3)                            |
+| `qualified`                                              | `Qualified` (Checkbox)          | Always sent — industry + country filters passed AND `reachability_score > 0` (SCORING.md §1-2)                                                             |
 | `schema_version`, `scoring_version`, `run_id`, `errors` | _(none)_                        | Deliberately not synced — Notion is a sink for humans to act on, not the source of truth; this bookkeeping stays in the JSONL manifest where it's queryable |
 
 This mapping lives in one function (`to_notion_properties(lead: Lead) -> dict`)

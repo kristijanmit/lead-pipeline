@@ -37,12 +37,16 @@ priority → land in Notion. See `ARCHITECTURE.md` for the design and
 
 ## Implemented (Phase 3 — scoring)
 
-- Pure scoring function (`pipeline/scoring/scorer.py`, no I/O): ICP fit +
-  website audit + manual intent, weighted per `config.yaml`; the reasoning
-  behind every weight is in `SCORING.md`
+- Pure scoring function (`pipeline/scoring/scorer.py`, no I/O): hard
+  qualification filters (industry + country, `qualification:` in
+  `config.yaml`) gate everything else; qualified leads get an independent
+  `Reachability Score` and `Opportunity Score`; the reasoning behind every
+  weight is in `SCORING.md`
 - Each lead classified as `new_build` / `redesign` / `unclear`, ranked by
-  `total_score` in `scored.jsonl`/`scored.csv`
-- Hand-edited `intent_score` values in `scored.jsonl` survive re-scoring
+  `total_score = opportunity_score × reachability-derived multiplier` in
+  `scored.jsonl`/`scored.csv`
+- `Audit Notes` auto-generated on every scoring run, explaining exactly how
+  each number was reached
 
 ## Implemented (Phase 4 — Notion sync)
 

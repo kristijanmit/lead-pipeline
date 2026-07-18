@@ -45,8 +45,23 @@ def test_from_dict_migrates_legacy_contact_phone():
     assert lead.contact_phones == ["+381 21 123 456"]
 
 
+def test_from_dict_migrates_legacy_website_audit_score():
+    # schema v5 and earlier JSONL stored this under the old field name
+    lead = Lead.from_dict(
+        {
+            "company": "A",
+            "domain": "a.com",
+            "source": "osm",
+            "website_audit_score": 72.5,
+        }
+    )
+    assert lead.opportunity_score == 72.5
+
+
 def test_defaults():
     lead = Lead(company="A", domain="a.com", source="osm")
     assert lead.status == "collected"
     assert lead.contact_emails == []
     assert lead.total_score is None
+    assert lead.qualified is False
+    assert lead.country == ""

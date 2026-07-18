@@ -2,311 +2,272 @@
 
 ## 1. Overview
 
-`pipeline/scoring/scorer.py` implements `score(lead, weights) -> Lead`, a
-pure function with no I/O (per ARCHITECTURE.md §6/§13). This document is the
-"why" behind the weights — what each sub-score is trying to measure, why
-they're kept separate, how the edge cases in real data are handled, and how
-to retune the formula once real reply data exists.
+`pipeline/scoring/scorer.py` implements
+`score(lead, weights, qualification) -> Lead`, a pure function with no I/O
+(per ARCHITECTURE.md §6/§13). This document is the "why" behind the model —
+what the qualification filters are gating, what each sub-score is trying to
+measure, why they're kept separate, how the edge cases in real data are
+handled, and how to retune the formula once real reply data exists.
 
-## 2. The core split: fit vs. opportunity
+## 2. Qualification filters — a gate, not a score
 
-The single biggest way lead scoring goes wrong for an agency is conflating
-"is this a good business to work with" and "how good is their website."
-These are different questions, and mixing them into one number hides which
-lever actually explains why a lead scored high or low.
+Before anything is scored, a lead has to pass two hard filters
+(`qualification:` in `config.yaml`, resolved by `_qualifies()` in
+`scorer.py`):
 
-| Score                 | Question it answers                                          | What moves it                                                  |
-| ---------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `icp_fit_score`       | Is this a real, reachable business worth pursuing?            | Contact channels present, signs of an established practice     |
-| `website_audit_score` | How much opportunity does this lead represent for our services? | How bad (not how good) their web presence is — this runs in the "pain" direction |
-| `intent_score`        | Has someone manually confirmed this lead is worth prioritizing right now? | Nothing automatic — set by hand, see §5 |
-| `lead_type`           | Which pitch applies — new build, redesign, or unclear?         | Same branch as `website_audit_score`, see §8; doesn't feed `total_score` |
-| `total_score`         | Overall outreach priority                                      | Weighted sum of the three scores above, weights in `config.yaml` |
+- **Industry** — the raw collected `industry` value (a free-form string from
+  OSM tags / maps categories / manual CSV input) must resolve, via
+  `qualification.industry_map`, to one of the target categories (`clinic`,
+  `car_workshop`, `workshop_repair`, `construction` by default). The
+  resolution is case-insensitive and never raises — an unrecognized raw
+  value simply fails the filter, since the raw string can be anything.
+- **Country** — `lead.country` (stamped at collection time, the same way
+  `location` is) must be in `qualification.target_countries`.
+
+If a lead fails either filter, `reachability_score`, `opportunity_score`,
+and `total_score` are all left `None`, `qualified` is `False`, and
+`Audit Notes` states which filter failed instead of a score breakdown.
+Nothing downstream computes a score for a lead outside scope.
+
+**Why filters and not weights:** it's too early to know which of these
+verticals actually converts — weighting them against each other now would
+be guessing at data that doesn't exist yet. Once there's real close-rate
+data across verticals, industry weighting can come back as a deliberate,
+evidence-based scoring dimension, not folded back into a hard gate.
+Deliberately **not** reintroduced here: industry weighting, business-size
+signals, or multi-location logic — all removed on purpose pending that data
+(see the v3 changelog in §10).
+
+A lead that passes both filters has its `industry` folded to the canonical
+category (e.g. a raw `dentist` becomes `clinic`) — this is what actually
+syncs to Notion's `Industry` column, not the raw collected string.
+
+## 3. The core split: reachability vs. opportunity
+
+Two different questions, kept as separate sub-scores so a high or low total
+is always explainable, rather than averaged into one number that looks the
+same whether a lead can't be reached or just has a good website:
+
+| Score               | Question it answers                                          | What moves it                                                       |
+| -------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `reachability_score` | Can we actually contact this lead right now, today?           | Which contact channels are present (email, phone, social)              |
+| `opportunity_score`  | How much upside is there in pitching a redesign or new build? | How bad (not how good) their web presence is — runs in the "pain" direction |
+| `lead_type`          | Which pitch applies — new build, redesign, or unclear?         | Same branch as `opportunity_score`, see §8; doesn't feed `total_score` directly |
+| `total_score`        | Overall outreach priority among qualified leads                | `opportunity_score × ` a multiplier derived from `reachability_score`  |
 
 A dentist with a fast, accessible, mobile-friendly WordPress site and no
-listed phone number should score *low* on `icp_fit` (can't reach them) but
-would also score low on `website_audit` (nothing to sell). A dentist with no
-website at all but three phone numbers and an Instagram should score *high*
-on both — reachable, and in obvious need of a web presence. Keeping the two
-scores separate makes both of those cases legible instead of averaging them
-into a mediocre single number that looks the same either way.
+listed phone number scores low on both — nothing to sell, and no way to
+reach them even if there were. A dentist with no website at all but three
+phone numbers and an Instagram scores high on both — reachable, and in
+obvious need of a web presence.
 
-## 3. `icp_fit_score` — reachability and legitimacy
+## 4. `reachability_score` — can we contact them, today
 
-Deliberately does not look at `lighthouse`, `https`, `mobile_friendly`, or
-`cms` at all. Those describe the website; this describes the business.
+```
+has_email  = Primary Email is non-empty   -> +50
+has_phone  = Phone is non-empty            -> +40
+has_social = Social Links is non-empty     -> +10
 
-Components (see `icp_fit` weights in `config.yaml`):
+reachability_score = has_email*50 + has_phone*40 + has_social*10
+```
 
-- **Has at least one email** — a channel for outreach that isn't a phone
-  call.
-- **Has at least one phone** — same reasoning, other direction. Many small
-  dental practices in the OSM data (e.g. "Neskovic Dent", "Estetika") have a
-  phone and nothing else — that's still a workable lead.
-- **Has at least one social link** — signals an actively maintained public
-  presence, not just a stale directory listing.
-- **Established-practice bonus** — triggered when the count of *distinct
-  channel types* present (email, phone, social — each counts once,
-  regardless of how many emails/phones/socials were found) crosses a
-  threshold (default: 2). This is deliberately about breadth of
-  reachability, not depth: two phone numbers and nothing else doesn't
-  qualify, but one phone plus one email does. Breadth tends to mean a
-  multi-person practice with a bigger budget and someone who plausibly owns
-  "fix the website" as a task, rather than a solo practitioner running
-  everything themselves — a count of raw items doesn't carry that signal
-  the same way (a practice that listed the same phone number twice isn't
-  more established than one that didn't).
-- **Industry match** — currently full credit, since collection is
-  single-industry per run (see ARCHITECTURE.md §2, non-goals). It
-  contributes no discriminating signal today — every lead in a run gets the
-  same +15. This becomes a real filter once a run mixes industries; kept as
-  a named field now rather than added later as a schema change.
+Deliberately does **not** count having a `domain`/website as a contact
+channel — a website isn't itself a way to reach someone, only a signal that
+one might exist somewhere on it. (This is a real difference from the
+enrich-stage `_has_no_contact_info` filter in `runner.py`, which *does*
+treat `domain` as a reason to keep a lead — that filter runs earlier, for a
+different purpose: dropping leads with literally nothing to act on at all.
+A lead with only a domain and no email/phone/social passes that filter but
+still gets `reachability_score == 0` here.)
 
-`icp_fit_score` intentionally ignores company size proxies beyond contact
-count (headcount, revenue) — that data isn't in the `Lead` schema and isn't
-collected for free, so the score only uses what's actually available rather
-than a proxy that would silently be wrong.
+If `reachability_score == 0`, the lead is never marked `qualified` — there's
+no channel to act on yet — but it is still scored (see §6 on the total-score
+multiplier at `reachability_score == 0`) rather than being silently dropped;
+`Audit Notes` flags it as needing further enrichment.
 
-## 4. `website_audit_score` — opportunity, not quality
+## 5. `opportunity_score` — opportunity, not quality
 
-This is the inverse of a normal website-quality score. High
-`website_audit_score` means *more* opportunity to sell into, not a healthier
-site.
+This is the inverse of a normal website-quality score. A high
+`opportunity_score` means *more* opportunity to sell into, not a healthier
+site. Computed differently depending on `lead_type`:
 
-### 4.1 The three cases
+### 5.1 The three cases
 
-| Case                                                            | Example from real data                                      | Score                                    |
-| ------------------------------------------------------------------ | ---------------------------------------------------------- | ----------------------------------------- |
-| **No domain at all**                                             | "Веселин", "Рисус", "Otro4u"                                | Fixed `no_website_score` (default 90)     |
-| **Domain exists, unreachable during audit**                      | "Komnenović" (`stomatolognovisad-komnenovic.in.rs`), "Pro Dental Solution" | Fixed `unreachable_domain_score` (default 65) |
-| **Domain exists, audited**                                        | "Bobić", "Markov Dental", "Prosmile"                        | Computed from Lighthouse + flags, capped at `audited_score_cap` (default 85, below)  |
+| Case                                                 | `lead_type`  | `opportunity_score`                                      |
+| ------------------------------------------------------ | ------------ | ----------------------------------------------------------- |
+| **No domain at all**                                  | `new_build`  | Fixed policy value, `opportunity.no_website_score` (default 90) |
+| **Domain exists, unreachable during audit**            | `unclear`   | `None` — left blank, `Audit Notes` flags "needs classification" |
+| **Domain exists, audited**                             | `redesign`   | Computed from Lighthouse + flags, capped at `audited_score_cap` (default 85) |
 
-The no-domain and unreachable-domain cases exist because
-`lead.lighthouse is None` in both, and letting that fall through to a
-computed formula would silently zero them out — the worst-looking outcome
-for what are actually two of the strongest opportunity signals in the
-dataset. They're scored differently from each other (90 vs. 65) because a
-domain that fails to resolve or connect carries a real chance the practice
-has gone under or the domain was abandoned — worth a discount versus a
-confirmed-live business with zero web presence.
+An `unclear` lead genuinely doesn't tell you which pitch applies — the
+domain could be a live business with a site that's temporarily down
+(a redesign pitch) or an abandoned domain (arguably no pitch yet). Rather
+than default to either the new-build or a discounted fixed value (as an
+earlier version of this model did), it's left blank on purpose — a `None`
+here means "needs a manual look," not "zero opportunity."
 
-These two cases are flagged as a fixed score, deliberately, rather than
-computed — there's no Lighthouse data to compute *from*. Note this also
-means they represent a different pitch (new build vs. redesign) than the
-computed case below; see §8 for how each case maps to `lead_type`.
+`no_website_score` (90) is a fixed policy value, not a placeholder: a
+business with zero web presence is assumed to have high need until evidence
+says otherwise for a given vertical.
 
-### 4.2 The computed case
+### 5.2 The computed case (redesign leads)
 
-For an audited site:
+Unchanged from the previous scoring model — only the field name changed
+(`website_audit_score` → `opportunity_score`):
 
 ```
 weighted_quality = Σ (lighthouse[metric] × lighthouse_weight[metric])
 opportunity       = 100 − weighted_quality
-opportunity      += no_https bonus            if https is False
-opportunity      += not_mobile_friendly bonus if mobile_friendly is False
+opportunity      += no_https_bonus            if https is False
+opportunity      += not_mobile_friendly_bonus if mobile_friendly is False
 opportunity       = min(opportunity, audited_score_cap)
 ```
 
-(In the implementation, if Lighthouse returned only some categories, the
-weights are renormalized over the categories present — a missing category
-reads as "no signal", not as fake opportunity. If *none* of the weighted
-categories are present, there is nothing to compute from and the lead falls
-back to the unreachable case above. The result is clamped to [0, 100] so
-the flat bonuses can't push a sub-score past the scale.)
+If Lighthouse returned only some categories, the weights are renormalized
+over the categories present — a missing category reads as "no signal," not
+fake opportunity. If *none* of the weighted categories are present, there's
+nothing to compute from and the lead falls into the `unclear` case above.
+The result is clamped to `[0, 100]` so the flat bonuses can't push it past
+the scale.
 
 **The cap:** without it, a terrible audited site (very low Lighthouse
-quality plus both the `no_https` and `not_mobile_friendly` bonuses) can
-compute to 100 — beating `no_website_score`'s fixed 90. That's backwards.
-A lead with no website at all is the strongest new-build signal in the
-batch and should never be outranked by an audited-but-bad site: a bad
-audited site is still a warmer, easier sell than a blank slate — there's
-already an owner who plausibly knows they need a working site, no
-domain/DNS setup required, and a live baseline to point at in the pitch.
-`audited_score_cap` (default 85) enforces that by construction rather than
-by hoping the Lighthouse weights and bonuses never combine badly: it must
-always stay below `no_website_score`, and both `config.py`'s startup
-validation and an assertion in `scorer.py` enforce that ordering so it
-can't silently regress if someone retunes either constant later.
+quality plus both bonuses) can compute to 100 — beating `no_website_score`'s
+fixed 90. That's backwards: a lead with no website at all is the strongest
+new-build signal in the batch, and a bad audited site is still a warmer,
+easier sell than a blank slate — there's already an owner who plausibly
+knows they need a working site, no domain/DNS setup required, and a live
+baseline to point at. `audited_score_cap` (default 85) enforces that by
+construction: it must always stay below `no_website_score`, and both
+`config.py`'s startup validation and an assertion in `scorer.py` enforce
+that ordering.
 
-Default Lighthouse weights:
+Default Lighthouse weights (unchanged from the previous model):
 
-| Metric          | Weight | Why                                                                 |
-| ---------------- | ------ | -------------------------------------------------------------------- |
-| `performance`   | 0.40   | Most visible, most correlated with "this site feels broken" to a visitor |
-| `best_practices` | 0.25   | Catches structural/security issues perf alone misses                 |
-| `accessibility` | 0.20   | Real gap, but rarely the reason a lead replies to cold outreach       |
-| `seo`           | 0.15   | Weighted lowest — most sites in this dataset already score 75–100 here, so it has the least room to differentiate leads |
+| Metric           | Weight | Why                                                                       |
+| ----------------- | ------ | ---------------------------------------------------------------------------- |
+| `performance`    | 0.40   | Most visible, most correlated with "this site feels broken" to a visitor    |
+| `best_practices` | 0.25   | Catches structural/security issues perf alone misses                        |
+| `accessibility`  | 0.20   | Real gap, but rarely the reason a lead replies to cold outreach             |
+| `seo`            | 0.15   | Weighted lowest — most sites in this dataset already score 75–100 here |
 
-`https is False` and `mobile_friendly is False` add flat bonuses on top of
-the Lighthouse-derived score, since Lighthouse doesn't always penalize these
-cleanly and they're easy, concrete talking points in a pitch ("your site
-isn't mobile-friendly" is a one-sentence hook that a Lighthouse performance
-number isn't).
+`https is False` and `mobile_friendly is False` add flat bonuses on top,
+since Lighthouse doesn't always penalize these cleanly and they're easy,
+concrete talking points in a pitch.
 
-## 5. `intent_score` — manual, never computed
-
-Per the Phase 3 roadmap item ("Add a manual Intent Score workflow: quick
-LinkedIn/news check on your top 20 candidates before final ranking, entered
-by hand"), `scorer.py` never writes to this field — it only ever passes
-through whatever value is already on the `Lead`. This is deliberate:
-
-1. Run `score()` once with `intent_score` at its default (`0.0`) to get an
-   initial ranking from `icp_fit` and `website_audit` alone.
-2. Manually research the candidate pool — recent activity, reviews,
-   anything suggesting they're actively looking to invest right now.
-3. Hand-edit `intent_score` on those leads in the JSONL (or a review sheet),
-   then re-run `score()` — `total_score` updates, `icp_fit_score` and
-   `website_audit_score` are recomputed identically since they don't depend
-   on `intent_score`.
-
-**The candidate pool:** since `intent_score` is `0.0` for every lead before
-step 2 happens, `total_score` at that point is really just
-`icp_fit_score × 0.35 + website_audit_score × 0.50` — intent's weight
-contributes nothing yet. Ranking the research pool by `total_score` would
-therefore be equivalent to ranking by fit+audit alone, just with an
-unnecessarily narrow cutoff: a lead with a strong buying signal (a recent
-expansion, a bad review asking "when's the new site coming") but only
-average fit/audit scores could rank outside a top-20 cutoff and never get
-looked at, even though intent research is exactly the step meant to catch
-it.
-
-`cmd_score` (`python -m pipeline.runner score --run <run_id>`) builds this
-pool automatically: every scored run writes `research_pool.csv` alongside
-`scored.csv`, containing the top `scoring.intent_research_pool_size`
-leads (default 50, was effectively ~20 before this was made explicit and
-configurable) ranked by `icp_fit_score × weights.total.icp_fit +
-website_audit_score × weights.total.website_audit` — the same formula
-`total_score` uses, minus the `intent` term, computed by
-`pipeline.scoring.research_rank()`. Widening the pool from ~20 to 50 trades
-a bit more manual research time for meaningfully fewer missed high-intent
-leads; retune `intent_research_pool_size` in `config.yaml` if that trade
-stops feeling right for your batch size.
-
-In practice: edit `intent_score` directly in `scored.jsonl` and re-run
-`python -m pipeline.runner score --run <run_id>` — the score command carries
-non-zero `intent_score` values forward from the existing `scored.jsonl`
-before rescoring, so hand-entered intents survive re-runs.
-
-Default weight on `intent` in `total_score` is intentionally the smallest of
-the three (0.15) — it's `0.0` for every lead until step 2 happens, so giving
-it too much weight would just flatten most of the batch to the same
-baseline.
-
-## 6. `total_score` and versioning
+## 6. `total_score`
 
 ```
-total = icp_fit_score × weights.total.icp_fit
-      + website_audit_score × weights.total.website_audit
-      + intent_score × weights.total.intent
+multiplier =
+    1.0  if reachability_score == 100
+    0.95 if reachability_score == 90
+    0.7  if 40 <= reachability_score <= 89
+    0.5  if 1 <= reachability_score <= 39
+    0.2  if reachability_score == 0
+
+total_score = opportunity_score * multiplier
 ```
 
-Default weights: `icp_fit` 0.35, `website_audit` 0.50, `intent` 0.15 —
-opportunity weighted highest since that's the strongest, most-available
-signal across the whole batch; fit next since it gates whether outreach is
-even possible; intent last since it's sparse by design.
+`total_score` is `None` whenever `opportunity_score` is `None` (the
+`unclear` lead-type case) — there's nothing to multiply. The multiplier is
+a fixed policy table in `scorer.py`, not a tunable config weight — unlike
+the point values in `reachability_score`, these bucket boundaries are a
+deliberate business rule, not something to retune per batch.
+
+Note the `reachability_score == 0` row still produces a (small) total
+rather than `None` — the lead isn't marked `qualified` (see §2), but if that
+gate is ever bypassed downstream, a `0.2` multiplier keeps it from ranking
+artificially high rather than crashing on a missing value.
 
 `scoring_version` is stamped on every scored `Lead` from `weights["version"]`
-(ARCHITECTURE.md §5 — this is what makes a `total_score` of 62 from three
-weeks ago comparable, or not, to one from today). Bump it whenever the
-weights or formula shape change, not just the numbers — a weight change
-alone should also bump the version so old and new scores are never silently
-compared as if they meant the same thing.
+(ARCHITECTURE.md §5). Bump it whenever the weights *or formula shape*
+change, not just the numbers, so old and new `total_score`s are never
+silently compared as if they meant the same thing.
 
-## 7. Tuning after a real batch
+## 7. `Audit Notes` — every score explainable
 
-Per the Phase 3 roadmap: don't guess the weights twice. After the first
-batch of real outreach:
+Auto-generated on every scoring run by `_build_audit_notes()` in
+`scorer.py`, overwriting whatever `enrichers/audit.py` wrote at enrich time.
+Three shapes, depending on outcome:
 
-1. Track which leads actually replied (a column in the review sheet or
-   Notion, not a new `Lead` field — this is outreach-outcome data, not
-   pipeline data).
-2. Compare `icp_fit_score` and `website_audit_score` distributions between
-   repliers and non-repliers. If repliers cluster on one sub-score more
-   than the other, shift `weights.total` toward it.
-3. Check the two fixed-score cases (`no_website_score`,
-   `unreachable_domain_score`) against reply rate specifically — if
-   no-website leads reply worse than expected, that's a sign the "sell a
-   new build" pitch needs work, not that the score is wrong; resist the
-   urge to fix a pitch problem by editing the score.
-4. Re-check `lighthouse_weights` — if `performance` isn't actually the thing
-   that lands in conversations, move weight toward whichever metric is.
+- **Qualified**: `"Qualified: {industry}, {country}. Opportunity: {source}
+  ({value}). Reachability: {breakdown} ({value}, x{multiplier} multiplier).
+  Total: {total}."` — e.g. `"Qualified: clinic, Serbia. Opportunity:
+  new-build policy (90). Reachability: phone only (40, x0.7 multiplier).
+  Total: 63."`
+- **Passes filters but zero reachability**: same shape, `"Not qualified (no
+  contact info — needs further enrichment): ..."` in place of `"Qualified:
+  ..."`.
+- **Fails a qualification filter**: `"Not qualified: industry '{industry}'
+  not in target list"` / `"country '{country}' not in scope"` (or both,
+  joined with `; `) — no score breakdown, since none was computed.
 
 ## 8. `lead_type` — new-build vs. redesign are different pitches
 
-Resolved: added `Lead.lead_type: str | None`, one of `"new_build"` /
-`"redesign"` / `"unclear"` (schema bump to v4 in `pipeline/schema.py`).
 Set by `scorer.py` from the exact same branch that decides
-`website_audit_score`, via a single shared helper (`_audit_case`) so the
-two can never disagree about which case a lead falls into:
+`opportunity_score`, via a single shared helper (`_audit_case`) so the two
+can never disagree about which case a lead falls into:
 
-| `_audit_case` result | `website_audit_score`         | `lead_type`  | Meaning                                                      |
-| --------------------- | ------------------------------ | ------------ | -------------------------------------------------------------- |
-| `"no_website"`       | fixed `no_website_score`      | `new_build`  | No domain at all — the pitch is building a site from scratch  |
-| `"unreachable"`      | fixed `unreachable_domain_score` | `unclear`  | Domain exists but couldn't be audited — genuinely ambiguous until someone looks: could be a live business with a site that's temporarily down (redesign/fix pitch), or an abandoned domain (no real pitch yet). Deliberately not guessed either way. |
-| `"audited"`          | computed from Lighthouse + flags | `redesign` | Domain exists and was audited — the pitch is improving an existing site |
+| `_audit_case` result | `opportunity_score`              | `lead_type`  | Meaning                                                      |
+| --------------------- | ---------------------------------- | ------------ | -------------------------------------------------------------- |
+| `"no_website"`        | fixed `no_website_score`          | `new_build`  | No domain at all — the pitch is building a site from scratch  |
+| `"unreachable"`       | `None`                            | `unclear`   | Domain exists but couldn't be audited — genuinely ambiguous until someone looks |
+| `"audited"`           | computed from Lighthouse + flags   | `redesign`  | Domain exists and was audited — the pitch is improving an existing site |
 
-This stays a separate field rather than a change to `total_score` itself,
-per the original framing — two leads can tie on `total_score` and still
-need different outreach templates. In practice this means the outreach
-step (or a future `sinks/` consumer) can filter or branch on `lead_type`
-without re-deriving it from `domain`/`lighthouse`/`status` each time.
-
-`unclear` leads are worth a specific note: they should probably get a
-manual look (same spirit as the intent-score workflow in §5) before either
-pitch goes out, rather than being routed automatically — sending a
-"let's redesign your site" pitch to a business whose domain is actually
-dead would land badly.
-
-Migration note: any v3 JSONL loaded without a `lead_type` key gets
-`lead_type=None` via the dataclass default — no explicit migration code
-needed (same pattern as the v2→v3 `contact_phone` migration in
-ARCHITECTURE.md §5), since `None` is exactly the right value for "not yet
-scored under this schema version." Re-running `score()` on old records
-fills it in.
+This stays a separate field rather than folding into `total_score` itself —
+two leads can tie on `total_score` and still need different outreach
+templates. `unclear` leads are worth a specific manual look before either
+pitch goes out — sending a "let's redesign your site" pitch to a business
+whose domain is actually dead would land badly.
 
 ## 9. Testing
 
 Per ARCHITECTURE.md §13, `score()` is a pure function — test with
 hand-built `Lead` objects, no mocking (see `tests/test_scoring.py`):
 
-- A no-domain lead → `website_audit_score == no_website_score`
-- An `enrich_failed` lead → `website_audit_score == unreachable_domain_score`
-- A fully-audited lead with known Lighthouse numbers → hand-compute the
-  expected `weighted_quality` and assert against it
-- `intent_score` on the input is always equal to `intent_score` on the
-  output — the one invariant that must never break
+- Industry/country filter failures leave every score field `None` and
+  `qualified=False`, and never raise on an unrecognized raw industry string
+- A qualifying industry synonym (e.g. `dentist`) folds `lead.industry` to
+  its canonical category (`clinic`)
+- Every reachability channel combination produces the documented score and
+  multiplier bucket
+- `reachability_score == 0` still produces a `total_score` (via the `0.2`
+  multiplier) but `qualified` stays `False`
+- A no-domain lead → `opportunity_score == no_website_score`
+- An `enrich_failed`/unreachable-domain lead → `opportunity_score is None`,
+  `Audit Notes` flags "needs classification"
+- A fully-audited lead with known Lighthouse numbers → hand-computed
+  `weighted_quality` matches
+- `lead_type` and `opportunity_score` always agree on which case a lead fell
+  into — both derive from the single `_audit_case()` branch
+- A terrible audited site never exceeds `audited_score_cap`, which stays
+  below `no_website_score` — both directly, and via an assertion that a
+  misconfigured `audited_score_cap >= no_website_score` raises
+- `Audit Notes` matches the documented format exactly for at least one
+  hand-computed example
 - Two leads with identical inputs except `weights["version"]` produce
   different `scoring_version` on output, identical everything else
-- `lead_type` and `website_audit_score` always agree on which case a lead
-  fell into — e.g. a lead can never come back `lead_type="new_build"` with
-  a `website_audit_score` computed from Lighthouse data, since both are
-  derived from the single `_audit_case()` branch
-- A terrible audited site (near-zero Lighthouse quality plus both flat
-  bonuses) never exceeds `audited_score_cap`, and that cap stays below
-  `no_website_score` — both directly, and via an assertion that a
-  misconfigured `audited_score_cap >= no_website_score` raises
-- The established bonus is withheld for two phone numbers and nothing else,
-  and awarded for one email plus one phone — distinct channel types, not
-  raw item count
-- `research_rank()` matches `icp_fit_score × weights.total.icp_fit +
-  website_audit_score × weights.total.website_audit` exactly, excluding
-  `intent`, and `cmd_score`'s `research_pool.csv` respects
-  `intent_research_pool_size` and ranks by `research_rank()` rather than
-  `total_score` — a high-intent, average-fit lead must not silently bump a
-  better-fit, zero-intent lead out of the pool
 
 ## 10. Changelog
 
+- **v3** — dropped `icp_fit_score` and `intent_score` entirely. Industry and
+  location moved out of scoring into hard qualification filters
+  (`qualification:` in `config.yaml`), run before scoring rather than
+  weighted into it. Added `reachability_score` (was folded into
+  `icp_fit_score` before). Renamed `website_audit_score` →
+  `opportunity_score` (same underlying redesign-case formula, unchanged
+  values). `total_score` is now `opportunity_score × ` a
+  reachability-derived multiplier instead of a three-way weighted sum. The
+  `unreachable`/`unclear` case no longer gets a fixed discounted
+  `opportunity_score` — it's left blank, flagged for manual
+  classification, instead of guessing which pitch applies. Removed the
+  manual intent-research workflow (`intent_score`, `research_rank()`,
+  `research_pool.csv`) — dropped along with `icp_fit_score`'s removal
+  rather than kept as a disconnected leftover feature.
 - **v2** — capped the audited-site computed score below `no_website_score`
   (`audited_score_cap`, default 85) so a bad audited site can never outrank
   a lead with no website at all; changed the established-practice bonus to
   require distinct channel *types* rather than a raw item count; made the
-  manual intent-research pool size explicit and configurable
-  (`intent_research_pool_size`, default 50, up from an implicit ~20).
-  `scoring_version` bumped because the audit and fit sub-score formulas
-  changed shape, not just their numbers — v1 and v2 `total_score`s are not
-  directly comparable for leads that hit the cap or the old item-count
-  bonus.
+  manual intent-research pool size explicit and configurable.
 - **v1** — initial weighted scoring: `icp_fit` (contact channels + industry
   match), `website_audit` (Lighthouse + https/mobile flags, fixed scores for
   no-website/unreachable), manual `intent_score`, `lead_type`.

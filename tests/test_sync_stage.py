@@ -103,14 +103,14 @@ def test_limit_leaves_pending_rows_intact(tmp_path, monkeypatch):
     run_dir = _make_run(
         tmp_path,
         monkeypatch,
-        [_lead("A", "a.rs", intent_score=70.0), _lead("B", "b.rs")],
+        [_lead("A", "a.rs", reachability_score=70.0), _lead("B", "b.rs")],
         sink,
     )
     assert main(["sync", "--run", "test-run", "--sink", "notion", "--limit", "1"]) == 0
 
     after = {lead.company: lead for lead in read_jsonl(run_dir / "scored.jsonl")}
     assert after["A"].status == "synced"
-    assert after["A"].intent_score == 70.0  # hand-edited value untouched
+    assert after["A"].reachability_score == 70.0  # scored value untouched by sync
     assert after["B"].status == "scored"  # beyond limit, still in the file
     manifest = json.loads((run_dir / "manifest.json").read_text())
     assert manifest["sync"]["counts"]["beyond_limit"] == 1

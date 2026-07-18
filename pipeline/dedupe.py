@@ -50,6 +50,18 @@ def lead_key(lead: Lead) -> tuple[str, str]:
     return ("company", lead.company.strip().lower())
 
 
+def email_keys(lead: Lead) -> list[str]:
+    """Secondary identity signal: the lead's own emails, lowercased.
+
+    Only meaningful once a lead is enriched (collect-time leads rarely have
+    emails yet), so unlike lead_key this isn't used for intra-run stage
+    idempotency — it's for catching the same business synced under two
+    different domain/company keys (e.g. once before its domain was known,
+    once after).
+    """
+    return [email.strip().lower() for email in lead.contact_emails if email.strip()]
+
+
 def dedupe_leads(leads: Iterable[Lead]) -> list[Lead]:
     """Drop duplicates by lead_key, first occurrence wins."""
     seen: set[tuple[str, str]] = set()

@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.collectors.maps import MapsCollector, build_queries, parse_results_csv
+from pipeline.collectors.maps import (
+    MapsCollector,
+    _split_emails,
+    build_queries,
+    parse_results_csv,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -44,6 +49,17 @@ def test_parse_results_csv():
     # input_id that isn't one of our categories (scraper-generated UUID)
     assert by_company["Mystery Biz"].industry == "other"
     assert by_company["Zubar Petrović"].domain == ""
+
+
+def test_split_emails_strips_leading_slashes_and_dedupes():
+    # seen live on "In Dental": scraper pulled emails out of a "//foo@bar"
+    # JS comment line, leaving a stray leading "//" that must not be kept
+    # as a distinct address from the clean version
+    emails = _split_emails(
+        "//indentalinfo@gmail.com, //indental.ns@gmail.com, "
+        "info@indental.rs, indentalinfo@gmail.com"
+    )
+    assert emails == ["indentalinfo@gmail.com", "indental.ns@gmail.com", "info@indental.rs"]
 
 
 def test_missing_binary_raises_with_install_hint():

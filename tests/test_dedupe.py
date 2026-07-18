@@ -1,6 +1,6 @@
 import pytest
 
-from pipeline.dedupe import dedupe_leads, normalize_domain
+from pipeline.dedupe import dedupe_leads, email_keys, normalize_domain
 from pipeline.schema import Lead
 
 
@@ -47,3 +47,17 @@ def test_no_domain_leads_kept_but_deduped_by_company():
     ]
     result = dedupe_leads(leads)
     assert [lead.company for lead in result] == ["No Web Bistro", "Other Shop"]
+
+
+def test_email_keys_lowercased_and_blank_dropped():
+    lead = Lead(
+        company="Mirković",
+        domain="",
+        source="osm",
+        contact_emails=["Info@DentalCentarMirkovic.com", "  "],
+    )
+    assert email_keys(lead) == ["info@dentalcentarmirkovic.com"]
+
+
+def test_email_keys_empty_when_no_emails():
+    assert email_keys(_lead("No Web Bistro", "")) == []

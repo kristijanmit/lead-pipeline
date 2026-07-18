@@ -4,6 +4,8 @@
 
 collect:
   location: ""     # OSM area name, e.g. "Berlin" — usually given per run via --location
+  country: Serbia  # stamped on every lead the same way as location; the qualification
+                   # filter's location gate checks this, not the free-text city
   categories: []   # e.g. [restaurant, hairdresser] or raw OSM tags like "craft=roofer"
   manual_csv: leads_manual.csv   # hand-gathered leads; see leads_manual.csv.example
 
@@ -42,32 +44,31 @@ notion:
 # SCORING.md; tune here after the first real outreach batch (SCORING.md §7),
 # and bump version whenever weights or formula shape change so old and new
 # total_scores are never silently compared as if they meant the same thing.
-# v2: capped the audited-site score below no_website_score, changed the
-# established bonus to require distinct channel types, and widened the
-# manual intent-research pool (SCORING.md changelog).
+# v3: dropped icp_fit/intent entirely — industry and location moved out of
+# scoring into the qualification: filters below, added reachability_score,
+# and total_score is now opportunity_score * a reachability-derived
+# multiplier instead of a three-way weighted sum (SCORING.md changelog).
 scoring:
-  version: 2
+  version: 3
 
-  # icp_fit_score: reachability + legitimacy of the business itself —
-  # deliberately ignores the website (that's website_audit). Sums to 100
-  # with everything triggered; clamped at 100 either way.
-  icp_fit:
-    has_email: 30
-    has_phone: 25
-    has_social: 15
-    established_bonus: 15      # awarded when >= threshold distinct channel
-                                # types are present (email/phone/social)
-    established_threshold: 2   # distinct channel *types*, not raw item count —
-                                # two phone numbers alone don't qualify
-    industry_match: 15         # full credit while runs are single-industry
+  # reachability_score: can we contact this lead right now, today. Sums to
+  # 100 with every channel present; used both as its own Notion field and to
+  # derive the total_score multiplier below.
+  reachability:
+    has_email: 50
+    has_phone: 40
+    has_social: 10
 
-  # website_audit_score: opportunity, not quality — higher = more to sell
-  # into. Computed case is 100 - weighted Lighthouse quality + flat bonuses,
-  # capped at audited_score_cap.
-  website_audit:
-    no_website_score: 90           # no domain at all — strongest new-build signal
-    unreachable_domain_score: 65   # domain exists, audit failed — discounted: the
-                                   # practice may be gone or the domain abandoned
+  # opportunity_score (was website_audit_score — same underlying values,
+  # renamed so it isn't mistaken for a quality score): how much upside in
+  # pitching a redesign/new build. Computed case is 100 - weighted
+  # Lighthouse quality + flat bonuses, capped at audited_score_cap. An
+  # "unclear" lead (domain present, no usable Lighthouse data) gets no
+  # opportunity_score at all — see scorer.py — rather than a fixed
+  # discounted value like it used to.
+  opportunity:
+    no_website_score: 90           # no domain at all — strongest new-build signal,
+                                    # a fixed policy value, not a placeholder
     audited_score_cap: 85          # must stay below no_website_score — a bad
                                    # audited site is still an easier sell than a
                                    # blank slate, so it must never outrank
@@ -80,16 +81,20 @@ scoring:
       accessibility: 0.20    # real gap, rarely why a cold lead replies
       seo: 0.15              # most sites already score 75-100 — least signal
 
-  # total_score = weighted sum of the three sub-scores; must sum to 1.0.
-  # intent is smallest since it's 0.0 for every lead until the manual
-  # research pass (SCORING.md §5) fills it in on the top candidates.
-  total:
-    icp_fit: 0.35
-    website_audit: 0.50
-    intent: 0.15
+# Phase 3 — qualification filters, run before scoring, not part of the
+# score itself (SCORING.md §1). A lead only gets scored/marked Qualified if
+# both gates pass. Deliberately not scored/weighted: it's too early to know
+# which vertical converts best, so weighting industries now would be
+# guessing — revisit once there's real close-rate data across verticals.
+qualification:
+  target_countries: [Serbia]
 
-  # size of the candidate pool for the manual intent-research pass
-  # (SCORING.md §5) — ranked by icp_fit/website_audit only, since intent is
-  # 0.0 for everyone pre-research and total_score would bury high-signal
-  # leads that don't crack a narrower cutoff.
-  intent_research_pool_size: 50
+  # raw collected industry values (from OSM tags / maps categories / manual
+  # CSV) that fold into each target category, case-insensitive. Anything not
+  # listed here simply fails the filter — never errors. Grow this list as
+  # new raw values show up; it isn't meant to be exhaustive on day one.
+  industry_map:
+    clinic: [dentist, dental, dental_clinic, orthodontist, clinic, medical, doctor, physician]
+    car_workshop: [car_repair, auto_repair, car_workshop, mechanic, tire, tire_shop, car_service]
+    workshop_repair: [repair_shop, workshop, appliance_repair, electronics_repair, shoe_repair]
+    construction: [construction, contractor, builder, general_contractor, renovation]

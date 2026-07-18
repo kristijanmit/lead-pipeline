@@ -1,3 +1,3 @@
-from pipeline.scoring.scorer import research_rank, score
+from pipeline.scoring.scorer import score
 
-__all__ = ["score", "research_rank"]
+__all__ = ["score"]

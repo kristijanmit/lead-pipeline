@@ -12,8 +12,8 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Iterable
 
-SCHEMA_VERSION = 5
-SCORING_VERSION = 2
+SCHEMA_VERSION = 6
+SCORING_VERSION = 3
 
 
 @dataclass
@@ -26,6 +26,8 @@ class Lead:
     location: str = ""  # the market this lead was collected in, e.g. "Novi Sad" (v5) —
     # stamped by cmd_collect from --location unless the collector set one itself
     # (the manual CSV's optional "location" column). v4 JSONL loads as "".
+    country: str = ""  # v6 — stamped by cmd_collect the same way as location; the
+    # qualification filter's location gate checks this, not the free-text city
 
     schema_version: int = SCHEMA_VERSION
 
@@ -41,16 +43,18 @@ class Lead:
     lighthouse: dict[str, int] | None = None  # {"performance": 42, "accessibility": 88, ...}
     audit_notes: str = ""
 
-    # scoring
+    # scoring (SCORING.md) — reachability_score/opportunity_score/total_score/
+    # qualified are all None/False until a lead passes the qualification filters
+    # and gets scored; see scorer.py
     scoring_version: int = SCORING_VERSION
-    icp_fit_score: float | None = None
-    website_audit_score: float | None = None
-    intent_score: float = 0.0
+    reachability_score: float | None = None
+    opportunity_score: float | None = None
     total_score: float | None = None
     lead_type: str | None = None  # "new_build" | "redesign" | "unclear" — set by
-    # scorer.py alongside website_audit_score (same _audit_case branch, different
+    # scorer.py alongside opportunity_score (same _audit_case branch, different
     # pitch implication). Never set at collection/enrichment time. v3 JSONL loads
     # as None via the default — re-running score() fills it in (SCORING.md §8).
+    qualified: bool = False  # industry + country filters passed AND reachability_score > 0
 
     # pipeline bookkeeping
     run_id: str = ""
@@ -65,6 +69,9 @@ class Lead:
         # schema v2 stored a single contact_phone string
         if data.get("contact_phone") and not data.get("contact_phones"):
             data = {**data, "contact_phones": [data["contact_phone"]]}
+        # v6 renamed website_audit_score -> opportunity_score
+        if data.get("website_audit_score") is not None and data.get("opportunity_score") is None:
+            data = {**data, "opportunity_score": data["website_audit_score"]}
         # Tolerate unknown keys so newer JSONL files load under older code
         known = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in data.items() if k in known})

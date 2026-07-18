@@ -20,6 +20,7 @@ class ConfigError(Exception):
 DEFAULTS: dict = {
     "collect": {
         "location": "",
+        "country": "Serbia",
         "categories": [],
         "manual_csv": "leads_manual.csv",
     },
@@ -50,18 +51,14 @@ DEFAULTS: dict = {
         "cache_path": "data/seen_domains.json",
     },
     "scoring": {
-        "version": 2,
-        "icp_fit": {
-            "has_email": 30,
-            "has_phone": 25,
-            "has_social": 15,
-            "established_bonus": 15,
-            "established_threshold": 2,
-            "industry_match": 15,
+        "version": 3,
+        "reachability": {
+            "has_email": 50,
+            "has_phone": 40,
+            "has_social": 10,
         },
-        "website_audit": {
+        "opportunity": {
             "no_website_score": 90,
-            "unreachable_domain_score": 65,
             "audited_score_cap": 85,
             "no_https_bonus": 10,
             "not_mobile_friendly_bonus": 10,
@@ -72,12 +69,15 @@ DEFAULTS: dict = {
                 "seo": 0.15,
             },
         },
-        "total": {
-            "icp_fit": 0.35,
-            "website_audit": 0.50,
-            "intent": 0.15,
+    },
+    "qualification": {
+        "target_countries": ["Serbia"],
+        "industry_map": {
+            "clinic": ["dentist", "dental", "dental_clinic", "orthodontist", "clinic", "medical", "doctor", "physician"],
+            "car_workshop": ["car_repair", "auto_repair", "car_workshop", "mechanic", "tire", "tire_shop", "car_service"],
+            "workshop_repair": ["repair_shop", "workshop", "appliance_repair", "electronics_repair", "shoe_repair"],
+            "construction": ["construction", "contractor", "builder", "general_contractor", "renovation"],
         },
-        "intent_research_pool_size": 50,
     },
 }
 
@@ -136,6 +136,8 @@ def _validate(config: dict, path: Path) -> None:
     collect = config["collect"]
     if not isinstance(collect.get("categories"), list):
         raise ConfigError(f"{path}: collect.categories must be a list")
+    if not isinstance(collect.get("country"), str) or not collect["country"]:
+        raise ConfigError(f"{path}: collect.country must be a non-empty string")
     maps = config["maps"]
     for key in ("depth", "timeout_s"):
         if not isinstance(maps.get(key), int) or maps[key] <= 0:
@@ -170,42 +172,49 @@ def _validate(config: dict, path: Path) -> None:
     scoring = config["scoring"]
     if not isinstance(scoring.get("version"), int) or scoring["version"] <= 0:
         raise ConfigError(f"{path}: scoring.version must be a positive integer")
-    for section in ("icp_fit", "website_audit", "total"):
+    for section in ("reachability", "opportunity"):
         if not isinstance(scoring.get(section), dict):
             raise ConfigError(f"{path}: scoring.{section} must be a mapping")
-    for key, value in scoring["icp_fit"].items():
+    for key, value in scoring["reachability"].items():
         if not isinstance(value, (int, float)) or value < 0:
-            raise ConfigError(f"{path}: scoring.icp_fit.{key} must be a non-negative number")
-    audit = scoring["website_audit"]
-    for key, value in audit.items():
+            raise ConfigError(f"{path}: scoring.reachability.{key} must be a non-negative number")
+    opportunity = scoring["opportunity"]
+    for key, value in opportunity.items():
         if key == "lighthouse_weights":
             continue
         if not isinstance(value, (int, float)) or value < 0:
             raise ConfigError(
-                f"{path}: scoring.website_audit.{key} must be a non-negative number"
+                f"{path}: scoring.opportunity.{key} must be a non-negative number"
             )
     # a bad audited site must never outrank "no website at all" — the
     # strongest new-build signal in the batch (SCORING.md §4.2)
-    if audit["audited_score_cap"] >= audit["no_website_score"]:
+    if opportunity["audited_score_cap"] >= opportunity["no_website_score"]:
         raise ConfigError(
-            f"{path}: scoring.website_audit.audited_score_cap must be less than "
+            f"{path}: scoring.opportunity.audited_score_cap must be less than "
             "no_website_score"
         )
-    # both weight groups must sum to 1.0 — a tuning typo here would silently
-    # inflate or deflate every score in the batch, so fail loudly at startup
-    for name, group in (
-        ("website_audit.lighthouse_weights", audit.get("lighthouse_weights")),
-        ("total", scoring["total"]),
-    ):
-        if not isinstance(group, dict) or not group:
-            raise ConfigError(f"{path}: scoring.{name} must be a non-empty mapping")
-        for key, value in group.items():
-            if not isinstance(value, (int, float)) or value < 0:
-                raise ConfigError(f"{path}: scoring.{name}.{key} must be a non-negative number")
-        if abs(sum(group.values()) - 1.0) > 0.001:
-            raise ConfigError(f"{path}: scoring.{name} weights must sum to 1.0")
-    pool_size = scoring.get("intent_research_pool_size")
-    if not isinstance(pool_size, int) or pool_size <= 0:
-        raise ConfigError(
-            f"{path}: scoring.intent_research_pool_size must be a positive integer"
-        )
+    # lighthouse_weights must sum to 1.0 — a tuning typo here would silently
+    # inflate or deflate every opportunity score in the batch
+    lighthouse_weights = opportunity.get("lighthouse_weights")
+    if not isinstance(lighthouse_weights, dict) or not lighthouse_weights:
+        raise ConfigError(f"{path}: scoring.opportunity.lighthouse_weights must be a non-empty mapping")
+    for key, value in lighthouse_weights.items():
+        if not isinstance(value, (int, float)) or value < 0:
+            raise ConfigError(
+                f"{path}: scoring.opportunity.lighthouse_weights.{key} must be a non-negative number"
+            )
+    if abs(sum(lighthouse_weights.values()) - 1.0) > 0.001:
+        raise ConfigError(f"{path}: scoring.opportunity.lighthouse_weights must sum to 1.0")
+
+    qualification = config["qualification"]
+    countries = qualification.get("target_countries")
+    if not isinstance(countries, list) or not countries or not all(isinstance(c, str) and c for c in countries):
+        raise ConfigError(f"{path}: qualification.target_countries must be a non-empty list of strings")
+    industry_map = qualification.get("industry_map")
+    if not isinstance(industry_map, dict) or not industry_map:
+        raise ConfigError(f"{path}: qualification.industry_map must be a non-empty mapping")
+    for category, synonyms in industry_map.items():
+        if not isinstance(synonyms, list) or not all(isinstance(s, str) and s for s in synonyms):
+            raise ConfigError(
+                f"{path}: qualification.industry_map.{category} must be a list of strings"
+            )

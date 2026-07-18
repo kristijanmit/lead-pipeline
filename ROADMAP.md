@@ -93,7 +93,15 @@ thing in the whole project to unit test.
       and `runner.py score` carries hand-edited values in `scored.jsonl`
       forward across re-runs — workflow steps in SCORING.md §5; the actual
       per-batch research stays manual by design)
-- [ ] After the first real batch, tune `icp_scoring` weights in `config.yaml`
+- [x] Replace the blended `ICP Fit Score`/`Website Audit Score` model with
+      hard qualification filters (industry + country, `qualification:` in
+      `config.yaml`) plus two independent, explainable sub-scores —
+      `Reachability Score` and `Opportunity Score` (renamed from
+      `Website Audit Score`) — and a simpler `Total Score = Opportunity ×
+      reachability-derived multiplier` (schema v6, `scoring_version` 3; see
+      `lead_scoring_spec.md` and SCORING.md for the full model)
+- [ ] After the first real batch, tune `qualification.industry_map` and the
+      `scoring.opportunity`/`scoring.reachability` weights in `config.yaml`
       against which leads actually replied — don't guess the weights twice
       (tuning procedure written up ahead of time in SCORING.md §7)
 
@@ -120,8 +128,10 @@ see ARCHITECTURE.md §6.1 for the exact `Lead` -> Notion property mapping
       §9, this is what keeps sync fast once the database has a few hundred rows)
       — cache entry written after each successful create, so an interrupted
       batch resumes cleanly; `sync --sink notion --refresh-cache` rebuilds it
-- [x] Confirm the Status field moves cleanly: Not started → In progress → Done
-      — pages land as "Not started"; the later stages are moved by hand in
+- [x] Confirm the Status field moves cleanly: Not started → Queued → Sent →
+      Follow-up due → Replied → Closed — a `select` property (not Notion's
+      native `status` type, which doesn't support option edits over the API);
+      pages land as "Not started", the later stages are moved by hand in
       Notion during outreach (Phase 5)
 
 ## Phase 5 — Outreach handoff
@@ -141,7 +151,8 @@ Goal: the scoring model gets better every cycle instead of staying static.
 
 - [ ] After 50-100 leads have gone through outreach, pull which ones replied
       and cross-reference their scores
-- [ ] Adjust `scoring_weights` and `icp_scoring` in `config.yaml` based on that data
+- [ ] Adjust `scoring.opportunity`/`scoring.reachability` weights and
+      `qualification.industry_map` in `config.yaml` based on that data
 - [ ] Re-run collection → enrich → score on a regular cadence (weekly/monthly)
 
 ## Rough timeline

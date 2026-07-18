@@ -96,12 +96,17 @@ def test_unknown_fields_are_omitted_not_blanked():
         "Phone",
         "Social Links",
         "Audit Notes",
+        "Reachability Score",
+        "Opportunity Score",
         "Total Score",
         "Lead Type",
     ):
         assert absent not in props
     # False is data, None is not
     assert to_notion_properties(_lead(https=False))["HTTPS"] == {"checkbox": False}
+    # Qualified is a checkbox, always present — unlike the number/select
+    # fields above, "unknown" and "False" aren't distinguishable for it
+    assert props["Qualified"] == {"checkbox": False}
 
 
 def test_source_and_select_mappings():
@@ -137,18 +142,20 @@ def test_scores_lighthouse_and_status():
     props = to_notion_properties(
         _lead(
             lighthouse={"performance": 42, "seo": 90},
-            icp_fit_score=55.0,
-            website_audit_score=70.0,
-            intent_score=0.0,
+            reachability_score=90.0,
+            opportunity_score=70.0,
             total_score=63.5,
+            qualified=True,
         )
     )
     assert props["Performance Score"] == {"number": 42}
     assert props["SEO Score"] == {"number": 90}
     assert "Accessibility Score" not in props  # key missing from the audit
+    assert props["Reachability Score"] == {"number": 90.0}
+    assert props["Opportunity Score"] == {"number": 70.0}
     assert props["Total Score"] == {"number": 63.5}
-    assert props["Intent Score"] == {"number": 0.0}  # 0.0 is data, not empty
-    assert props["Status"] == {"status": {"name": "Not started"}}
+    assert props["Qualified"] == {"checkbox": True}
+    assert props["Status"] == {"select": {"name": "Not started"}}
 
 
 def test_bookkeeping_fields_never_synced():
@@ -277,6 +284,105 @@ def test_seen_round_trip(tmp_path):
     assert load_seen(tmp_path / "missing.json") == {}
 
 
+# --- email-based duplicate matching (the Mirković bug) ---
+
+
+def test_same_email_different_domain_matches_existing_cache_entry(tmp_path):
+    # "Mirković" (no domain) synced first, keyed by company; "Dental Centar
+    # Mirković" (domain resolved later) shares its email — must not become
+    # a second page
+    sink, session = _sink(tmp_path, [])
+    save_seen(
+        sink.cache_path,
+        {
+            "company:mirković": {
+                "page_id": "page-1",
+                "synced_at": None,
+                "snapshot": {
+                    "emails": ["info@dentalcentarmirkovic.com"],
+                    "phones": [],
+                    "socials": {},
+                    "domain": "",
+                    "company": "Mirković",
+                },
+            }
+        },
+    )
+    lead = _lead(
+        company="Dental Centar Mirković",
+        domain="dentalcentarmirkovic.com",
+        contact_emails=["info@dentalcentarmirkovic.com"],
+    )
+    report = sink.write([lead])
+
+    assert report.created == []
+    assert [l.company for l in report.cached] == ["Dental Centar Mirković"]
+    assert session.calls == []  # no page-create request at all
+
+
+def test_new_info_on_a_duplicate_posted_as_comment(tmp_path):
+    sink, session = _sink(tmp_path, [FakeResponse(200, {"id": "comment-1"})])
+    save_seen(
+        sink.cache_path,
+        {
+            "company:mirković": {
+                "page_id": "page-1",
+                "synced_at": None,
+                "snapshot": {
+                    "emails": ["info@dentalcentarmirkovic.com"],
+                    "phones": [],
+                    "socials": {},
+                    "domain": "",
+                    "company": "Mirković",
+                },
+            }
+        },
+    )
+    lead = _lead(
+        company="Dental Centar Mirković",
+        domain="dentalcentarmirkovic.com",
+        contact_emails=["info@dentalcentarmirkovic.com"],
+        contact_phones=["+381 69 54 14 515"],
+        social_links={"facebook": "https://facebook.com/dentalcentarmirkovic"},
+    )
+    report = sink.write([lead])
+
+    assert report.cached and report.failed == []
+    assert len(session.calls) == 1
+    assert session.calls[0]["url"].endswith("/comments")
+    assert session.calls[0]["json"]["parent"] == {"page_id": "page-1"}
+    comment_text = session.calls[0]["json"]["rich_text"][0]["text"]["content"]
+    assert "+381 69 54 14 515" in comment_text
+    assert "facebook" in comment_text
+
+    # the snapshot is updated so a third sync with the same info doesn't
+    # post the same comment again
+    updated = load_seen(sink.cache_path)["company:mirković"]["snapshot"]
+    assert "+381 69 54 14 515" in updated["phones"]
+
+
+def test_duplicate_with_no_new_info_posts_no_comment(tmp_path):
+    sink, session = _sink(tmp_path, [])
+    save_seen(
+        sink.cache_path,
+        {
+            "domain:a.rs": {
+                "page_id": "page-1",
+                "synced_at": None,
+                "snapshot": {
+                    "emails": ["office@a.rs"],
+                    "phones": [],
+                    "socials": {},
+                    "domain": "a.rs",
+                    "company": "A",
+                },
+            }
+        },
+    )
+    report = sink.write([_lead("A", "a.rs", contact_emails=["office@a.rs"])])
+    assert report.cached and session.calls == []
+
+
 def test_refresh_cache_paginates_and_normalizes(tmp_path):
     def page(page_id, domain, company):
         return {
@@ -312,3 +418,46 @@ def test_refresh_cache_paginates_and_normalizes(tmp_path):
     seen = load_seen(sink.cache_path)
     assert seen["domain:a.rs"]["page_id"] == "p1"  # normalized via dedupe rules
     assert seen["company:no site doo"]["page_id"] == "p2"
+
+
+def test_refresh_cache_rebuilds_snapshots_for_email_matching(tmp_path):
+    sink, _ = _sink(
+        tmp_path,
+        [
+            FakeResponse(
+                200,
+                {
+                    "results": [
+                        {
+                            "id": "p1",
+                            "properties": {
+                                "Domain": {"url": "dentalcentarmirkovic.com"},
+                                "Company": {"title": [{"plain_text": "Dental Centar Mirković"}]},
+                                "Primary Email": {"email": "info@dentalcentarmirkovic.com"},
+                                "Additional Emails": {
+                                    "rich_text": [
+                                        {"plain_text": "dentalcentar.mirkovic@gmail.com"}
+                                    ]
+                                },
+                                "Phone": {"phone_number": "021 3822824"},
+                                "Social Links": {
+                                    "rich_text": [
+                                        {"plain_text": "[Facebook](https://facebook.com/mirkovic)"}
+                                    ]
+                                },
+                            },
+                        }
+                    ],
+                    "has_more": False,
+                },
+            )
+        ],
+    )
+    sink.refresh_cache()
+    snapshot = load_seen(sink.cache_path)["domain:dentalcentarmirkovic.com"]["snapshot"]
+    assert snapshot["emails"] == [
+        "info@dentalcentarmirkovic.com",
+        "dentalcentar.mirkovic@gmail.com",
+    ]
+    assert snapshot["phones"] == ["021 3822824"]
+    assert snapshot["socials"] == {"facebook": "https://facebook.com/mirkovic"}

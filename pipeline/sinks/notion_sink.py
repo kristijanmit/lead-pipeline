@@ -2,15 +2,20 @@
 
 The Lead -> Notion property mapping lives in one function,
 to_notion_properties(), per ARCHITECTURE.md §6.1. Idempotency comes from a
-local seen_domains.json cache keyed by the string form of dedupe.lead_key —
-never a live Notion query per lead (§9). Per-lead API failures land in the
-returned SyncReport, they don't halt the batch; auth failures raise
+local seen_domains.json cache keyed by the string form of dedupe.lead_key,
+plus a secondary email index built from each entry's content snapshot (the
+same business collected once before its domain was known and once after
+still matches) — never a live Notion query per lead (§9). A cache hit whose
+lead carries info not yet on the existing page gets that info added as a
+Notion comment rather than silently dropped. Per-lead API failures land in
+the returned SyncReport, they don't halt the batch; auth failures raise
 immediately since no lead in the batch can succeed.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -19,7 +24,7 @@ from pathlib import Path
 import requests
 
 from pipeline.config import load_env
-from pipeline.dedupe import lead_key, normalize_domain
+from pipeline.dedupe import email_keys, lead_key, normalize_domain, phone_key
 from pipeline.schema import Lead
 from pipeline.sinks.base import register
 
@@ -63,8 +68,8 @@ def to_notion_properties(lead: Lead) -> dict:
         "Company": {"title": [{"text": {"content": lead.company}}]},
         "Industry": {"select": {"name": lead.industry}},
         "Source": {"select": {"name": _SOURCE_OPTIONS.get(lead.source, lead.source)}},
-        "Status": {"status": {"name": "Not started"}},
-        "Intent Score": {"number": lead.intent_score},
+        "Status": {"select": {"name": "Not started"}},
+        "Qualified": {"checkbox": lead.qualified},
     }
     if lead.location:
         props["Location"] = {"select": {"name": lead.location}}
@@ -95,10 +100,10 @@ def to_notion_properties(lead: Lead) -> dict:
             props[column] = {"number": lead.lighthouse[key]}
     if lead.audit_notes:
         props["Audit Notes"] = _text(lead.audit_notes)
-    if lead.icp_fit_score is not None:
-        props["ICP Fit Score"] = {"number": lead.icp_fit_score}
-    if lead.website_audit_score is not None:
-        props["Website Audit Score"] = {"number": lead.website_audit_score}
+    if lead.reachability_score is not None:
+        props["Reachability Score"] = {"number": lead.reachability_score}
+    if lead.opportunity_score is not None:
+        props["Opportunity Score"] = {"number": lead.opportunity_score}
     if lead.total_score is not None:
         props["Total Score"] = {"number": lead.total_score}
     if lead.lead_type:
@@ -110,6 +115,96 @@ def cache_key(lead: Lead) -> str:
     """String form of dedupe.lead_key — "domain:example.com" / "company:foo"."""
     kind, value = lead_key(lead)
     return f"{kind}:{value}"
+
+
+def _snapshot(lead: Lead) -> dict:
+    """Content snapshot stored alongside a cache entry — supports the email
+    index and new-info diffing below without a live Notion query per lead."""
+    return {
+        "emails": lead.contact_emails,
+        "phones": lead.contact_phones,
+        "socials": lead.social_links,
+        "domain": lead.domain,
+        "company": lead.company,
+    }
+
+
+def _email_index(seen: dict) -> dict[str, str]:
+    """Lowercased email -> cache key, built from every entry's snapshot."""
+    index: dict[str, str] = {}
+    for key, entry in seen.items():
+        for email in entry.get("snapshot", {}).get("emails", []):
+            index.setdefault(email.strip().lower(), key)
+    return index
+
+
+def _merge_snapshot(snapshot: dict, lead: Lead) -> dict:
+    """Fold a matched lead's contact info into an existing cache snapshot."""
+    return {
+        "emails": list({*snapshot.get("emails", []), *lead.contact_emails}),
+        "phones": list({*snapshot.get("phones", []), *lead.contact_phones}),
+        "socials": {**snapshot.get("socials", {}), **lead.social_links},
+        "domain": snapshot.get("domain") or lead.domain,
+        "company": snapshot.get("company") or lead.company,
+    }
+
+
+def _new_info(snapshot: dict, lead: Lead) -> list[str]:
+    """Human-readable lines for anything lead has that snapshot doesn't."""
+    lines = []
+    known_emails = {e.lower() for e in snapshot.get("emails", [])}
+    new_emails = [e for e in lead.contact_emails if e.lower() not in known_emails]
+    if new_emails:
+        lines.append(f"Additional email(s): {', '.join(new_emails)}")
+    known_phones = {phone_key(p) for p in snapshot.get("phones", [])}
+    new_phones = [p for p in lead.contact_phones if phone_key(p) not in known_phones]
+    if new_phones:
+        lines.append(f"Additional phone(s): {', '.join(new_phones)}")
+    known_socials = snapshot.get("socials", {})
+    new_socials = {
+        k: v for k, v in lead.social_links.items() if known_socials.get(k) != v
+    }
+    for platform, url in new_socials.items():
+        lines.append(f"New social link — {platform}: {url}")
+    return lines
+
+
+def _rich_text(prop: dict | None) -> str:
+    if not prop:
+        return ""
+    return "".join(t.get("plain_text", "") for t in prop.get("rich_text", []))
+
+
+def _snapshot_from_properties(props: dict) -> dict:
+    """Reverse of to_notion_properties() for the fields the cache needs —
+    used by refresh_cache() to rebuild snapshots from what's live in Notion."""
+    emails = []
+    primary_email = (props.get("Primary Email") or {}).get("email")
+    if primary_email:
+        emails.append(primary_email)
+    emails += [e.strip() for e in _rich_text(props.get("Additional Emails")).split(",") if e.strip()]
+
+    phones = []
+    primary_phone = (props.get("Phone") or {}).get("phone_number")
+    if primary_phone:
+        phones.append(primary_phone)
+    phones += [p.strip() for p in _rich_text(props.get("Additional Phones")).split(",") if p.strip()]
+
+    socials = {
+        platform.lower(): url
+        for platform, url in re.findall(r"\[(\w+)\]\(([^)]+)\)", _rich_text(props.get("Social Links")))
+    }
+
+    title = (props.get("Company") or {}).get("title") or []
+    company = "".join(t.get("plain_text", "") for t in title).strip()
+
+    return {
+        "emails": emails,
+        "phones": phones,
+        "socials": socials,
+        "domain": normalize_domain((props.get("Domain") or {}).get("url")),
+        "company": company,
+    }
 
 
 def load_seen(path: str | Path) -> dict:
@@ -154,15 +249,42 @@ class NotionSink:
     def write(self, leads: list[Lead], limit: int | None = None) -> SyncReport:
         """Create one Notion page per lead not already in the cache.
 
-        The cache entry is written after each successful create, so a crash
-        mid-batch stays idempotent — the re-run skips exactly what landed.
+        A lead matches an existing entry either by cache_key (domain or
+        company) or by sharing an email with one already synced — the same
+        business collected once before its domain resolved and once after
+        must not become two pages. A match whose lead carries info the
+        existing page doesn't get that info added as a comment instead of
+        being silently dropped.
+
+        The cache entry is written after each successful create (or update),
+        so a crash mid-batch stays idempotent — the re-run skips exactly
+        what landed.
         """
         seen = load_seen(self.cache_path)
+        email_index = _email_index(seen)
         report = SyncReport()
         attempts = 0
         for lead in leads:
             key = cache_key(lead)
-            if key in seen:
+            match_key = key if key in seen else next(
+                (email_index[e] for e in email_keys(lead) if e in email_index), None
+            )
+            if match_key is not None:
+                entry = seen[match_key]
+                new_info = _new_info(entry.get("snapshot", {}), lead)
+                if new_info:
+                    try:
+                        self._create_comment(
+                            entry["page_id"],
+                            "New info from a later sync:\n"
+                            + "\n".join(f"- {line}" for line in new_info),
+                        )
+                    except NotionAuthError:
+                        raise
+                    except Exception as e:
+                        report.failed.append((lead, f"comment failed: {e}"))
+                entry["snapshot"] = _merge_snapshot(entry.get("snapshot", {}), lead)
+                save_seen(self.cache_path, seen)
                 report.cached.append(lead)
                 continue
             # limit caps attempts, not successes — a dry run against a broken
@@ -183,7 +305,10 @@ class NotionSink:
             seen[key] = {
                 "page_id": page_id,
                 "synced_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "snapshot": _snapshot(lead),
             }
+            for email in email_keys(lead):
+                email_index[email] = key
             save_seen(self.cache_path, seen)
             report.created.append(lead)
         return report
@@ -191,7 +316,10 @@ class NotionSink:
     def refresh_cache(self) -> int:
         """Rebuild seen_domains.json from what's actually in Notion — the
         periodic refresh from ARCHITECTURE.md §9. Replaces the cache: Notion
-        is the authority on which pages exist."""
+        is the authority on which pages exist. Also rebuilds each entry's
+        content snapshot (from the same properties to_notion_properties()
+        writes) so email matching and new-info diffing keep working after
+        a refresh."""
         seen: dict = {}
         cursor = None
         while True:
@@ -200,19 +328,16 @@ class NotionSink:
                 payload["start_cursor"] = cursor
             data = self._post(f"{API_BASE}/databases/{self.database_id}/query", payload)
             for page in data.get("results", []):
-                props = page.get("properties", {})
-                domain = normalize_domain((props.get("Domain") or {}).get("url"))
-                if domain:
-                    key = f"domain:{domain}"
+                snapshot = _snapshot_from_properties(page.get("properties", {}))
+                if snapshot["domain"]:
+                    key = f"domain:{snapshot['domain']}"
+                elif snapshot["company"]:
+                    key = f"company:{snapshot['company'].lower()}"
                 else:
-                    title = (props.get("Company") or {}).get("title") or []
-                    company = "".join(
-                        t.get("plain_text", "") for t in title
-                    ).strip().lower()
-                    if not company:
-                        continue  # untitled page — nothing to key on
-                    key = f"company:{company}"
-                seen.setdefault(key, {"page_id": page["id"], "synced_at": None})
+                    continue  # untitled page — nothing to key on
+                seen.setdefault(
+                    key, {"page_id": page["id"], "synced_at": None, "snapshot": snapshot}
+                )
             if not data.get("has_more"):
                 break
             cursor = data.get("next_cursor")
@@ -225,6 +350,12 @@ class NotionSink:
             "properties": to_notion_properties(lead),
         }
         return self._post(f"{API_BASE}/pages", payload)["id"]
+
+    def _create_comment(self, page_id: str, text: str) -> None:
+        self._post(
+            f"{API_BASE}/comments",
+            {"parent": {"page_id": page_id}, "rich_text": [{"text": {"content": text}}]},
+        )
 
     def _post(self, url: str, payload: dict) -> dict:
         response = self.session.post(

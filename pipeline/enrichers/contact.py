@@ -38,6 +38,11 @@ _EMAIL_DOMAIN_BLOCKLIST = (
 
 # candidate runs of digits/formatting; validated by _plausible_phone below
 _PHONE_RE = re.compile(r"\+?\d[\d\s/().\-]{5,}\d")
+# DD/MM/YYYY, DD.MM.YYYY (optional space after a separator), YYYY-MM-DD —
+# page text with dates near phone numbers otherwise passes as a "phone"
+_DATE_LIKE_RE = re.compile(
+    r"\d{1,2}[./]\d{1,2}[./]\s?(?:19|20)\d{2}|(?:19|20)\d{2}-\d{1,2}-\d{1,2}"
+)
 
 _SOCIAL_HOSTS: dict[str, tuple[str, ...]] = {
     "linkedin": ("linkedin.com",),
@@ -93,6 +98,8 @@ def extract_emails(html: str) -> list[str]:
 
 
 def _plausible_phone(candidate: str) -> bool:
+    if _DATE_LIKE_RE.search(candidate):
+        return False
     digits = sum(c.isdigit() for c in candidate)
     stripped = candidate.lstrip("(").strip()
     return 8 <= digits <= 15 and stripped[:1] in ("+", "0")

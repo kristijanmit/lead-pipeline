@@ -51,6 +51,27 @@ def test_extract_phones_skips_years_and_ids():
     assert all("2004" not in p and "106111222" not in p for p in phones)
 
 
+def test_extract_phones_rejects_date_shaped_strings():
+    # each seen live on the Notion board, misparsed as a phone number
+    dates = (
+        "06/07/2026",
+        "05/11/2025, 07/12/2023, 01 2023-12-07 13",
+        "05.10.2026, 05.11. 2026",
+        "02.06.2018",
+    )
+    for text in dates:
+        assert extract_phones(f"<p>Radno vreme: {text}</p>") == [], text
+
+
+def test_extract_phones_keeps_slash_separated_local_numbers():
+    # Serbian city-code/number format also uses "/" — must not be
+    # collapsed into the date-rejection fix above
+    assert extract_phones("<p>Pozovite 021/4879-819 ili 065/ 53-63-847</p>") == [
+        "021/4879-819",
+        "065/ 53-63-847",
+    ]
+
+
 def test_extract_social_links():
     links = extract_social_links(HTML)
     assert links == {
