@@ -4,10 +4,23 @@
 
 `pipeline/scoring/scorer.py` implements
 `score(lead, weights, qualification) -> Lead`, a pure function with no I/O
-(per ARCHITECTURE.md §6/§13). This document is the "why" behind the model —
-what the qualification filters are gating, what each sub-score is trying to
-measure, why they're kept separate, how the edge cases in real data are
-handled, and how to retune the formula once real reply data exists.
+(per ARCHITECTURE.md §6/§13). This document is both the "why" behind the
+model — what the qualification filters are gating, what each sub-score is
+trying to measure, why they're kept separate, how the edge cases in real
+data are handled — and an implementation reference, section by section:
+
+| Section | Concept | Function in `scorer.py` |
+| --- | --- | --- |
+| §2 | Qualification gate | `_qualifies()` |
+| §4 | `reachability_score` | `_reachability_score()` |
+| §5.1 | Which audit case a lead falls into | `_audit_case()` |
+| §5.2 | `opportunity_score` (audited case) | `_opportunity_score()` |
+| §6 | `total_score` multiplier | `_reachability_multiplier()` |
+| §7 | `Audit Notes` | `_build_audit_notes()` |
+| §8 | `lead_type` | shares `_audit_case()` with §5.1 |
+
+How to retune the formula once real reply data exists is covered in
+`docs/ROADMAP.md`'s Phase 3/6 tuning items.
 
 ## 2. Qualification filters — a gate, not a score
 

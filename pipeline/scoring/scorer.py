@@ -1,6 +1,6 @@
 """Pure scoring function — score(lead, weights, qualification) -> Lead, no I/O.
 
-The "why" behind every number lives in SCORING.md; the short version:
+The "why" behind every number lives in docs/SCORING.md; the short version:
 qualification (industry + country) is a hard filter, not a score — it's too
 early to know which vertical converts best, so weighting industries now
 would be guessing. Reachability (can we contact them) and Opportunity (how
@@ -9,7 +9,7 @@ high or low total is always explainable. opportunity_score runs in the
 "pain" direction — higher means more to sell into, not a healthier site.
 
 Keep this module free of I/O, network calls, and config loading
-(ARCHITECTURE.md §13) — weights/qualification arrive as plain dicts from
+(docs/ARCHITECTURE.md §13) — weights/qualification arrive as plain dicts from
 config.yaml.
 """
 
@@ -22,7 +22,7 @@ from pipeline.schema import Lead
 # _audit_case result -> lead_type. new_build: no domain, pitch a site from
 # scratch. redesign: audited, pitch improving what exists. unclear: domain
 # exists but couldn't be audited — could be a live site temporarily down or
-# an abandoned domain; needs a manual look before either pitch (SCORING.md §8).
+# an abandoned domain; needs a manual look before either pitch (docs/SCORING.md §8).
 _LEAD_TYPES = {
     "no_website": "new_build",
     "unreachable": "unclear",
@@ -30,7 +30,7 @@ _LEAD_TYPES = {
 }
 
 # Total Score = opportunity_score * multiplier, keyed off reachability_score.
-# A fixed policy table (SCORING.md §4), not a tunable weight — reachability
+# A fixed policy table (docs/SCORING.md §4), not a tunable weight — reachability
 # only ever lands on one of {0, 10, 40, 50, 60, 90, 100} given the point
 # values above, but the bucket checks below cover the full 0-100 domain.
 def _reachability_multiplier(reachability_score: float) -> float:
@@ -113,7 +113,7 @@ def _opportunity_score(lead: Lead, case: str, weights: dict) -> float | None:
     (domain present, no usable Lighthouse data) get no opportunity_score at
     all — there's nothing to compute from, and defaulting to either the
     new-build or a discounted fixed value would be guessing which pitch
-    applies (SCORING.md §3). Only "audited" leads run the weighted formula.
+    applies (docs/SCORING.md §3). Only "audited" leads run the weighted formula.
     """
     if case == "no_website":
         return float(weights["no_website_score"])
@@ -140,7 +140,7 @@ def _opportunity_score(lead: Lead, case: str, weights: dict) -> float | None:
     # there's already an owner convinced they need a site, no domain/DNS
     # setup, and a live baseline to point at. Capping here keeps even the
     # worst audited site below no_website_score so the ranking can never
-    # invert that (SCORING.md §4.2). Config validation already rejects a
+    # invert that (docs/SCORING.md §4.2). Config validation already rejects a
     # cap >= no_website_score at startup; this assertion is a second guard
     # for weights dicts built by hand (e.g. in tests) that skip that check.
     cap = weights["audited_score_cap"]
@@ -218,7 +218,7 @@ def score(lead: Lead, weights: dict, qualification: dict) -> Lead:
     """Score one lead — returns a new Lead, never mutates the input.
 
     Qualification (industry + country) runs first and gates everything else
-    (SCORING.md §1): a lead that fails either filter gets no
+    (docs/SCORING.md §1): a lead that fails either filter gets no
     reachability_score/opportunity_score/total_score and is never marked
     qualified. A lead that passes both but has zero reachability_score still
     gets scored (so it doesn't rank artificially high if the multiplier

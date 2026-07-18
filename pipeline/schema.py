@@ -1,6 +1,6 @@
 """Canonical Lead record — every stage reads and writes this shape.
 
-Defined once, here, per ARCHITECTURE.md §5. Bump SCHEMA_VERSION whenever
+Defined once, here, per docs/ARCHITECTURE.md §5. Bump SCHEMA_VERSION whenever
 fields are added or changed; bump SCORING_VERSION whenever the weighting
 formula changes, so old JSONL output stays comparable.
 """
@@ -43,7 +43,7 @@ class Lead:
     lighthouse: dict[str, int] | None = None  # {"performance": 42, "accessibility": 88, ...}
     audit_notes: str = ""
 
-    # scoring (SCORING.md) — reachability_score/opportunity_score/total_score/
+    # scoring (docs/SCORING.md) — reachability_score/opportunity_score/total_score/
     # qualified are all None/False until a lead passes the qualification filters
     # and gets scored; see scorer.py
     scoring_version: int = SCORING_VERSION
@@ -53,7 +53,7 @@ class Lead:
     lead_type: str | None = None  # "new_build" | "redesign" | "unclear" — set by
     # scorer.py alongside opportunity_score (same _audit_case branch, different
     # pitch implication). Never set at collection/enrichment time. v3 JSONL loads
-    # as None via the default — re-running score() fills it in (SCORING.md §8).
+    # as None via the default — re-running score() fills it in (docs/SCORING.md §8).
     qualified: bool = False  # industry + country filters passed AND reachability_score > 0
 
     # pipeline bookkeeping

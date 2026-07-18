@@ -1,5 +1,5 @@
 """Load and validate config.yaml — fail fast with a clear message at startup,
-not three stages later as a cryptic KeyError (ARCHITECTURE.md §10).
+not three stages later as a cryptic KeyError (docs/ARCHITECTURE.md §10).
 
 config.yaml holds defaults; CLI args override the values at runtime.
 Secrets never live here — they go in the gitignored .env.
@@ -187,7 +187,7 @@ def _validate(config: dict, path: Path) -> None:
                 f"{path}: scoring.opportunity.{key} must be a non-negative number"
             )
     # a bad audited site must never outrank "no website at all" — the
-    # strongest new-build signal in the batch (SCORING.md §4.2)
+    # strongest new-build signal in the batch (docs/SCORING.md §4.2)
     if opportunity["audited_score_cap"] >= opportunity["no_website_score"]:
         raise ConfigError(
             f"{path}: scoring.opportunity.audited_score_cap must be less than "

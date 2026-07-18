@@ -6,8 +6,8 @@ website audit → score for outreach priority → land in Notion.
 
 ## Current state
 
-The repo is docs-only right now (ARCHITECTURE.md, ROADMAP.md). Code lands
-phase by phase per ROADMAP.md — build each phase into the target module
+The repo is docs-only right now (docs/ARCHITECTURE.md, docs/ROADMAP.md). Code lands
+phase by phase per docs/ROADMAP.md — build each phase into the target module
 structure directly (`pipeline/collectors/`, `pipeline/enrichers/`, etc.),
 not as standalone scripts to refactor later.
 
@@ -61,10 +61,10 @@ All stages run through one CLI entrypoint (`pipeline/runner.py`):
 
 For deeper context, consult these before guessing:
 
-- `ARCHITECTURE.md` — full data model, module structure, stage protocols, run lifecycle, dedup/idempotency rules
-- `ARCHITECTURE.md` §6.1 — the exact `Lead` → Notion property mapping (emails, social links, Lighthouse flattening); keep it in one function, `to_notion_properties()`
-- `ROADMAP.md` — the six phases, what lands where, and current checkbox status; update checkboxes as work ships
-- `SCORING.md` — the "why" behind every scoring weight, the fit/opportunity split, the manual intent workflow, and how to retune after real reply data
+- `docs/ARCHITECTURE.md` — full data model, module structure, stage protocols, run lifecycle, dedup/idempotency rules
+- `docs/ARCHITECTURE.md` §6.1 — the exact `Lead` → Notion property mapping (emails, social links, Lighthouse flattening); keep it in one function, `to_notion_properties()`
+- `docs/ROADMAP.md` — the six phases, what lands where, and current checkbox status; update checkboxes as work ships
+- `docs/SCORING.md` — the "why" behind every scoring weight, the fit/opportunity split, the manual intent workflow, and how to retune after real reply data
 - `config.yaml` — scoring weights and ICP definitions (safe to commit; secrets are not)
 
 ## Testing
@@ -84,4 +84,4 @@ For deeper context, consult these before guessing:
 - Do not collapse `contact_emails` to a single email — keep every address found.
 - Do not add I/O, network calls, or config loading inside `scorer.py`.
 - Do not commit anything under `data/` or any `.env`/secrets file.
-- Do not build for hypothetical scale (job queues, databases, web UI, schedulers) — ARCHITECTURE.md §14 lists the signals that would justify it; none are true yet.
+- Do not build for hypothetical scale (job queues, databases, web UI, schedulers) — docs/ARCHITECTURE.md §14 lists the signals that would justify it; none are true yet.

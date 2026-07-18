@@ -2,7 +2,7 @@
 
 Lighthouse is the same engine behind the PageSpeed API, run locally
 (`npm install -g lighthouse`) — no key, no quota, and all four category
-scores instead of performance only (RESOURCES.md). A cheap reachability
+scores instead of performance only (docs/RESOURCES.md). A cheap reachability
 probe runs first so a dead site costs one GET, not a 60-second Lighthouse
 attempt. Report parsing is a pure function — fixture-testable.
 """
@@ -167,7 +167,7 @@ class AuditEnricher:
         if not binary:
             raise RuntimeError(
                 f"lighthouse binary {self.binary!r} not found on PATH — "
-                "run `npm install -g lighthouse` (see RESOURCES.md) "
+                "run `npm install -g lighthouse` (see docs/RESOURCES.md) "
                 "or set enrich.lighthouse.binary in config.yaml"
             )
         cmd = [

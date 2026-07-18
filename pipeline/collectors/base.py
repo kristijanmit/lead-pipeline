@@ -1,7 +1,7 @@
 """Collector protocol and registry.
 
 A new source is one class satisfying Collector plus a @register line —
-runner.py does not change (ARCHITECTURE.md §7).
+runner.py does not change (docs/ARCHITECTURE.md §7).
 """
 
 from __future__ import annotations

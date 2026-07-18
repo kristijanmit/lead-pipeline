@@ -1,7 +1,7 @@
 """Enricher protocol, registry, and the per-lead orchestration helper.
 
 A new enrichment step is one class satisfying Enricher plus a @register
-line — runner.py does not change (ARCHITECTURE.md §7). Enrichers return a
+line — runner.py does not change (docs/ARCHITECTURE.md §7). Enrichers return a
 new Lead, never mutate in place.
 """
 
@@ -45,7 +45,7 @@ def apply_enrichers(
     case); a second failure lands in Lead.errors and the remaining steps
     still run with whatever fields already succeeded. Any exhausted retry
     marks the lead enrich_failed so a future re-run picks it up again —
-    only status "enriched" is skipped on re-runs (ARCHITECTURE.md §9).
+    only status "enriched" is skipped on re-runs (docs/ARCHITECTURE.md §9).
     """
     current = lead
     failed = False

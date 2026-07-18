@@ -4,10 +4,12 @@
 
 A single-operator, zero-budget lead generation pipeline: collect businesses
 from free sources, enrich them with contact data and a website audit, score
-them for outreach priority, and land the result in Notion. Today this is a
-handful of flat scripts (`collect_osm.py`, `enrich.py`, `score.py`). This
-document defines the target architecture to grow into as ROADMAP.md phases
-land — not a rewrite to do in one sitting.
+them for outreach priority, and land the result in Notion. All four stages
+(collect, enrich, score, sync) are implemented as the `pipeline/` package
+described in §6. This document covers the system-wide design — the shared
+data model, stage contracts, run lifecycle, and cross-cutting principles.
+For the concrete mechanics of any one stage, see `docs/COLLECTION.md`,
+`docs/ENRICHMENT.md`, `docs/SCORING.md`, or `docs/EXPORT.md`.
 
 ## 2. Goals and non-goals
 
@@ -261,6 +263,10 @@ Adding `collect_linkedin.py` later means writing one class that satisfies
 future paid-provider enricher if AGENCY's budget changes: it's a new class
 next to `contact.py`, not a rewrite.
 
+For what each concrete collector/enricher/sink actually does — retry
+behavior, rate limits, parsing rules, and how to add a new one — see
+`docs/COLLECTION.md`, `docs/ENRICHMENT.md`, and `docs/EXPORT.md`.
+
 ## 8. Run lifecycle
 
 1. `runner.py collect --source osm --location "..." --categories "..."`
@@ -294,16 +300,19 @@ leads twice — see dedupe/idempotency below.
 - **At collection**: merging multiple sources (OSM + Maps + manual) drops
   duplicates by this key before anything downstream sees them — no point
   enriching the same domain twice.
-- **At sync**: before creating a Notion page, check the domain against a
+- **At sync**: before creating a Notion page, check the lead against a
   local `seen_domains.json` cache (refreshed periodically from Notion, not
   queried live on every single lead). Querying the full Notion database for
-  a domain match on every sync works fine at a few dozen rows but gets slow
+  a match on every sync works fine at a few dozen rows but gets slow
   and rate-limit-prone once the database has a few hundred — a periodically
   refreshed local cache is cheap to build now and avoids that cliff later.
-- **Within a run**: if `enrich.py` is re-run on a `collected.jsonl` that
-  already has a partial `enriched.jsonl`, only leads without a `status:
-enriched` are reprocessed. Free API calls and scraped bandwidth aren't
-  wasted redoing work that already succeeded.
+  The cache's key structure, its secondary email-index matching, and the
+  new-info-as-comment behavior on a cache hit are covered in
+  `docs/EXPORT.md` §3.1.
+- **Within a run**: if `enrich` is re-run on a `collected.jsonl` that
+  already has a partial `enriched.jsonl`, only leads with `status:
+  enriched` are skipped — see `docs/ENRICHMENT.md` §5 for why
+  `enrich_failed` leads are retried rather than skipped too.
 
 ## 10. Configuration
 
@@ -322,10 +331,10 @@ commit since AGENCY's own weights and ICP definitions aren't secret.
   retry with backoff, and a hard cap — no request hangs a batch indefinitely.
 - Every enrichment failure is caught at the per-lead level, recorded in
   `Lead.errors`, and logged — the batch continues.
-- Rate limits are respected explicitly: a fixed delay between requests in
-  `contact.py` and `audit.py`, and Overpass queries stay single-threaded
-  (shared public infrastructure, not something to hammer).
-- `robots.txt` is checked before scraping any contact page, same as today.
+- Rate limits are respected explicitly at each stage that talks to shared
+  infrastructure — see `docs/COLLECTION.md` §2 for why Overpass queries
+  stay single-threaded, and `docs/ENRICHMENT.md` §2 for the `robots.txt`
+  check that runs before every contact-page fetch.
 
 ## 12. Observability
 

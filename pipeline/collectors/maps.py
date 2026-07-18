@@ -1,7 +1,7 @@
-"""Google Maps collector — wraps gosom/google-maps-scraper (see RESOURCES.md).
+"""Google Maps collector — wraps gosom/google-maps-scraper (see docs/RESOURCES.md).
 
 Supplement only, never the primary source: scraping Maps sits in a ToS gray
-area (ROADMAP.md risks). Use it for areas/categories where OSM data is thin,
+area (docs/ROADMAP.md risks). Use it for areas/categories where OSM data is thin,
 sparingly, with concurrency pinned to 1.
 
 The scraper is an external binary — grab a release from
@@ -97,7 +97,7 @@ class MapsCollector:
                 f"maps scraper binary {self.binary!r} not found on PATH — "
                 "install a release from "
                 "https://github.com/gosom/google-maps-scraper/releases "
-                "or set maps.binary in config.yaml (see RESOURCES.md)"
+                "or set maps.binary in config.yaml (see docs/RESOURCES.md)"
             )
 
         with tempfile.TemporaryDirectory(prefix="maps-collect-") as tmp:

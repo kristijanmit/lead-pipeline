@@ -1,6 +1,6 @@
 """Notion sink — the §6.1 field mapping, degrade-don't-crash batch writes,
 and the seen_domains.json cache that keeps sync idempotent without a live
-Notion query per lead (ARCHITECTURE.md §9). No live network — a fake
+Notion query per lead (docs/ARCHITECTURE.md §9). No live network — a fake
 session stands in for requests."""
 
 import json
@@ -60,7 +60,7 @@ def _sink(tmp_path, responses):
     return NotionSink(config, token="secret-token", session=session), session
 
 
-# --- to_notion_properties (ARCHITECTURE.md §6.1) ---
+# --- to_notion_properties (docs/ARCHITECTURE.md §6.1) ---
 
 
 def test_multi_contact_split():

@@ -1,7 +1,7 @@
 """Domain normalization and lead dedup.
 
 The dedup key is the normalized domain, computed here and only here
-(ARCHITECTURE.md §9). Every stage that needs to compare leads by site
+(docs/ARCHITECTURE.md §9). Every stage that needs to compare leads by site
 imports normalize_domain from this module.
 """
 

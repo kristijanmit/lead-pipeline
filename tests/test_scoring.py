@@ -1,5 +1,5 @@
 """score() is a pure function — hand-built Leads, hand-computed expectations,
-no mocks (ARCHITECTURE.md §13). A scoring bug silently misprioritizes every
+no mocks (docs/ARCHITECTURE.md §13). A scoring bug silently misprioritizes every
 lead, so the arithmetic here is written out longhand on purpose."""
 
 import copy
@@ -204,7 +204,7 @@ def test_lighthouse_with_no_weighted_categories_falls_back_to_unreachable():
 def test_terrible_audited_site_is_capped_below_no_website_score():
     # raw would be 100 - 0 + 10 + 10 = 120 — must be capped, and the cap
     # must stay below no_website_score so a bad audited site never outranks
-    # a lead with no website at all (SCORING.md §4.2)
+    # a lead with no website at all (docs/SCORING.md §4.2)
     lead = _lead(
         lighthouse={"performance": 0, "accessibility": 0, "best_practices": 0, "seo": 0},
         https=False,
@@ -268,7 +268,7 @@ def test_scoring_version_stamped_from_weights_and_nothing_else_changes():
 
 def test_lead_type_and_opportunity_score_always_agree():
     # both derive from the single _audit_case branch — a new_build lead can
-    # never carry a Lighthouse-computed score, and vice versa (SCORING.md §9)
+    # never carry a Lighthouse-computed score, and vice versa (docs/SCORING.md §9)
     leads = [
         _lead(domain=""),
         _lead(),  # domain, no lighthouse -> unclear

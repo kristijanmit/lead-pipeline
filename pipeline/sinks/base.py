@@ -1,7 +1,7 @@
 """Sink protocol and registry.
 
 A new output target is one class satisfying Sink plus a @register line —
-runner.py does not change (ARCHITECTURE.md §7).
+runner.py does not change (docs/ARCHITECTURE.md §7).
 """
 
 from __future__ import annotations

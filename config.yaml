@@ -13,7 +13,7 @@ overpass:
   endpoint: https://overpass-api.de/api/interpreter
   timeout_s: 60
 
-# gosom/google-maps-scraper — supplement only (ToS gray area, see RESOURCES.md).
+# gosom/google-maps-scraper — supplement only (ToS gray area, see docs/RESOURCES.md).
 # Install a release binary from github.com/gosom/google-maps-scraper/releases.
 maps:
   binary: tools/google-maps-scraper   # v1.16.2 darwin-amd64 release, runs via Rosetta
@@ -23,7 +23,7 @@ maps:
   timeout_s: 900
 
 # Phase 2 — contact scraping + Lighthouse audit.
-# Install the audit engine once: npm install -g lighthouse (see RESOURCES.md).
+# Install the audit engine once: npm install -g lighthouse (see docs/RESOURCES.md).
 enrich:
   delay_s: 2           # pause between leads' sites — shared courtesy, keep >= 1
   http_timeout_s: 20
@@ -31,23 +31,24 @@ enrich:
     binary: lighthouse
     timeout_s: 120     # per-site cap; slow sites fail into Lead.errors, not hang the batch
 
-# Phase 4 — Notion sync. The integration token is a secret and lives in the
-# gitignored .env as NOTION_TOKEN (see README setup), never here.
+# Phase 4 — Notion sync. The integration token and database id are secrets
+# and live in the gitignored .env as NOTION_TOKEN / NOTION_DATABASE_ID (see
+# README setup), never here.
 notion:
-  database_id: ebbfdaa7-5970-4917-a4b1-44ef846ac1c8   # "ONIX Leads Pipeline"
+  database_id: ""      # set via NOTION_DATABASE_ID in .env
   api_version: "2022-06-28"
   delay_s: 0.35        # pause between page creates — Notion allows ~3 req/s
   timeout_s: 30
   cache_path: data/seen_domains.json   # local dedupe cache, refreshed via --refresh-cache
 
 # Phase 3 — scoring weights. The reasoning behind every number is in
-# SCORING.md; tune here after the first real outreach batch (SCORING.md §7),
+# docs/SCORING.md; tune here after the first real outreach batch (docs/SCORING.md §7),
 # and bump version whenever weights or formula shape change so old and new
 # total_scores are never silently compared as if they meant the same thing.
 # v3: dropped icp_fit/intent entirely — industry and location moved out of
 # scoring into the qualification: filters below, added reachability_score,
 # and total_score is now opportunity_score * a reachability-derived
-# multiplier instead of a three-way weighted sum (SCORING.md changelog).
+# multiplier instead of a three-way weighted sum (docs/SCORING.md changelog).
 scoring:
   version: 3
 
@@ -72,7 +73,7 @@ scoring:
     audited_score_cap: 85          # must stay below no_website_score — a bad
                                    # audited site is still an easier sell than a
                                    # blank slate, so it must never outrank
-                                   # "no website at all" (SCORING.md §4.2)
+                                   # "no website at all" (docs/SCORING.md §4.2)
     no_https_bonus: 10             # flat add-ons: easy one-sentence pitch hooks
     not_mobile_friendly_bonus: 10  # that Lighthouse doesn't penalize cleanly
     lighthouse_weights:            # must sum to 1.0
@@ -82,7 +83,7 @@ scoring:
       seo: 0.15              # most sites already score 75-100 — least signal
 
 # Phase 3 — qualification filters, run before scoring, not part of the
-# score itself (SCORING.md §1). A lead only gets scored/marked Qualified if
+# score itself (docs/SCORING.md §1). A lead only gets scored/marked Qualified if
 # both gates pass. Deliberately not scored/weighted: it's too early to know
 # which vertical converts best, so weighting industries now would be
 # guessing — revisit once there's real close-rate data across verticals.

@@ -1,7 +1,7 @@
 """Notion sink — push scored leads into the AGENCY leads database.
 
 The Lead -> Notion property mapping lives in one function,
-to_notion_properties(), per ARCHITECTURE.md §6.1. Idempotency comes from a
+to_notion_properties(), per docs/ARCHITECTURE.md §6.1. Idempotency comes from a
 local seen_domains.json cache keyed by the string form of dedupe.lead_key,
 plus a secondary email index built from each entry's content snapshot (the
 same business collected once before its domain was known and once after
@@ -224,15 +224,17 @@ def save_seen(path: str | Path, seen: dict) -> None:
 class NotionSink:
     def __init__(self, config: dict, token: str | None = None, session=None):
         notion = config["notion"]
-        if not notion["database_id"]:
+        env = load_env()
+        self.database_id = notion["database_id"] or env.get("NOTION_DATABASE_ID", "")
+        if not self.database_id:
             raise ValueError(
-                "notion.database_id is not set in config.yaml — see README Notion setup"
+                "notion.database_id is not set in config.yaml or NOTION_DATABASE_ID "
+                "in .env — see README Notion setup"
             )
-        self.database_id = notion["database_id"]
         self.delay_s = notion["delay_s"]
         self.timeout_s = notion["timeout_s"]
         self.cache_path = Path(notion["cache_path"])
-        token = token or load_env().get("NOTION_TOKEN", "")
+        token = token or env.get("NOTION_TOKEN", "")
         if not token:
             raise ValueError(
                 "NOTION_TOKEN is not set — create an internal integration at "
@@ -315,7 +317,7 @@ class NotionSink:
 
     def refresh_cache(self) -> int:
         """Rebuild seen_domains.json from what's actually in Notion — the
-        periodic refresh from ARCHITECTURE.md §9. Replaces the cache: Notion
+        periodic refresh from docs/ARCHITECTURE.md §9. Replaces the cache: Notion
         is the authority on which pages exist. Also rebuilds each entry's
         content snapshot (from the same properties to_notion_properties()
         writes) so email matching and new-info diffing keep working after

@@ -1,6 +1,6 @@
 """CLI entrypoint — wires config, collectors, and sinks together.
 
-Stages themselves are functions of lists of leads (ARCHITECTURE.md §3);
+Stages themselves are functions of lists of leads (docs/ARCHITECTURE.md §3);
 this module only handles argument parsing, the run directory, and the
 manifest.
 """

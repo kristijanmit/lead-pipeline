@@ -4,7 +4,7 @@ Six phases, each shippable on its own. Phase 1-3 are what gets a real, scored
 dataset flowing; phase 4-6 are what makes it a habit instead of a one-off script.
 All still zero-budget except one optional item flagged below.
 
-See ARCHITECTURE.md for the target module structure (`pipeline/collectors/`,
+See docs/ARCHITECTURE.md for the target module structure (`pipeline/collectors/`,
 `pipeline/enrichers/`, `pipeline/scoring/`, `pipeline/sinks/`, the `Lead`
 schema). Each phase below notes where it naturally lands in that structure —
 this isn't a separate refactor to schedule, it's what "doing the phase
@@ -34,7 +34,7 @@ Lands as: `pipeline/schema.py` (the `Lead` shape), `pipeline/dedupe.py`
       (landed as `pipeline/collectors/manual.py` + `leads_manual.csv.example`;
       `--source osm,manual` merges and dedupes in one run)
 - [x] Since there are now three sources feeding one pipeline, this is the
-      natural point to split into `pipeline/collectors/` per ARCHITECTURE.md
+      natural point to split into `pipeline/collectors/` per docs/ARCHITECTURE.md
       §6-7 rather than three more standalone scripts — each satisfies the
       same `Collector.collect(params) -> Iterable[Lead]` interface
       (built into `pipeline/collectors/` from the start — osm, maps, manual,
@@ -77,7 +77,7 @@ each satisfying the `Enricher.enrich(lead: Lead) -> Lead` interface.
 
 Goal: the score should reflect real opportunity, not just what was easy to measure.
 Lands as: `pipeline/scoring/scorer.py` — a pure function, `score(lead, weights)
--> lead`, no I/O — see ARCHITECTURE.md §13 on why this is the highest-value
+-> lead`, no I/O — see docs/ARCHITECTURE.md §13 on why this is the highest-value
 thing in the whole project to unit test.
 
 - [x] Expand `website_audit_score` in `score.py` to weight accessibility/SEO/
@@ -85,13 +85,13 @@ thing in the whole project to unit test.
       (landed as `pipeline/scoring/scorer.py` — all four Lighthouse categories
       weighted per `config.yaml`, plus fixed scores for no-website and
       unreachable-domain leads and a `lead_type` field (schema v4) separating
-      the new-build vs. redesign pitch; design rationale in SCORING.md;
+      the new-build vs. redesign pitch; design rationale in docs/SCORING.md;
       runs via `python -m pipeline.runner score --run <run_id>`)
 - [x] Add a manual "Intent Score" workflow: quick LinkedIn/news check on your
       top 20 candidates before final ranking, entered by hand
       (mechanism landed: `scorer.py` passes `intent_score` through untouched,
       and `runner.py score` carries hand-edited values in `scored.jsonl`
-      forward across re-runs — workflow steps in SCORING.md §5; the actual
+      forward across re-runs — workflow steps in docs/SCORING.md §5; the actual
       per-batch research stays manual by design)
 - [x] Replace the blended `ICP Fit Score`/`Website Audit Score` model with
       hard qualification filters (industry + country, `qualification:` in
@@ -99,17 +99,17 @@ thing in the whole project to unit test.
       `Reachability Score` and `Opportunity Score` (renamed from
       `Website Audit Score`) — and a simpler `Total Score = Opportunity ×
       reachability-derived multiplier` (schema v6, `scoring_version` 3; see
-      `lead_scoring_spec.md` and SCORING.md for the full model)
+      docs/SCORING.md for the full model)
 - [ ] After the first real batch, tune `qualification.industry_map` and the
       `scoring.opportunity`/`scoring.reachability` weights in `config.yaml`
       against which leads actually replied — don't guess the weights twice
-      (tuning procedure written up ahead of time in SCORING.md §7)
+      (tuning procedure written up ahead of time in docs/SCORING.md §7)
 
 ## Phase 4 — Notion sync
 
 Goal: scored leads land in the tracker without manual CSV wrangling every time.
 Lands as: `pipeline/sinks/csv_sink.py` and `pipeline/sinks/notion_sink.py` —
-see ARCHITECTURE.md §6.1 for the exact `Lead` -> Notion property mapping
+see docs/ARCHITECTURE.md §6.1 for the exact `Lead` -> Notion property mapping
 (multiple emails, social links, and Lighthouse breakdown don't map 1:1).
 
 - [x] Decide the sync path: paste-to-chat bulk create (works today, zero setup)
@@ -118,13 +118,13 @@ see ARCHITECTURE.md §6.1 for the exact `Lead` -> Notion property mapping
       — integration token; `NOTION_TOKEN` in the gitignored `.env`, one-time
       setup in the README
 - [x] Implement `to_notion_properties(lead)` in `notion_sink.py` per
-      ARCHITECTURE.md §6.1 — first email to `Primary Email`, the rest joined
+      docs/ARCHITECTURE.md §6.1 — first email to `Primary Email`, the rest joined
       into `Additional Emails`, social links rendered as markdown, Lighthouse
       categories flattened into their four separate score columns
       — plus `Additional Phones` and `Lead Type` properties added to the
       Notion database so multiple phones and the new_build/redesign split sync
 - [x] Add a dedupe check — a local `seen_domains.json` cache refreshed
-      periodically from Notion, not a live query per lead (per ARCHITECTURE.md
+      periodically from Notion, not a live query per lead (per docs/ARCHITECTURE.md
       §9, this is what keeps sync fast once the database has a few hundred rows)
       — cache entry written after each successful create, so an interrupted
       batch resumes cleanly; `sync --sink notion --refresh-cache` rebuilds it
