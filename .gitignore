@@ -4,6 +4,7 @@ data/
 # secrets — Notion token, future API keys
 .env
 .env.*
+!.env.example
 
 # local Notion dedupe cache
 seen_domains.json
