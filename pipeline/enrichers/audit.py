@@ -19,6 +19,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from pipeline.enrichers.base import register
+from pipeline.dedupe import is_social_domain
 from pipeline.schema import Lead
 
 _USER_AGENT = "agency-lead-pipeline/0.1 (single-operator lead tool)"
@@ -100,6 +101,9 @@ def build_audit_notes(lead: Lead) -> str:
     if not lead.domain:
         parts.append("no website")
         return "; ".join(parts)
+    if is_social_domain(lead.domain):
+        parts.append("social page only, not audited")
+        return "; ".join(parts)
     if lead.lighthouse:
         abbrev = {"performance": "perf", "accessibility": "a11y", "best_practices": "bp"}
         parts.append(
@@ -131,7 +135,8 @@ class AuditEnricher:
         self.lighthouse_timeout_s: int = lighthouse["timeout_s"]
 
     def enrich(self, lead: Lead) -> Lead:
-        if not lead.domain:
+        # a Facebook/Instagram page says nothing about the business's own site
+        if not lead.domain or is_social_domain(lead.domain):
             return replace(lead, audit_notes=build_audit_notes(lead))
 
         url, html, https = self._probe(lead.domain)

@@ -100,7 +100,7 @@ thing in the whole project to unit test.
       `Website Audit Score`) — and a simpler `Total Score = Opportunity ×
       reachability-derived multiplier` (schema v6, `scoring_version` 3; see
       docs/SCORING.md for the full model)
-- [ ] After the first real batch, tune `qualification.industry_map` and the
+- [ ] After the first real batch, tune the
       `scoring.opportunity`/`scoring.reachability` weights in `config.yaml`
       against which leads actually replied — don't guess the weights twice
       (tuning procedure written up ahead of time in docs/SCORING.md §7)
@@ -151,8 +151,8 @@ Goal: the scoring model gets better every cycle instead of staying static.
 
 - [ ] After 50-100 leads have gone through outreach, pull which ones replied
       and cross-reference their scores
-- [ ] Adjust `scoring.opportunity`/`scoring.reachability` weights and
-      `qualification.industry_map` in `config.yaml` based on that data
+- [ ] Adjust `scoring.opportunity`/`scoring.reachability` weights
+      in `config.yaml` based on that data
 - [ ] Re-run collection → enrich → score on a regular cadence (weekly/monthly)
 
 ## Rough timeline

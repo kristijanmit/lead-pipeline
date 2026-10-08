@@ -7,6 +7,7 @@ imports normalize_domain from this module.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Iterable
 from urllib.parse import urlparse
 
@@ -26,6 +27,43 @@ def normalize_domain(raw: str | None) -> str:
     if host.startswith("www."):
         host = host[4:]
     return host.rstrip(".")
+
+
+SOCIAL_HOSTS: dict[str, tuple[str, ...]] = {
+    "linkedin": ("linkedin.com",),
+    "instagram": ("instagram.com",),
+    "facebook": ("facebook.com",),
+    "x": ("x.com", "twitter.com"),
+}
+
+
+def social_network(domain: str) -> str | None:
+    """"facebook.com" / "m.facebook.com" -> "facebook"; None for a real site."""
+    for network, hosts in SOCIAL_HOSTS.items():
+        if any(domain == h or domain.endswith("." + h) for h in hosts):
+            return network
+    return None
+
+
+def is_social_domain(domain: str) -> bool:
+    return social_network(domain) is not None
+
+
+def split_website(raw: str | None) -> tuple[str, dict[str, str]]:
+    """Raw "website" value -> (domain, social_links).
+
+    A social profile entered as the website is not the lead's own site: it
+    would be audited as one and every Facebook-only lead would share the
+    dedup key "facebook.com". It becomes a social link with an empty domain.
+    """
+    domain = normalize_domain(raw)
+    network = social_network(domain)
+    if network is None:
+        return domain, {}
+    url = (raw or "").strip()
+    if "://" not in url:
+        url = "https://" + url
+    return "", {network: url}
 
 
 def phone_key(raw: str) -> str:
@@ -62,14 +100,40 @@ def email_keys(lead: Lead) -> list[str]:
     return [email.strip().lower() for email in lead.contact_emails if email.strip()]
 
 
+def _merge_duplicate(kept: Lead, dup: Lead) -> Lead:
+    """Fill what `kept` is missing from `dup` — the same business found by two
+    sources (e.g. OSM has the phone, Maps has the rating) keeps both. Nothing
+    `kept` already has is overwritten, except profile_url, where the Google
+    Maps listing beats an OSM object page."""
+    updates: dict = {}
+    for name in ("address", "rating", "review_count", "profile_url"):
+        if getattr(kept, name) in ("", None):
+            updates[name] = getattr(dup, name)
+    if dup.source == "maps" and dup.profile_url and kept.source != "maps":
+        updates["profile_url"] = dup.profile_url
+    emails = {e.lower() for e in kept.contact_emails}
+    new_emails = [e for e in dup.contact_emails if e.lower() not in emails]
+    phones = {phone_key(p) for p in kept.contact_phones}
+    new_phones = [p for p in dup.contact_phones if phone_key(p) not in phones]
+    if new_emails:
+        updates["contact_emails"] = [*kept.contact_emails, *new_emails]
+    if new_phones:
+        updates["contact_phones"] = [*kept.contact_phones, *new_phones]
+    if dup.social_links:
+        updates["social_links"] = {**dup.social_links, **kept.social_links}
+    return replace(kept, **updates) if updates else kept
+
+
 def dedupe_leads(leads: Iterable[Lead]) -> list[Lead]:
-    """Drop duplicates by lead_key, first occurrence wins."""
-    seen: set[tuple[str, str]] = set()
+    """Drop duplicates by lead_key. The first occurrence wins; fields it is
+    missing are filled from later duplicates (_merge_duplicate)."""
     out: list[Lead] = []
+    index: dict[tuple[str, str], int] = {}
     for lead in leads:
         key = lead_key(lead)
-        if key in seen:
+        if key in index:
+            out[index[key]] = _merge_duplicate(out[index[key]], lead)
             continue
-        seen.add(key)
+        index[key] = len(out)
         out.append(lead)
     return out

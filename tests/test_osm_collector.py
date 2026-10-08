@@ -67,6 +67,9 @@ def test_parse_elements(overpass_sample):
     assert schmidt.contact_phones == ["+49 30 1234567"]
     assert schmidt.source == "osm"
     assert schmidt.status == "collected"
+    assert schmidt.address == "Berliner Straße 12, Berlin"
+    assert schmidt.profile_url == "https://www.openstreetmap.org/node/100001"
+    assert schmidt.rating is None and schmidt.review_count is None
 
     luna = by_company["Café Luna"]
     assert luna.domain == "cafeluna.example"  # contact:website fallback

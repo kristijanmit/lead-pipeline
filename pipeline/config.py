@@ -72,12 +72,6 @@ DEFAULTS: dict = {
     },
     "qualification": {
         "target_countries": ["Serbia"],
-        "industry_map": {
-            "clinic": ["dentist", "dental", "dental_clinic", "orthodontist", "clinic", "medical", "doctor", "physician"],
-            "car_workshop": ["car_repair", "auto_repair", "car_workshop", "mechanic", "tire", "tire_shop", "car_service"],
-            "workshop_repair": ["repair_shop", "workshop", "appliance_repair", "electronics_repair", "shoe_repair"],
-            "construction": ["construction", "contractor", "builder", "general_contractor", "renovation"],
-        },
     },
 }
 
@@ -210,11 +204,3 @@ def _validate(config: dict, path: Path) -> None:
     countries = qualification.get("target_countries")
     if not isinstance(countries, list) or not countries or not all(isinstance(c, str) and c for c in countries):
         raise ConfigError(f"{path}: qualification.target_countries must be a non-empty list of strings")
-    industry_map = qualification.get("industry_map")
-    if not isinstance(industry_map, dict) or not industry_map:
-        raise ConfigError(f"{path}: qualification.industry_map must be a non-empty mapping")
-    for category, synonyms in industry_map.items():
-        if not isinstance(synonyms, list) or not all(isinstance(s, str) and s for s in synonyms):
-            raise ConfigError(
-                f"{path}: qualification.industry_map.{category} must be a list of strings"
-            )

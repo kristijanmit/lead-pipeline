@@ -17,7 +17,7 @@ overpass:
 # Install a release binary from github.com/gosom/google-maps-scraper/releases.
 maps:
   binary: tools/google-maps-scraper   # v1.16.2 darwin-amd64 release, runs via Rosetta
-  depth: 3           # scroll depth per query; higher = more results, slower
+  depth: 1           # scroll depth per query. v1.16.2 fails ("target closed", 0 rows) at 2+ — verified 2026-10-08
   language: ""       # e.g. "sr" — empty uses the scraper's default
   extract_emails: true
   timeout_s: 900
@@ -83,19 +83,10 @@ scoring:
       seo: 0.15              # most sites already score 75-100 — least signal
 
 # Phase 3 — qualification filters, run before scoring, not part of the
-# score itself (docs/SCORING.md §1). A lead only gets scored/marked Qualified if
-# both gates pass. Deliberately not scored/weighted: it's too early to know
-# which vertical converts best, so weighting industries now would be
-# guessing — revisit once there's real close-rate data across verticals.
+# score itself (docs/SCORING.md §2). A lead only gets scored/marked Qualified if
+# it is in a target country. Industry is deliberately neither filtered nor
+# weighted: it's too early to know which vertical converts best — revisit once
+# there's real close-rate data across verticals.
 qualification:
   target_countries: [Serbia]
 
-  # raw collected industry values (from OSM tags / maps categories / manual
-  # CSV) that fold into each target category, case-insensitive. Anything not
-  # listed here simply fails the filter — never errors. Grow this list as
-  # new raw values show up; it isn't meant to be exhaustive on day one.
-  industry_map:
-    clinic: [dentist, dental, dental_clinic, orthodontist, clinic, medical, doctor, physician]
-    car_workshop: [car_repair, auto_repair, car_workshop, mechanic, tire, tire_shop, car_service]
-    workshop_repair: [repair_shop, workshop, appliance_repair, electronics_repair, shoe_repair]
-    construction: [construction, contractor, builder, general_contractor, renovation]

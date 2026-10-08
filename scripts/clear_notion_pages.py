@@ -55,10 +55,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     notion = config["notion"]
+    env = load_env()
+    # same lookup as the sink: the id lives in .env, config.yaml's stays empty
+    notion["database_id"] = notion["database_id"] or env.get("NOTION_DATABASE_ID", "")
     if not notion["database_id"]:
-        print("error: notion.database_id is not set in config.yaml", file=sys.stderr)
+        print("error: NOTION_DATABASE_ID is not set (see README Notion setup)", file=sys.stderr)
         return 1
-    token = load_env().get("NOTION_TOKEN", "")
+    token = env.get("NOTION_TOKEN", "")
     if not token:
         print("error: NOTION_TOKEN is not set (see README Notion setup)", file=sys.stderr)
         return 1

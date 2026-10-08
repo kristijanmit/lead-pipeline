@@ -24,23 +24,21 @@ How to retune the formula once real reply data exists is covered in
 
 ## 2. Qualification filters — a gate, not a score
 
-Before anything is scored, a lead has to pass two hard filters
+Before anything is scored, a lead has to pass one hard filter
 (`qualification:` in `config.yaml`, resolved by `_qualifies()` in
 `scorer.py`):
 
-- **Industry** — the raw collected `industry` value (a free-form string from
-  OSM tags / maps categories / manual CSV input) must resolve, via
-  `qualification.industry_map`, to one of the target categories (`clinic`,
-  `car_workshop`, `workshop_repair`, `construction` by default). The
-  resolution is case-insensitive and never raises — an unrecognized raw
-  value simply fails the filter, since the raw string can be anything.
 - **Country** — `lead.country` (stamped at collection time, the same way
   `location` is) must be in `qualification.target_countries`.
 
-If a lead fails either filter, `reachability_score`, `opportunity_score`,
+If a lead fails the filter, `reachability_score`, `opportunity_score`,
 and `total_score` are all left `None`, `qualified` is `False`, and
-`Audit Notes` states which filter failed instead of a score breakdown.
+`Audit Notes` states the country failure instead of a score breakdown.
 Nothing downstream computes a score for a lead outside scope.
+
+There is deliberately no industry filter: the industries collected are
+whatever `--categories` asked for, and `lead.industry` is passed through
+as collected (this is what syncs to Notion's `Industry` column).
 
 **Why filters and not weights:** it's too early to know which of these
 verticals actually converts — weighting them against each other now would
@@ -50,10 +48,6 @@ evidence-based scoring dimension, not folded back into a hard gate.
 Deliberately **not** reintroduced here: industry weighting, business-size
 signals, or multi-location logic — all removed on purpose pending that data
 (see the v3 changelog in §10).
-
-A lead that passes both filters has its `industry` folded to the canonical
-category (e.g. a raw `dentist` becomes `clinic`) — this is what actually
-syncs to Notion's `Industry` column, not the raw collected string.
 
 ## 3. The core split: reachability vs. opportunity
 
@@ -200,19 +194,26 @@ silently compared as if they meant the same thing.
 
 Auto-generated on every scoring run by `_build_audit_notes()` in
 `scorer.py`, overwriting whatever `enrichers/audit.py` wrote at enrich time.
-Three shapes, depending on outcome:
+The note is a plain-language fact sheet and the input for drafting outreach.
+A qualified lead reads, in order: industry and country; the web-presence
+sentence; which contact channels exist and which are missing; and how the
+priority score was derived.
 
-- **Qualified**: `"Qualified: {industry}, {country}. Opportunity: {source}
-  ({value}). Reachability: {breakdown} ({value}, x{multiplier} multiplier).
-  Total: {total}."` — e.g. `"Qualified: clinic, Serbia. Opportunity:
-  new-build policy (90). Reachability: phone only (40, x0.7 multiplier).
-  Total: 63."`
-- **Passes filters but zero reachability**: same shape, `"Not qualified (no
-  contact info — needs further enrichment): ..."` in place of `"Qualified:
-  ..."`.
-- **Fails a qualification filter**: `"Not qualified: industry '{industry}'
-  not in target list"` / `"country '{country}' not in scope"` (or both,
-  joined with `; `) — no score breakdown, since none was computed.
+- **No website**: `"Qualified: dentist, Serbia. No website: pitch a new build.
+  Can be reached by email and phone. No social media found. Priority score
+  85.5/100: opportunity 90 (no website) x 0.95 for how reachable the contact
+  details are (90/100)."`
+- **Rating**: when a Maps listing supplied it, a sentence follows the website
+  one: `"Google Maps: 4.9 stars from 127 reviews."` Omitted otherwise.
+- **Audited site**: `"Has a website (example.rs): pitch a redesign.
+  Lighthouse: performance 42/100, accessibility 88/100, ...; no HTTPS; not
+  mobile friendly; built on WordPress."` replaces the no-website sentence.
+- **Domain that couldn't be audited**: says so and asks for a manual look; the
+  priority score is not computed.
+- **Zero reachability**: starts `"Not qualified (no email, phone or social media
+  found; needs further enrichment): ..."`.
+- **Fails the country filter**: `"Not qualified: country '{country}' not in
+  scope."` — no breakdown, since none was computed.
 
 ## 8. `lead_type` — new-build vs. redesign are different pitches
 

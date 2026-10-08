@@ -1,9 +1,9 @@
 """Pure scoring function — score(lead, weights, qualification) -> Lead, no I/O.
 
 The "why" behind every number lives in docs/SCORING.md; the short version:
-qualification (industry + country) is a hard filter, not a score — it's too
-early to know which vertical converts best, so weighting industries now
-would be guessing. Reachability (can we contact them) and Opportunity (how
+qualification (country) is a hard filter, not a score — it's too
+early to know which vertical converts best, so neither filtering nor
+weighting by industry would be anything but guessing. Reachability (can we contact them) and Opportunity (how
 much upside in a redesign/new build) are kept as separate sub-scores so a
 high or low total is always explainable. opportunity_score runs in the
 "pain" direction — higher means more to sell into, not a healthier site.
@@ -65,33 +65,10 @@ def _clamp(value: float) -> float:
     return max(0.0, min(100.0, value))
 
 
-def _classify_industry(raw_industry: str, industry_map: dict) -> str | None:
-    """Case-insensitive lookup of a raw collected industry value against the
-    qualification.industry_map synonym table. Returns the canonical target
-    category (e.g. "clinic") if raw_industry matches a known synonym for it,
-    else None — an unrecognized value simply fails the filter, it never
-    raises, since the raw industry string comes from free-form OSM tags /
-    maps categories / manual CSV input and can be anything.
-    """
-    needle = (raw_industry or "").strip().lower()
-    if not needle:
-        return None
-    for category, synonyms in industry_map.items():
-        if needle == category.lower() or needle in {s.lower() for s in synonyms}:
-            return category
-    return None
-
-
-def _qualifies(lead: Lead, qualification: dict) -> tuple[bool, bool, str | None]:
-    """Returns (industry_ok, country_ok, canonical_industry). canonical_industry
-    is the resolved target category to fold lead.industry into, or None if
-    industry_ok is False.
-    """
-    canonical = _classify_industry(lead.industry, qualification["industry_map"])
-    industry_ok = canonical is not None
+def _qualifies(lead: Lead, qualification: dict) -> bool:
+    """Country gate: lead.country must be in qualification.target_countries."""
     targets = {c.strip().lower() for c in qualification["target_countries"]}
-    country_ok = (lead.country or "").strip().lower() in targets
-    return industry_ok, country_ok, canonical
+    return (lead.country or "").strip().lower() in targets
 
 
 def _reachability_score(lead: Lead, weights: dict) -> float:
@@ -157,79 +134,122 @@ def _fmt(value: float | None) -> str:
     return str(int(value)) if float(value).is_integer() else f"{value:.1f}"
 
 
-def _reachability_breakdown(lead: Lead) -> str:
-    parts = []
-    if lead.contact_emails:
-        parts.append("email")
-    if lead.contact_phones:
-        parts.append("phone")
-    if lead.social_links:
-        parts.append("social")
-    if not parts:
-        return "none"
-    if len(parts) == 1:
-        return f"{parts[0]} only"
-    return " + ".join(parts)
+def _contact_channels(lead: Lead) -> tuple[list[str], list[str]]:
+    """(found, missing) among email / phone / social media."""
+    channels = (
+        ("email", bool(lead.contact_emails)),
+        ("phone", bool(lead.contact_phones)),
+        ("social media", bool(lead.social_links)),
+    )
+    return [n for n, ok in channels if ok], [n for n, ok in channels if not ok]
+
+
+def _join(items: list[str], conjunction: str = "and") -> str:
+    if len(items) == 1:
+        return items[0]
+    return ", ".join(items[:-1]) + f" {conjunction} " + items[-1]
+
+
+def _website_sentence(lead: Lead, case: str | None) -> str:
+    if case == "no_website":
+        return "No website: pitch a new build."
+    if case == "unreachable":
+        return (
+            f"Has a domain ({lead.domain}) but the site could not be audited "
+            "(unreachable or no Lighthouse data): check it manually before choosing a pitch."
+        )
+    labels = (
+        ("performance", "performance"),
+        ("accessibility", "accessibility"),
+        ("best_practices", "best practices"),
+        ("seo", "SEO"),
+    )
+    scores = ", ".join(
+        f"{label} {lead.lighthouse[key]}/100" for key, label in labels if key in lead.lighthouse
+    )
+    facts = [f"Lighthouse: {scores}"]
+    if lead.https is False:
+        facts.append("no HTTPS")
+    if lead.mobile_friendly is False:
+        facts.append("not mobile friendly")
+    if lead.cms:
+        facts.append(f"built on {lead.cms}")
+    return f"Has a website ({lead.domain}): pitch a redesign. " + "; ".join(facts) + "."
+
+
+def _reputation_sentence(lead: Lead) -> str | None:
+    """Google Maps rating/review count, when a Maps listing supplied them."""
+    if lead.rating is not None and lead.review_count is not None:
+        return f"Google Maps: {_fmt(lead.rating)} stars from {lead.review_count} reviews."
+    if lead.rating is not None:
+        return f"Google Maps: {_fmt(lead.rating)} stars."
+    if lead.review_count is not None:
+        return f"Google Maps: {lead.review_count} reviews."
+    return None
 
 
 def _build_audit_notes(
     lead: Lead,
     *,
-    industry_ok: bool,
     country_ok: bool,
-    canonical_industry: str | None,
     reachability: float | None,
     multiplier: float | None,
     opportunity: float | None,
     total: float | None,
     case: str | None,
 ) -> str:
-    if not (industry_ok and country_ok):
-        reasons = []
-        if not industry_ok:
-            reasons.append(f"industry '{lead.industry}' not in target list")
-        if not country_ok:
-            reasons.append(f"country '{lead.country or 'unknown'}' not in scope")
-        return f"Not qualified: {'; '.join(reasons)}."
+    """Plain-language fact sheet, also the input for drafting outreach: who the
+    lead is, what their web presence looks like, how we can reach them, and
+    how the priority score was derived."""
+    if not country_ok:
+        return f"Not qualified: country '{lead.country or 'unknown'}' not in scope."
 
-    breakdown = _reachability_breakdown(lead)
-    if case == "unreachable":
-        opportunity_clause = "Opportunity: unclear lead type, needs classification."
-    elif case == "no_website":
-        opportunity_clause = f"Opportunity: new-build policy ({_fmt(opportunity)})."
+    found, missing = _contact_channels(lead)
+    if reachability and reachability > 0:
+        head = f"Qualified: {lead.industry}, {lead.country}."
     else:
-        opportunity_clause = f"Opportunity: audit score ({_fmt(opportunity)})."
+        head = (
+            f"Not qualified (no email, phone or social media found; needs further "
+            f"enrichment): {lead.industry}, {lead.country}."
+        )
+    parts = [head, _website_sentence(lead, case)]
+    if reputation := _reputation_sentence(lead):
+        parts.append(reputation)
 
-    reachability_clause = (
-        f"Reachability: {breakdown} ({_fmt(reachability)}, x{multiplier} multiplier)."
-    )
-    total_clause = f"Total: {_fmt(total)}."
+    if found:
+        contact = f"Can be reached by {_join(found)}."
+        if missing:
+            contact += f" No {_join(missing, 'or')} found."
+        parts.append(contact)
 
-    prefix = "Qualified" if reachability and reachability > 0 else (
-        "Not qualified (no contact info — needs further enrichment)"
-    )
-    return (
-        f"{prefix}: {canonical_industry}, {lead.country}. "
-        f"{opportunity_clause} {reachability_clause} {total_clause}"
-    )
+    if total is None:
+        parts.append("Priority score not computed: lead type is unclear.")
+    else:
+        source = "no website" if case == "no_website" else "weak points found in the site audit"
+        parts.append(
+            f"Priority score {_fmt(total)}/100: opportunity {_fmt(opportunity)} ({source}) "
+            f"x {multiplier} for how reachable the contact details are "
+            f"({_fmt(reachability)}/100)."
+        )
+    return " ".join(parts)
 
 
 def score(lead: Lead, weights: dict, qualification: dict) -> Lead:
     """Score one lead — returns a new Lead, never mutates the input.
 
-    Qualification (industry + country) runs first and gates everything else
-    (docs/SCORING.md §1): a lead that fails either filter gets no
+    Qualification (country) runs first and gates everything else
+    (docs/SCORING.md §2): a lead that fails the filter gets no
     reachability_score/opportunity_score/total_score and is never marked
-    qualified. A lead that passes both but has zero reachability_score still
+    qualified. A lead that passes but has zero reachability_score still
     gets scored (so it doesn't rank artificially high if the multiplier
     logic changes later) but is also not marked qualified — it needs more
     enrichment before outreach, not a ranking.
     """
     case = _audit_case(lead, weights["opportunity"]["lighthouse_weights"])
     lead_type = _LEAD_TYPES[case]
-    industry_ok, country_ok, canonical_industry = _qualifies(lead, qualification)
+    country_ok = _qualifies(lead, qualification)
 
-    if not (industry_ok and country_ok):
+    if not country_ok:
         return replace(
             lead,
             reachability_score=None,
@@ -239,9 +259,7 @@ def score(lead: Lead, weights: dict, qualification: dict) -> Lead:
             qualified=False,
             audit_notes=_build_audit_notes(
                 lead,
-                industry_ok=industry_ok,
                 country_ok=country_ok,
-                canonical_industry=canonical_industry,
                 reachability=None,
                 multiplier=None,
                 opportunity=None,
@@ -259,7 +277,6 @@ def score(lead: Lead, weights: dict, qualification: dict) -> Lead:
 
     return replace(
         lead,
-        industry=canonical_industry,
         reachability_score=round(reachability, 1),
         opportunity_score=round(opportunity, 1) if opportunity is not None else None,
         total_score=total,
@@ -267,9 +284,7 @@ def score(lead: Lead, weights: dict, qualification: dict) -> Lead:
         qualified=reachability > 0,
         audit_notes=_build_audit_notes(
             lead,
-            industry_ok=industry_ok,
             country_ok=country_ok,
-            canonical_industry=canonical_industry,
             reachability=reachability,
             multiplier=multiplier,
             opportunity=opportunity,

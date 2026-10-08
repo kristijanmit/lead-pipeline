@@ -87,26 +87,13 @@ def test_limit_dry_run_keeps_all_rows_untouched(tmp_path, monkeypatch):
     assert manifest["score"]["counts"]["beyond_limit"] == 2
 
 
-def test_qualification_config_threaded_from_config_yaml(tmp_path, monkeypatch):
-    # "plumbing_shop" isn't in the built-in DEFAULTS industry_map at all —
-    # only qualifying here proves config.yaml's qualification: section is
-    # what score() actually consulted, not a hardcoded default
+def test_uncommon_industry_qualifies(tmp_path, monkeypatch):
     lead = _lead("Plumbing Co", "plumbingco.rs", industry="plumbing_shop", contact_emails=["a@b.rs"])
-    run_dir = _make_run(
-        tmp_path,
-        monkeypatch,
-        [lead],
-        config_extra=(
-            "qualification:\n"
-            "  target_countries: [Serbia]\n"
-            "  industry_map:\n"
-            "    construction: [plumbing_shop]\n"
-        ),
-    )
+    run_dir = _make_run(tmp_path, monkeypatch, [lead])
     assert main(["score", "--run", "test-run"]) == 0
     scored = read_jsonl(run_dir / "scored.jsonl")[0]
     assert scored.qualified is True
-    assert scored.industry == "construction"
+    assert scored.industry == "plumbing_shop"
 
 
 def test_qualification_config_can_disqualify_leads(tmp_path, monkeypatch):

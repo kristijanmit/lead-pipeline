@@ -61,3 +61,44 @@ def test_email_keys_lowercased_and_blank_dropped():
 
 def test_email_keys_empty_when_no_emails():
     assert email_keys(_lead("No Web Bistro", "")) == []
+
+
+@pytest.mark.parametrize(
+    "raw, domain, socials",
+    [
+        ("https://www.facebook.com/shineon", "", {"facebook": "https://www.facebook.com/shineon"}),
+        ("m.facebook.com/shineon", "", {"facebook": "https://m.facebook.com/shineon"}),
+        ("instagram.com/shineon", "", {"instagram": "https://instagram.com/shineon"}),
+        ("https://twitter.com/shineon", "", {"x": "https://twitter.com/shineon"}),
+        ("https://www.example.com/", "example.com", {}),
+        ("", "", {}),
+        (None, "", {}),
+    ],
+)
+def test_split_website(raw, domain, socials):
+    from pipeline.dedupe import split_website
+
+    assert split_website(raw) == (domain, socials)
+
+
+def test_duplicate_fills_missing_fields_without_overwriting():
+    osm = Lead(
+        company="Dental Novak", domain="dentalnovak.rs", source="osm",
+        address="Bulevar 1, Novi Sad", contact_phones=["021/452-333"],
+        profile_url="https://www.openstreetmap.org/node/1",
+    )
+    maps = Lead(
+        company="Dental Centar Novak", domain="dentalnovak.rs", source="maps",
+        address="Other address", rating=4.9, review_count=127,
+        contact_emails=["info@dentalnovak.rs"],
+        contact_phones=["+381 21 452 333", "+381 64 111 222"],
+        profile_url="https://maps.google.com/?cid=101",
+    )
+    (merged,) = dedupe_leads([osm, maps])
+    assert merged.company == "Dental Novak" and merged.source == "osm"
+    assert merged.address == "Bulevar 1, Novi Sad"  # kept's value wins
+    assert (merged.rating, merged.review_count) == (4.9, 127)
+    assert merged.contact_emails == ["info@dentalnovak.rs"]
+    # same number in two spellings is not repeated; the new one is added
+    assert merged.contact_phones == ["021/452-333", "+381 64 111 222"]
+    assert merged.profile_url == "https://maps.google.com/?cid=101"  # Maps beats OSM

@@ -84,3 +84,21 @@ def test_audit_notes_no_lighthouse_data():
 def test_audit_notes_no_website():
     lead = Lead(company="A", domain="", source="manual", contact_phones=["060 1"])
     assert build_audit_notes(lead) == "0 emails, 1 phones, 0 socials; no website"
+
+
+def test_social_domain_skips_audit(monkeypatch):
+    from pipeline.enrichers.audit import AuditEnricher
+
+    enricher = AuditEnricher(
+        {"enrich": {"http_timeout_s": 1, "lighthouse": {"binary": "lighthouse", "timeout_s": 1}}}
+    )
+
+    def boom(*args, **kwargs):
+        raise AssertionError("must not probe or run Lighthouse for a social page")
+
+    monkeypatch.setattr(enricher, "_probe", boom)
+    monkeypatch.setattr(enricher, "_run_lighthouse", boom)
+    lead = Lead(company="Shine On", domain="facebook.com", source="osm")
+    result = enricher.enrich(lead)
+    assert result.lighthouse is None
+    assert "social page only" in result.audit_notes

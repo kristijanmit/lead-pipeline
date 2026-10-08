@@ -40,6 +40,10 @@ def test_parse_results_csv():
     # comma-joined emails split and case-insensitively deduped
     assert novak.contact_emails == ["info@dentalnovak.rs", "office@dentalnovak.rs"]
     assert novak.contact_phones == ["+381 21 123 456"]
+    assert novak.address == "Bulevar oslobođenja 1, Novi Sad"
+    assert novak.rating == 4.9
+    assert novak.review_count == 127
+    assert novak.profile_url == "https://maps.google.com/?cid=101"
 
     nina = by_company["Salon Nina"]
     assert nina.industry == "hairdresser"

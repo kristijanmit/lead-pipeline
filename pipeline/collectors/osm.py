@@ -13,7 +13,7 @@ from typing import Iterable
 import requests
 
 from pipeline.collectors.base import register
-from pipeline.dedupe import normalize_domain, phone_key
+from pipeline.dedupe import phone_key, split_website
 from pipeline.schema import Lead
 
 # Friendly category names -> the OSM tag that marks them. Anything not in
@@ -58,6 +58,15 @@ CATEGORY_TAGS: dict[str, tuple[str, str]] = {
 
 _WEBSITE_TAGS = ("website", "contact:website", "url")
 _EMAIL_TAGS = ("email", "contact:email")
+def _osm_address(tags: dict) -> str:
+    """"Bulevar oslobođenja 1, Novi Sad" from addr:* tags; empty when untagged."""
+    street = " ".join(
+        part for part in (tags.get("addr:street") or tags.get("addr:place"), tags.get("addr:housenumber")) if part
+    )
+    city = tags.get("addr:city") or ""
+    return ", ".join(part for part in (street, city) if part)
+
+
 _PHONE_TAGS = ("phone", "contact:phone")
 
 _MAX_ATTEMPTS = 3
@@ -127,12 +136,20 @@ def parse_elements(data: dict, categories_by_tag: dict[tuple[str, str], str]) ->
             (cat for (key, value), cat in categories_by_tag.items() if tags.get(key) == value),
             "other",
         )
+        domain, socials = split_website(website)
         leads.append(
             Lead(
                 company=name,
-                domain=normalize_domain(website),
+                domain=domain,
+                social_links=socials,
                 source="osm",
                 industry=industry,
+                address=_osm_address(tags),
+                profile_url=(
+                    f"https://www.openstreetmap.org/{element['type']}/{element['id']}"
+                    if element.get("type") and element.get("id")
+                    else ""
+                ),
                 contact_emails=list(emails.values()),
                 contact_phones=list(phones.values()),
             )

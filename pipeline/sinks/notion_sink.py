@@ -34,11 +34,12 @@ API_BASE = "https://api.notion.com/v1"
 # pass through raw and Notion auto-creates an option (same as Industry/CMS)
 _SOURCE_OPTIONS = {"osm": "OSM/Maps", "maps": "OSM/Maps", "manual": "Manual"}
 
-_LIGHTHOUSE_COLUMNS = {
-    "performance": "Performance Score",
-    "accessibility": "Accessibility Score",
-    "best_practices": "Best Practices Score",
-    "seo": "SEO Score",
+# Lead.lighthouse key -> label in the single "Lighthouse" text property
+_LIGHTHOUSE_LABELS = {
+    "performance": "Performance",
+    "accessibility": "Accessibility",
+    "best_practices": "Best Practices",
+    "seo": "SEO",
 }
 
 
@@ -89,15 +90,28 @@ def to_notion_properties(lead: Lead) -> dict:
             for platform, url in sorted(lead.social_links.items())
         ]
         props["Social Links"] = _text("\n".join(lines))
+    if lead.address:
+        props["Address"] = _text(lead.address)
+    if lead.rating is not None:
+        props["Rating"] = {"number": lead.rating}
+    if lead.review_count is not None:
+        props["Review Count"] = {"number": lead.review_count}
+    if lead.profile_url:
+        props["Profile URL"] = {"url": lead.profile_url}
     if lead.https is not None:
         props["HTTPS"] = {"checkbox": lead.https}
     if lead.mobile_friendly is not None:
         props["Mobile Friendly"] = {"checkbox": lead.mobile_friendly}
     if lead.cms:
         props["CMS"] = {"select": {"name": lead.cms}}
-    for key, column in _LIGHTHOUSE_COLUMNS.items():
-        if lead.lighthouse and key in lead.lighthouse:
-            props[column] = {"number": lead.lighthouse[key]}
+    if lead.lighthouse:
+        lines = [
+            f"{label}: {lead.lighthouse[key]}"
+            for key, label in _LIGHTHOUSE_LABELS.items()
+            if key in lead.lighthouse
+        ]
+        if lines:
+            props["Lighthouse"] = _text("\n".join(lines))
     if lead.audit_notes:
         props["Audit Notes"] = _text(lead.audit_notes)
     if lead.reachability_score is not None:

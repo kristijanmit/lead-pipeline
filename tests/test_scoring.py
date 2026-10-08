@@ -30,12 +30,6 @@ WEIGHTS = {
 
 QUALIFICATION = {
     "target_countries": ["Serbia"],
-    "industry_map": {
-        "clinic": ["dentist", "dental", "dental_clinic", "orthodontist", "clinic"],
-        "car_workshop": ["car_repair", "auto_repair", "car_workshop", "mechanic"],
-        "workshop_repair": ["repair_shop", "workshop", "appliance_repair"],
-        "construction": ["construction", "contractor", "builder"],
-    },
 }
 
 
@@ -57,17 +51,6 @@ def _score(lead, weights=WEIGHTS, qualification=QUALIFICATION):
 # --- qualification filters --------------------------------------------------
 
 
-def test_industry_not_in_target_list_fails_qualification():
-    lead = _lead(industry="hairdresser", contact_emails=["a@b.rs"])
-    scored = _score(lead)
-    assert scored.qualified is False
-    assert scored.reachability_score is None
-    assert scored.opportunity_score is None
-    assert scored.total_score is None
-    assert "Not qualified" in scored.audit_notes
-    assert "hairdresser" in scored.audit_notes
-
-
 def test_country_not_in_target_fails_qualification():
     lead = _lead(country="Croatia", contact_emails=["a@b.rs"])
     scored = _score(lead)
@@ -75,26 +58,16 @@ def test_country_not_in_target_fails_qualification():
     assert "Croatia" in scored.audit_notes
 
 
-def test_unrecognized_industry_string_never_raises():
-    lead = _lead(industry="literally anything, spaces & punctuation!!")
-    scored = _score(lead)  # must not raise
-    assert scored.qualified is False
-
-
-def test_industry_synonym_folds_to_canonical_category():
-    lead = _lead(industry="dentist", contact_emails=["a@b.rs"])
-    assert _score(lead).industry == "clinic"
-
-
-def test_industry_match_is_case_insensitive():
-    lead = _lead(industry="DENTIST", contact_emails=["a@b.rs"])
+def test_any_industry_qualifies_and_is_left_as_collected():
+    lead = _lead(industry="Literally anything, spaces & punctuation!!", contact_emails=["a@b.rs"])
     scored = _score(lead)
     assert scored.qualified is True
-    assert scored.industry == "clinic"
+    assert scored.industry == lead.industry
+    assert "target list" not in scored.audit_notes
 
 
 def test_zero_reachability_not_qualified_even_though_filters_pass():
-    lead = _lead(domain="")  # no contact info at all; industry/country pass
+    lead = _lead(domain="")  # no contact info at all; country passes
     scored = _score(lead)
     assert scored.qualified is False
     assert scored.reachability_score == 0
@@ -149,7 +122,7 @@ def test_unclear_lead_type_leaves_opportunity_and_total_blank():
     assert scored.opportunity_score is None
     assert scored.total_score is None
     assert scored.lead_type == "unclear"
-    assert "needs classification" in scored.audit_notes
+    assert "could not be audited" in scored.audit_notes
 
 
 def test_unclear_lead_type_can_still_be_qualified_with_blank_opportunity():
@@ -228,13 +201,35 @@ def test_audited_score_cap_must_stay_below_no_website_score():
 # --- total score / audit notes ----------------------------------------------
 
 
-def test_audit_notes_matches_spec_example_exactly():
+def test_audit_notes_new_build_phone_only():
     lead = _lead(domain="", contact_phones=["+381 21 111 222"])
-    scored = _score(lead)
-    assert scored.audit_notes == (
-        "Qualified: clinic, Serbia. Opportunity: new-build policy (90). "
-        "Reachability: phone only (40, x0.7 multiplier). Total: 63."
+    assert _score(lead).audit_notes == (
+        "Qualified: dentist, Serbia. No website: pitch a new build. "
+        "Can be reached by phone. No email or social media found. "
+        "Priority score 63/100: opportunity 90 (no website) x 0.7 for how "
+        "reachable the contact details are (40/100)."
     )
+
+
+def test_audit_notes_say_when_social_media_is_missing():
+    lead = _lead(domain="", contact_emails=["a@b.rs"], contact_phones=["+381 21 111 222"])
+    notes = _score(lead).audit_notes
+    assert "Can be reached by email and phone. No social media found." in notes
+    assert "Priority score 85.5/100: opportunity 90 (no website) x 0.95" in notes
+
+
+def test_audit_notes_audited_site_lists_findings():
+    lead = _lead(
+        contact_emails=["a@b.rs"],
+        lighthouse={"performance": 42, "accessibility": 88, "best_practices": 75, "seo": 91},
+        https=False,
+        mobile_friendly=False,
+        cms="WordPress",
+    )
+    notes = _score(lead).audit_notes
+    assert "Has a website (test-dental.rs): pitch a redesign." in notes
+    assert "performance 42/100" in notes and "SEO 91/100" in notes
+    assert "no HTTPS" in notes and "not mobile friendly" in notes and "built on WordPress" in notes
 
 
 def test_total_score_hand_computed():
@@ -299,3 +294,9 @@ def test_config_defaults_are_a_valid_weights_dict():
     scored = score(_lead(domain=""), DEFAULTS["scoring"], DEFAULTS["qualification"])
     assert scored.opportunity_score == 90
     assert scored.scoring_version == DEFAULTS["scoring"]["version"]
+
+
+def test_audit_notes_include_rating_and_review_count():
+    lead = _lead(domain="", contact_emails=["a@b.rs"], rating=4.9, review_count=127)
+    assert "Google Maps: 4.9 stars from 127 reviews." in _score(lead).audit_notes
+    assert "Google Maps" not in _score(_lead(domain="", contact_emails=["a@b.rs"])).audit_notes

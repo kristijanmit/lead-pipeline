@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Iterable
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 SCORING_VERSION = 3
 
 
@@ -30,6 +30,14 @@ class Lead:
     # qualification filter's location gate checks this, not the free-text city
 
     schema_version: int = SCHEMA_VERSION
+
+    # listing details (v7) — filled by the collector that has them: maps gives all
+    # four, osm gives address + the OSM object page, manual gives none. v6 JSONL
+    # loads with the defaults.
+    address: str = ""
+    rating: float | None = None  # e.g. 4.7 (Google Maps stars)
+    review_count: int | None = None
+    profile_url: str = ""  # the lead's listing page: Google Maps link / OSM object
 
     # contact enrichment (Phase 2, step 1)
     contact_emails: list[str] = field(default_factory=list)  # keep every address found

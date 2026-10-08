@@ -106,7 +106,7 @@ A single canonical record flows through every stage. Defined once in
 ```python
 @dataclass
 class Lead:
-    schema_version: int = 6        # bump whenever fields are added/changed
+    schema_version: int = 7        # bump whenever fields are added/changed
 
     # identity — set at collection, never changes after
     company: str
@@ -230,9 +230,10 @@ has to flatten a few `Lead` fields deliberately rather than fail on them:
 | `contact_phones[1:]`                                    | `Additional Phones` (Rich text) | Joined with `, ` — same rule as additional emails                                                                                                           |
 | `social_links`                                          | `Social Links` (Rich text)      | Rendered as Markdown links, one per line: `[LinkedIn](url)`                                                                                                 |
 | `https`, `mobile_friendly`                              | two Checkbox properties         | Only sent when not `None` — a checkbox can't say "unknown", so omit instead of asserting false                                                              |
+| `address`, `rating`, `review_count`, `profile_url`      | `Address` (Rich text), `Rating` (Number), `Review Count` (Number), `Profile URL` (URL) | Each only sent when set. maps fills all four; osm fills address + the OSM object page as profile URL; manual fills none |
 | `lead_type`                                             | `Lead Type` (Select)            | `new_build` / `redesign` / `unclear` — the outreach step filters on it                                                                                      |
 | `source`                                                | `Source` (Select)               | `osm`/`maps` → "OSM/Maps", `manual` → "Manual"; `industry`, `location`, and `cms` go out raw and Notion auto-creates select options                         |
-| `lighthouse["performance"                               | "accessibility"                 | "seo"                                                                                                                                                       | "best_practices"]` | four separate Number properties | Flattened one key per column — Notion has no nested-object property |
+| `lighthouse`                                            | `Lighthouse` (Rich text)        | One property, one `Label: value` line each in fixed order (`Performance`, `Accessibility`, `Best Practices`, `SEO`); categories missing from the audit are skipped |
 | `reachability_score`                                    | `Reachability Score` (Number)   | Only sent when not `None` (a lead that failed the qualification filters gets no score at all — SCORING.md §1)                                              |
 | `opportunity_score`                                     | `Opportunity Score` (Number)    | Only sent when not `None` — an `unclear` lead_type leaves this blank rather than guessing which formula applies (SCORING.md §3)                            |
 | `qualified`                                              | `Qualified` (Checkbox)          | Always sent — industry + country filters passed AND `reachability_score > 0` (SCORING.md §1-2)                                                             |

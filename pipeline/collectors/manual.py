@@ -15,7 +15,7 @@ import csv
 from pathlib import Path
 
 from pipeline.collectors.base import register
-from pipeline.dedupe import normalize_domain
+from pipeline.dedupe import split_website
 from pipeline.schema import Lead
 
 _REQUIRED_COLUMNS = {"company"}
@@ -44,10 +44,12 @@ def read_manual_csv(path: str | Path) -> list[Lead]:
             phones = [
                 p.strip() for p in (row.get("phone") or "").split(";") if p.strip()
             ]
+            domain, socials = split_website(row.get("website"))
             leads.append(
                 Lead(
                     company=company,
-                    domain=normalize_domain(row.get("website")),
+                    domain=domain,
+                    social_links=socials,
                     source="manual",
                     industry=(row.get("industry") or "").strip() or "other",
                     location=(row.get("location") or "").strip(),

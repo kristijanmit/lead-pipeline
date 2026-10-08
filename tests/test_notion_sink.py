@@ -91,7 +91,11 @@ def test_unknown_fields_are_omitted_not_blanked():
         "HTTPS",
         "Mobile Friendly",
         "CMS",
-        "Performance Score",
+        "Lighthouse",
+        "Address",
+        "Rating",
+        "Review Count",
+        "Profile URL",
         "Primary Email",
         "Phone",
         "Social Links",
@@ -148,9 +152,9 @@ def test_scores_lighthouse_and_status():
             qualified=True,
         )
     )
-    assert props["Performance Score"] == {"number": 42}
-    assert props["SEO Score"] == {"number": 90}
-    assert "Accessibility Score" not in props  # key missing from the audit
+    # one text property, fixed order, keys missing from the audit are skipped
+    assert props["Lighthouse"]["rich_text"][0]["text"]["content"] == "Performance: 42\nSEO: 90"
+    assert "Performance Score" not in props
     assert props["Reachability Score"] == {"number": 90.0}
     assert props["Opportunity Score"] == {"number": 70.0}
     assert props["Total Score"] == {"number": 63.5}
@@ -461,3 +465,13 @@ def test_refresh_cache_rebuilds_snapshots_for_email_matching(tmp_path):
     ]
     assert snapshot["phones"] == ["021 3822824"]
     assert snapshot["socials"] == {"facebook": "https://facebook.com/mirkovic"}
+
+
+def test_listing_details():
+    props = to_notion_properties(
+        _lead(address="Železnička 5, Novi Sad", rating=4.5, review_count=34, profile_url="https://maps.google.com/?cid=1")
+    )
+    assert props["Address"]["rich_text"][0]["text"]["content"] == "Železnička 5, Novi Sad"
+    assert props["Rating"] == {"number": 4.5}
+    assert props["Review Count"] == {"number": 34}
+    assert props["Profile URL"] == {"url": "https://maps.google.com/?cid=1"}

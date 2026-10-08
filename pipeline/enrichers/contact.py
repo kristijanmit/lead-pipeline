@@ -18,7 +18,7 @@ from urllib.robotparser import RobotFileParser
 import requests
 from bs4 import BeautifulSoup
 
-from pipeline.dedupe import normalize_domain, phone_key
+from pipeline.dedupe import SOCIAL_HOSTS, normalize_domain, phone_key
 from pipeline.enrichers.base import register
 from pipeline.schema import Lead
 
@@ -44,12 +44,7 @@ _DATE_LIKE_RE = re.compile(
     r"\d{1,2}[./]\d{1,2}[./]\s?(?:19|20)\d{2}|(?:19|20)\d{2}-\d{1,2}-\d{1,2}"
 )
 
-_SOCIAL_HOSTS: dict[str, tuple[str, ...]] = {
-    "linkedin": ("linkedin.com",),
-    "instagram": ("instagram.com",),
-    "facebook": ("facebook.com",),
-    "x": ("x.com", "twitter.com"),
-}
+
 _SOCIAL_SHARE_MARKERS = ("/sharer", "/share", "/intent", "share.php", "/plugins/")
 
 _CONTACT_LINK_MARKERS = ("contact", "kontakt")
@@ -132,7 +127,7 @@ def extract_social_links(html: str) -> dict[str, str]:
         path = urlparse(href if "://" in href else "//" + href).path.lower()
         if path in ("", "/") or any(m in path for m in _SOCIAL_SHARE_MARKERS):
             continue  # bare network homepage or a share widget, not a profile
-        for network, hosts in _SOCIAL_HOSTS.items():
+        for network, hosts in SOCIAL_HOSTS.items():
             if network not in links and any(
                 host == h or host.endswith("." + h) for h in hosts
             ):

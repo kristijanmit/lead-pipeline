@@ -20,7 +20,7 @@ import tempfile
 from pathlib import Path
 
 from pipeline.collectors.base import register
-from pipeline.dedupe import normalize_domain
+from pipeline.dedupe import split_website
 from pipeline.schema import Lead
 
 # the scraper sometimes pulls an email out of a "//foo@bar.com" JS comment
@@ -49,6 +49,18 @@ def _split_emails(raw: str) -> list[str]:
     return list(seen.values())
 
 
+def _parse_rating(raw: str | None) -> float | None:
+    try:
+        return float((raw or "").strip().replace(",", "."))
+    except ValueError:
+        return None
+
+
+def _parse_review_count(raw: str | None) -> int | None:
+    digits = re.sub(r"[^\d]", "", raw or "")
+    return int(digits) if digits else None
+
+
 def parse_results_csv(path: str | Path, categories: set[str]) -> list[Lead]:
     leads: list[Lead] = []
     with open(path, encoding="utf-8-sig", newline="") as f:
@@ -58,12 +70,18 @@ def parse_results_csv(path: str | Path, categories: set[str]) -> list[Lead]:
                 continue
             input_id = (row.get("input_id") or "").strip()
             industry = input_id if input_id in categories else "other"
+            domain, socials = split_website(row.get("website"))
             leads.append(
                 Lead(
                     company=company,
-                    domain=normalize_domain(row.get("website")),
+                    domain=domain,
+                    social_links=socials,
                     source="maps",
                     industry=industry,
+                    address=(row.get("address") or "").strip(),
+                    rating=_parse_rating(row.get("review_rating")),
+                    review_count=_parse_review_count(row.get("review_count")),
+                    profile_url=(row.get("link") or "").strip(),
                     contact_emails=_split_emails(row.get("emails") or ""),
                     contact_phones=(
                         [phone] if (phone := (row.get("phone") or "").strip()) else []
@@ -129,7 +147,7 @@ class MapsCollector:
                 "https://cdn.npmmirror.com/binaries/playwright",
             )
             try:
-                subprocess.run(
+                completed = subprocess.run(
                     cmd, check=True, capture_output=True, timeout=self.timeout_s, env=env
                 )
             except subprocess.TimeoutExpired:
@@ -142,4 +160,11 @@ class MapsCollector:
                 raise RuntimeError(f"maps scraper failed: {stderr or e}") from None
             if not results_path.exists():
                 raise RuntimeError("maps scraper produced no results file")
-            return parse_results_csv(results_path, {c.strip() for c in categories})
+            leads = parse_results_csv(results_path, {c.strip() for c in categories})
+            if not leads and b'"status":"failed"' in completed.stderr + completed.stdout:
+                # exit code 0 even when every search job died (e.g. playwright
+                # "target closed") — don't let that pass as "no businesses found"
+                log = (completed.stderr + completed.stdout).decode(errors="replace")
+                failed = [ln for ln in log.splitlines() if '"status":"failed"' in ln]
+                raise RuntimeError(f"maps scraper search failed: {failed[-1][:300]}")
+            return leads
