@@ -10,6 +10,45 @@ schema). Each phase below notes where it naturally lands in that structure —
 this isn't a separate refactor to schedule, it's what "doing the phase
 properly" means in practice.
 
+## Status at a glance (updated 2026-10-17)
+
+**Done**
+- Phases 1-4: collect (OSM, Google Maps, manual CSV), enrich (contacts + Lighthouse), score, Notion sync with
+  a local dedupe cache. Social Links are clickable links in Notion.
+- Draft stage (`python -m pipeline.runner draft`): suggested channel plus one Serbian first message per
+  qualified lead via the `claude` CLI, written to `Suggested Channel` / `Draft Message` with `Status = Queued`.
+  Replaces the manual `draft-outreach` skill for queue / channel / first message. See docs/OUTREACH.md.
+- 77 existing Notion pages backfilled with drafts (`scripts/backfill_drafts.py`); 36 Social Links fixed
+  (`scripts/fix_social_links.py`).
+- Notion schema cleanup: `Testville` location removed, `Communication` / `Notes` / `Draft Message` /
+  `Last Contacted` documented in the property descriptions.
+- Removed the old lead-scrape and Google Sheets CRM workflow scripts from the separate `agent-swarm` repo.
+
+**To do (next, in order)**
+1. Read about 10 drafts in Notion, edit the weak ones, and feed the edits back into the prompt / `config/outreach.md`.
+2. Make drafts more specific: many leads are beauty salons whose real presence is an Instagram / Facebook page,
+   and the pipeline only reads their website. Capture the public bio and recent post captions in `enrich`
+   (check each site's rules first), then regenerate the generic drafts.
+3. Send the first batch by hand and log it in `Communication` (`YYYY-MM-DD · SENT · channel · text`,
+   `YYYY-MM-DD · REPLY · text`) and `Last Contacted`.
+4. Phase B, follow-ups: a `followup` stage that reads Notion (`Last Contacted`, `Communication`), writes the
+   follow-up draft and `Follow-up date`, flags `Follow-up due`, and marks `Dead` on the next run without a
+   reply. Only worth building once real messages are logged. Allowed writes stay: Status (Queued / Follow-up due /
+   Dead), Suggested Channel, Draft Message, Follow-up date.
+5. After the first real batch, tune the scoring weights against actual replies (Phase 3 / 6).
+
+**Ideas (not committed to)**
+- Reply drafts for the four response types (send / "we have a site" / no budget / price), driven by the
+  `Communication` log. Needs approved price, reference and call slots in `config.yaml` `outreach`.
+- Turn on link / named reference / price in first messages once approved (all off now, in `config.yaml`).
+- Separate `Instagram` / `Facebook` URL columns in Notion for one-click DMs.
+- Industry cleanup in Notion: drop unused options, decide on merging `beauty` and `hairdresser`; keep
+  `outreach.industry_labels` in `config.yaml` as the one list of niches.
+- Make `sync` update existing pages for cached leads, so `scripts/backfill_drafts.py` is not needed.
+- Parallel drafting (small thread pool) and an API-key fallback if volume outgrows the Claude plan limits.
+- Trim the Notion default view (about 34 columns shown) to the 10 used daily.
+- Fill `Contact Name` only in a later stage, once a lead replies (intentionally empty now).
+
 ## Phase 1 — Data collection
 
 Goal: get a real, live dataset before optimizing anything downstream.
@@ -119,7 +158,7 @@ see docs/ARCHITECTURE.md §6.1 for the exact `Lead` -> Notion property mapping
       setup in the README
 - [x] Implement `to_notion_properties(lead)` in `notion_sink.py` per
       docs/ARCHITECTURE.md §6.1 — first email to `Primary Email`, the rest joined
-      into `Additional Emails`, social links rendered as markdown, Lighthouse
+      into `Additional Emails`, social links rendered as clickable links, Lighthouse
       categories flattened into their four separate score columns
       — plus `Additional Phones` and `Lead Type` properties added to the
       Notion database so multiple phones and the new_build/redesign split sync
@@ -138,12 +177,14 @@ see docs/ARCHITECTURE.md §6.1 for the exact `Lead` -> Notion property mapping
 
 Goal: turn a scored lead into a sent, personalized message with minimal typing.
 
-- [ ] Draft an outreach template that references the specific audit finding per
-      lead (e.g. "noticed your site isn't mobile-optimized and scores X on
-      Lighthouse performance") instead of a generic opener
+- [x] Draft an outreach template that references the specific audit finding per
+      lead — landed as the `draft` stage (docs/OUTREACH.md): one Serbian message per lead,
+      a true observation in plain words (never Lighthouse numbers), one open question
 - [ ] Send the first batch manually (no budget for a sequencer yet — Instantly/
       Smartlead free tiers are an option once volume justifies it)
 - [ ] Log sent/replied status back into the Notion Status field by hand for now
+      (log every message and reply in `Communication` in the documented format; Phase B depends on it)
+- [ ] Phase B: follow-up drafts, `Follow-up due` and `Dead` tracking (see Status at a glance)
 
 ## Phase 6 — Feedback loop
 

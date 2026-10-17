@@ -6,10 +6,11 @@ website audit → score for outreach priority → land in Notion.
 
 ## Current state
 
-The repo is docs-only right now (docs/ARCHITECTURE.md, docs/ROADMAP.md). Code lands
-phase by phase per docs/ROADMAP.md — build each phase into the target module
-structure directly (`pipeline/collectors/`, `pipeline/enrichers/`, etc.),
-not as standalone scripts to refactor later.
+Phases 1-4 (collect, enrich, score, Notion sync) and the outreach `draft` stage are built and in use.
+Not built yet: follow-ups / Dead tracking (Phase B) and the feedback loop. docs/ROADMAP.md has the
+current Done / To do / Ideas list at the top — keep it updated when work ships. Build new stages into
+the target module structure (`pipeline/collectors/`, `pipeline/enrichers/`, `pipeline/drafting/`, etc.),
+not as standalone scripts.
 
 ## Stack
 
@@ -64,7 +65,8 @@ For deeper context, consult these before guessing:
 
 - `docs/ARCHITECTURE.md` — full data model, module structure, stage protocols, run lifecycle, dedup/idempotency rules
 - `docs/ARCHITECTURE.md` §6.1 — the exact `Lead` → Notion property mapping (emails, social links, Lighthouse flattening); keep it in one function, `to_notion_properties()`
-- `docs/ROADMAP.md` — the six phases, what lands where, and current checkbox status; update checkboxes as work ships
+- `docs/ROADMAP.md` — status at a glance (done / to do / ideas), the six phases, and checkbox status; update both as work ships
+- `docs/OUTREACH.md` — the draft stage: channel rules, message rules, settings, what is written to Notion
 - `docs/SCORING.md` — the "why" behind every scoring weight, the fit/opportunity split, the manual intent workflow, and how to retune after real reply data
 - `config.yaml` — scoring weights and ICP definitions (safe to commit; secrets are not)
 
