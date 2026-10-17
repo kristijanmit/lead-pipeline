@@ -27,6 +27,7 @@ All stages run through one CLI entrypoint (`pipeline/runner.py`):
 - `python -m pipeline.runner collect --source osm --location "..." --categories "..."` — collect leads
 - `python -m pipeline.runner enrich --run <run_id>` — contact enrichment, then website audit
 - `python -m pipeline.runner score --run <run_id>` — apply scoring weights from config.yaml
+- `python -m pipeline.runner draft --run <run_id>` — suggested channel + one Serbian first message per qualified lead via `claude -p` (rules in docs/OUTREACH.md); run before sync, since fields are written only when a Notion page is created
 - `python -m pipeline.runner sync --run <run_id> --sink notion` — push to Notion (Phase 4)
 - Every command accepts `--limit N` — use it as a dry run before spending rate-limit budget on a full batch
 - `pytest` — run tests

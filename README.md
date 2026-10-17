@@ -54,8 +54,9 @@ All stages run through `pipeline.runner`:
 | `collect --source osm,maps,manual --location "..." --categories "..."` | Collect + merge + dedupe leads |
 | `enrich --run <run_id>` | Contact scrape, then Lighthouse audit |
 | `score --run <run_id>` | Apply scoring weights from `config.yaml` |
-| `sync --run <run_id> --sink notion` | Push scored leads to Notion |
-| `run` | Chains all four stages |
+| `draft --run <run_id>` | Suggest a channel and draft one Serbian first message per qualified lead via the `claude` CLI (your Claude login, drafts only, never sends) — see [`docs/OUTREACH.md`](docs/OUTREACH.md) |
+| `sync --run <run_id> --sink notion` | Push scored leads to Notion (Status Queued, Suggested Channel, Draft Message) |
+| `run` | Chains all five stages |
 
 Every command accepts `--limit N` — use it as a dry run before spending
 rate-limit budget on a full batch.
