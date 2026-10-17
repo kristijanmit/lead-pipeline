@@ -148,3 +148,12 @@ def test_email_prompt_allows_only_the_signature_domain():
     chat = drafter.build_prompt(lead, "Instagram", outreach, 0, "")
     assert "only exception" in email and outreach["signature"] in email
     assert "only exception" not in chat and "Do NOT include any link" in chat
+
+
+def test_prompt_includes_operator_sm_audit():
+    from pipeline.config import DEFAULTS
+
+    lead = _lead("Salon Mira", "", lead_type="new_build", sm_audit="posts daily, no booking link in bio")
+    p = drafter.build_prompt(lead, "Instagram", dict(DEFAULTS["outreach"]), 0, "")
+    assert "no booking link in bio" in p and "first-hand and trusted" in p
+    assert "first-hand" not in drafter.build_prompt(_lead("B", ""), "Instagram", dict(DEFAULTS["outreach"]), 0, "")

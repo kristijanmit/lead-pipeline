@@ -15,6 +15,18 @@ Never written: `Chosen Channel`, `Last Contacted`, `Communication`, `Notes`, `Co
 Only **new** Notion pages get these fields (existing pages are skipped by the dedupe cache), so run
 `draft` before `sync`.
 
+## Hand-made leads (`draft-notion`)
+For leads found by hand (e.g. an Instagram page, no website): create the Notion page yourself with
+`Company`, `Industry`, `Location`, `Social Links` (the Instagram URL as a link), `SM Audit` (your notes, a
+rich_text column you add by hand), and `Source` = Manual. Then:
+
+    python -m pipeline.runner draft-notion --limit 1        # dry run, prints the draft
+    python -m pipeline.runner draft-notion --yes            # writes it
+
+It drafts every Manual page with an empty `Draft Message`, writes `Suggested Channel` + `Draft Message`, and sets
+`Status` = Queued only from `Not started`. It never overwrites a draft. The `SM Audit` text is passed to the
+prompt as first-hand context. It does not touch `seen_domains.json` or the run dirs.
+
 ## Channel (`pipeline/drafting/channel.py`, pure)
 Instagram link > Facebook link > Viber/Whatsapp (Serbian mobile, no Instagram/Facebook) > Email > Call
 (landline only). Placeholder phones/emails are ignored. No usable contact data: no draft, counted as

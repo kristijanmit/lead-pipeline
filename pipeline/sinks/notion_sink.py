@@ -125,6 +125,8 @@ def to_notion_properties(lead: Lead) -> dict:
             props["Lighthouse"] = _text("\n".join(lines))
     if lead.audit_notes:
         props["Audit Notes"] = _text(lead.audit_notes)
+    if lead.sm_audit:
+        props["SM Audit"] = _text(lead.sm_audit[:2000])
     if lead.reachability_score is not None:
         props["Reachability Score"] = {"number": lead.reachability_score}
     if lead.opportunity_score is not None:
@@ -240,6 +242,34 @@ def _snapshot_from_properties(props: dict) -> dict:
         "domain": normalize_domain((props.get("Domain") or {}).get("url")),
         "company": company,
     }
+
+
+def _select_name(prop: dict | None) -> str:
+    return ((prop or {}).get("select") or {}).get("name", "")
+
+
+def lead_from_page(page: dict, country: str = "") -> Lead:
+    """Hand-made Notion page -> Lead, for `draft-notion`. Reverse of
+    to_notion_properties() for the fields drafting needs. qualified is True:
+    the operator chose to put the lead there."""
+    props = page.get("properties", {})
+    snap = _snapshot_from_properties(props)
+    return Lead(
+        company=snap["company"],
+        domain=snap["domain"],
+        source="manual",
+        industry=_select_name(props.get("Industry")) or "other",
+        location=_select_name(props.get("Location")),
+        country=country,
+        contact_emails=snap["emails"],
+        contact_phones=snap["phones"],
+        social_links=snap["socials"],
+        lead_type=_select_name(props.get("Lead Type")) or ("new_build" if not snap["domain"] else None),
+        qualified=True,
+        sm_audit=_rich_text(props.get("SM Audit")),
+        suggested_channel=_select_name(props.get("Suggested Channel")),
+        status="scored",
+    )
 
 
 def load_seen(path: str | Path) -> dict:
@@ -380,6 +410,34 @@ class NotionSink:
             cursor = data.get("next_cursor")
         save_seen(self.cache_path, seen)
         return len(seen)
+
+    def query_undrafted_manual(self, limit: int | None = None) -> list[dict]:
+        """Pages with Source = Manual and an empty Draft Message, oldest first."""
+        flt = {"and": [
+            {"property": "Source", "select": {"equals": "Manual"}},
+            {"property": "Draft Message", "rich_text": {"is_empty": True}},
+        ]}
+        pages: list[dict] = []
+        cursor = None
+        while True:
+            payload: dict = {"page_size": 100, "filter": flt}
+            if cursor:
+                payload["start_cursor"] = cursor
+            data = self._post(f"{API_BASE}/databases/{self.database_id}/query", payload)
+            pages += data.get("results", [])
+            if not data.get("has_more") or (limit is not None and len(pages) >= limit):
+                break
+            cursor = data.get("next_cursor")
+        return pages[:limit] if limit is not None else pages
+
+    def update_page(self, page_id: str, properties: dict) -> None:
+        response = self.session.patch(
+            f"{API_BASE}/pages/{page_id}",
+            headers=self._headers, json={"properties": properties}, timeout=self.timeout_s,
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(f"Notion API {response.status_code}: {response.text[:200]}")
+        time.sleep(self.delay_s)
 
     def _create_page(self, lead: Lead) -> str:
         payload = {

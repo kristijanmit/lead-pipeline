@@ -107,6 +107,11 @@ def build_prompt(lead: Lead, channel: str, outreach: dict, variant: int, example
         "Never invent facts. If data is thin, write a shorter, more general message. If audit data "
         "conflicts (e.g. CMS vs notes), leave that fact out.",
     ]
+    if lead.sm_audit:
+        rules.append(
+            "The operator's social media audit is first-hand and trusted: take the ONE specific point "
+            "from it (not from ratings), and do not mention that an audit exists."
+        )
     if lead.lead_type == "new_build":
         rules.append("Angle: no website found. Compliment the rating/specialty, say you could not find a site, ask how inquiries arrive. Do not propose a call.")
     elif lead.lead_type == "redesign":
@@ -147,6 +152,8 @@ def build_prompt(lead: Lead, channel: str, outreach: dict, variant: int, example
         f"- Rating: {lead.rating if lead.rating is not None else 'n/a'} from {lead.review_count or 0} reviews\n"
         f"- Instagram: {socials.get('instagram', '')}  Facebook: {socials.get('facebook', '')}\n"
         f"- Audit notes: {lead.audit_notes or 'none'}\n"
+        f"- Operator's social media audit (written by the sender; primary context, base the "
+        f"specific point on it): {lead.sm_audit or 'none'}\n"
         f"- Homepage text:\n{lead.site_text or '(not available)'}\n\n"
         "RULES:\n" + "\n".join(f"{i}. {r}" for i, r in enumerate(rules, 1)) + "\n\n"
         "Return `message` (the text to send) and `verify_note`: one sentence listing any claim "

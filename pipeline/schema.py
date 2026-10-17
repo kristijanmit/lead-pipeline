@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Iterable
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 SCORING_VERSION = 3
 
 
@@ -74,6 +74,11 @@ class Lead:
     draft_message: str = ""
     draft_notes: str = ""
     site_text: str = ""
+
+    # v9 — the operator's own social-media audit of the lead (hand-written in Notion's
+    # "SM Audit" column); the draft prompt treats it as the primary context.
+    # v8 JSONL loads as "".
+    sm_audit: str = ""
 
     # pipeline bookkeeping
     run_id: str = ""

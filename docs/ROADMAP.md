@@ -18,6 +18,8 @@ properly" means in practice.
 - Draft stage (`python -m pipeline.runner draft`): suggested channel plus one Serbian first message per
   qualified lead via the `claude` CLI, written to `Suggested Channel` / `Draft Message` with `Status = Queued`.
   Replaces the manual `draft-outreach` skill for queue / channel / first message. See docs/OUTREACH.md.
+- Hand-made leads: `draft-notion` drafts for Notion pages with `Source = Manual` using the `SM Audit` column
+  (docs/OUTREACH.md).
 - 77 existing Notion pages backfilled with drafts (`scripts/backfill_drafts.py`); 36 Social Links fixed
   (`scripts/fix_social_links.py`).
 - Notion schema cleanup: `Testville` location removed, `Communication` / `Notes` / `Draft Message` /

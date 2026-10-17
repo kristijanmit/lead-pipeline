@@ -24,6 +24,7 @@ from pipeline.schema import read_jsonl, write_jsonl
 from pipeline.scoring import score
 from pipeline.sinks import get_sink
 from pipeline.sinks.csv_sink import CsvSink
+from pipeline.sinks.notion_sink import _select_name, _text, lead_from_page
 
 # contact data first, then the website audit — ROADMAP Phase 2 ordering
 _ENRICH_STEPS = ("contact", "audit")
@@ -407,6 +408,48 @@ def cmd_draft(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_draft_notion(args: argparse.Namespace) -> int:
+    """Draft for hand-made Notion pages (Source = Manual, empty Draft Message):
+    the page is the input, so no run dir. Dry run unless --yes; never overwrites
+    a draft; Status -> Queued only from "Not started"."""
+    config = load_config(args.config)
+    sink = get_sink("notion", config)
+    outreach, draft_cfg = config["outreach"], config["draft"]
+    examples = load_examples(outreach["examples_path"])
+    country = config["collect"].get("country", "")
+
+    pages = sink.query_undrafted_manual(args.limit)
+    drafted = failed = no_contact = 0
+    for page in pages:
+        lead = lead_from_page(page, country=country)
+        out = draft_lead(lead, outreach, draft_cfg, variant=drafted + failed, examples=examples)
+        if not out.draft_message:
+            if out.errors != lead.errors:
+                failed += 1
+                print(f"  failed: {lead.company}: {out.errors[-1]}")
+            else:
+                no_contact += 1
+                print(f"  no contact data (add an Instagram link, phone or email): {lead.company}")
+            continue
+        drafted += 1
+        print(f"  {'write' if args.yes else 'would write'}: {lead.company} -> {out.suggested_channel}")
+        print(f"    {out.draft_message}")
+        if out.draft_notes:
+            print(f"    verify before sending: {out.draft_notes}")
+        if args.yes:
+            update = {
+                "Suggested Channel": {"select": {"name": out.suggested_channel}},
+                "Draft Message": _text(out.draft_message[:2000]),
+            }
+            if _select_name(page["properties"].get("Status")) == "Not started":
+                update["Status"] = {"select": {"name": "Queued"}}
+            sink.update_page(page["id"], update)
+    print(f"{drafted} drafted, {failed} failed, {no_contact} without contact data")
+    if drafted and not args.yes:
+        print("dry run — pass --yes to write to Notion")
+    return 0
+
+
 def cmd_sync(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     sink = get_sink(args.sink, config)
@@ -553,6 +596,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="also draft leads already pushed to Notion (to backfill existing pages)",
     )
     draft_cmd.set_defaults(func=cmd_draft)
+
+    dn_cmd = sub.add_parser(
+        "draft-notion",
+        help="draft for hand-made Notion pages (Source = Manual, empty Draft Message)",
+    )
+    dn_cmd.add_argument("--limit", type=int, help="draft at most N pages")
+    dn_cmd.add_argument("--yes", action="store_true", help="write to Notion (default: dry run)")
+    dn_cmd.set_defaults(func=cmd_draft_notion)
 
     sync_cmd = sub.add_parser(
         "sync", help="push scored leads to a sink, deduped via the local cache"

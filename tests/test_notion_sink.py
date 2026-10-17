@@ -493,3 +493,27 @@ def test_listing_details():
     assert props["Rating"] == {"number": 4.5}
     assert props["Review Count"] == {"number": 34}
     assert props["Profile URL"] == {"url": "https://maps.google.com/?cid=1"}
+
+
+def _manual_page():
+    def rt(s):
+        return {"rich_text": [{"plain_text": s}]}
+    return {"id": "p1", "properties": {
+        "Company": {"title": [{"plain_text": "Salon Mira"}]},
+        "Industry": {"select": {"name": "hairdresser"}},
+        "Location": {"select": {"name": "Novi Sad"}},
+        "Social Links": {"rich_text": [{"plain_text": "Instagram", "href": "https://instagram.com/mira"}]},
+        "SM Audit": rt("posts daily, no booking link"),
+        "Status": {"select": {"name": "Not started"}},
+    }}
+
+
+def test_lead_from_manual_page_and_sm_audit_roundtrip():
+    from pipeline.sinks.notion_sink import lead_from_page, to_notion_properties
+
+    lead = lead_from_page(_manual_page(), country="Serbia")
+    assert (lead.company, lead.domain, lead.industry, lead.location) == ("Salon Mira", "", "hairdresser", "Novi Sad")
+    assert lead.social_links == {"instagram": "https://instagram.com/mira"}
+    assert lead.sm_audit == "posts daily, no booking link" and lead.lead_type == "new_build" and lead.qualified
+    props = to_notion_properties(lead)
+    assert props["SM Audit"]["rich_text"][0]["text"]["content"] == "posts daily, no booking link"
