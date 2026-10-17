@@ -134,12 +134,26 @@ def test_location_maps_to_select_and_is_omitted_when_empty():
     assert "Location" not in to_notion_properties(_lead())
 
 
-def test_social_links_render_as_markdown_lines():
+def test_social_links_render_as_clickable_rich_text():
     props = to_notion_properties(
         _lead(social_links={"linkedin": "https://l.example", "facebook": "https://f.example"})
     )
-    text = props["Social Links"]["rich_text"][0]["text"]["content"]
-    assert text == "[Facebook](https://f.example)\n[Linkedin](https://l.example)"
+    items = props["Social Links"]["rich_text"]
+    assert [i["text"]["content"] for i in items] == ["Facebook", "\n", "Linkedin"]
+    assert items[0]["text"]["link"] == {"url": "https://f.example"}
+    assert items[2]["text"]["link"] == {"url": "https://l.example"}
+
+
+def test_outreach_fields_and_queued_status():
+    queued = to_notion_properties(
+        _lead(qualified=True, suggested_channel="Instagram", draft_message="Dobar dan")
+    )
+    assert queued["Status"] == {"select": {"name": "Queued"}}
+    assert queued["Suggested Channel"] == {"select": {"name": "Instagram"}}
+    assert queued["Draft Message"]["rich_text"][0]["text"]["content"] == "Dobar dan"
+    plain = to_notion_properties(_lead(qualified=True))
+    assert plain["Status"] == {"select": {"name": "Not started"}}
+    assert "Draft Message" not in plain and "Suggested Channel" not in plain
 
 
 def test_scores_lighthouse_and_status():
@@ -446,7 +460,8 @@ def test_refresh_cache_rebuilds_snapshots_for_email_matching(tmp_path):
                                 "Phone": {"phone_number": "021 3822824"},
                                 "Social Links": {
                                     "rich_text": [
-                                        {"plain_text": "[Facebook](https://facebook.com/mirkovic)"}
+                                        {"plain_text": "Facebook", "href": "https://facebook.com/mirkovic"},
+                                        {"plain_text": "\n[Instagram](https://instagram.com/mirkovic)"},
                                     ]
                                 },
                             },
@@ -464,7 +479,10 @@ def test_refresh_cache_rebuilds_snapshots_for_email_matching(tmp_path):
         "dentalcentar.mirkovic@gmail.com",
     ]
     assert snapshot["phones"] == ["021 3822824"]
-    assert snapshot["socials"] == {"facebook": "https://facebook.com/mirkovic"}
+    assert snapshot["socials"] == {
+        "facebook": "https://facebook.com/mirkovic",
+        "instagram": "https://instagram.com/mirkovic",  # older Markdown-text pages still parse
+    }
 
 
 def test_listing_details():

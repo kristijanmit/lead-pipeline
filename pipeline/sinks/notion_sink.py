@@ -59,6 +59,17 @@ def _text(content: str) -> dict:
     return {"rich_text": [{"text": {"content": content}}]}
 
 
+def social_links_rich_text(social_links: dict[str, str]) -> dict:
+    """One clickable link per platform, newline-separated. Notion text
+    properties do not render Markdown, so links must be rich_text link objects."""
+    items: list[dict] = []
+    for i, (platform, url) in enumerate(sorted(social_links.items())):
+        if i:
+            items.append({"text": {"content": "\n"}})
+        items.append({"text": {"content": platform.capitalize(), "link": {"url": url}}})
+    return {"rich_text": items}
+
+
 def to_notion_properties(lead: Lead) -> dict:
     """The single §6.1 mapping point. None/empty fields are omitted rather
     than sent as blanks — a checkbox can't say "unknown", so HTTPS/Mobile
@@ -69,7 +80,7 @@ def to_notion_properties(lead: Lead) -> dict:
         "Company": {"title": [{"text": {"content": lead.company}}]},
         "Industry": {"select": {"name": lead.industry}},
         "Source": {"select": {"name": _SOURCE_OPTIONS.get(lead.source, lead.source)}},
-        "Status": {"select": {"name": "Not started"}},
+        "Status": {"select": {"name": "Queued" if lead.qualified and lead.draft_message else "Not started"}},
         "Qualified": {"checkbox": lead.qualified},
     }
     if lead.location:
@@ -85,11 +96,11 @@ def to_notion_properties(lead: Lead) -> dict:
         if lead.contact_phones[1:]:
             props["Additional Phones"] = _text(", ".join(lead.contact_phones[1:]))
     if lead.social_links:
-        lines = [
-            f"[{platform.capitalize()}]({url})"
-            for platform, url in sorted(lead.social_links.items())
-        ]
-        props["Social Links"] = _text("\n".join(lines))
+        props["Social Links"] = social_links_rich_text(lead.social_links)
+    if lead.suggested_channel:
+        props["Suggested Channel"] = {"select": {"name": lead.suggested_channel}}
+    if lead.draft_message:
+        props["Draft Message"] = _text(lead.draft_message[:2000])
     if lead.address:
         props["Address"] = _text(lead.address)
     if lead.rating is not None:
@@ -189,6 +200,19 @@ def _rich_text(prop: dict | None) -> str:
     return "".join(t.get("plain_text", "") for t in prop.get("rich_text", []))
 
 
+def _socials_from_rich_text(prop: dict | None) -> dict[str, str]:
+    """Read clickable links (current format) and Markdown text (older pages)."""
+    socials: dict[str, str] = {}
+    for item in (prop or {}).get("rich_text", []):
+        href = item.get("href") or (item.get("text", {}).get("link") or {}).get("url")
+        name = item.get("plain_text") or item.get("text", {}).get("content", "")
+        if href and name.strip():
+            socials[name.strip().lower()] = href
+    for platform, url in re.findall(r"\\?\[(\w+)\\?\]\(([^)]+)\)", _rich_text(prop)):
+        socials.setdefault(platform.lower(), url)
+    return socials
+
+
 def _snapshot_from_properties(props: dict) -> dict:
     """Reverse of to_notion_properties() for the fields the cache needs —
     used by refresh_cache() to rebuild snapshots from what's live in Notion."""
@@ -204,10 +228,7 @@ def _snapshot_from_properties(props: dict) -> dict:
         phones.append(primary_phone)
     phones += [p.strip() for p in _rich_text(props.get("Additional Phones")).split(",") if p.strip()]
 
-    socials = {
-        platform.lower(): url
-        for platform, url in re.findall(r"\[(\w+)\]\(([^)]+)\)", _rich_text(props.get("Social Links")))
-    }
+    socials = _socials_from_rich_text(props.get("Social Links"))
 
     title = (props.get("Company") or {}).get("title") or []
     company = "".join(t.get("plain_text", "") for t in title).strip()

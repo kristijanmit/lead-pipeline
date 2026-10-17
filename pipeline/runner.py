@@ -18,6 +18,7 @@ from pathlib import Path
 from pipeline.collectors import get_collector
 from pipeline.config import ConfigError, load_config
 from pipeline.dedupe import dedupe_leads, lead_key
+from pipeline.drafting import draft_lead, load_examples
 from pipeline.enrichers import apply_enrichers, get_enricher
 from pipeline.schema import read_jsonl, write_jsonl
 from pipeline.scoring import score
@@ -54,6 +55,16 @@ def cmd_collect(args: argparse.Namespace) -> int:
         "input": args.input,
     }
     sources = [s.strip() for s in args.source.split(",") if s.strip()]
+
+    # industry becomes a Notion select option and picks the Serbian niche phrase
+    # in drafts — warn (not fail: raw OSM tags are legitimate) on unmapped ones
+    known = config["outreach"]["industry_labels"]
+    for category in params["categories"]:
+        if category not in known:
+            print(
+                f"warning: category {category!r} has no outreach.industry_labels entry — "
+                "drafts will use the raw key; add it to config.yaml"
+            )
 
     # instantiate all collectors up front so a typo'd source name or missing
     # binary fails before any collection effort is spent
@@ -330,6 +341,72 @@ def cmd_score(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_draft(args: argparse.Namespace) -> int:
+    """Suggest a channel and draft ONE first message per qualified, scored lead
+    that has none yet (docs/OUTREACH.md). Drafts are for human review — nothing
+    is sent. Re-runs skip leads that already have a draft, so a failed lead is
+    retried and the rest are not."""
+    config = load_config(args.config)
+    run_dir = RUNS_DIR / args.run
+    scored_path = run_dir / "scored.jsonl"
+    if not scored_path.exists():
+        raise ValueError(f"no scored.jsonl in {run_dir} — run score first")
+    leads = read_jsonl(scored_path)
+    started_at = _now_iso()
+
+    outreach, draft_cfg = config["outreach"], config["draft"]
+    examples = load_examples(outreach["examples_path"])
+    drafted = failed = skipped = no_contact = 0
+    results = []
+    for lead in leads:
+        statuses = ("scored", "synced") if args.include_synced else ("scored",)
+        eligible = lead.status in statuses and lead.qualified and not lead.draft_message
+        if not eligible or (args.limit is not None and drafted + failed >= args.limit):
+            skipped += 1
+            results.append(lead)
+            continue
+        out = draft_lead(lead, outreach, draft_cfg, variant=drafted + failed, examples=examples)
+        if out.draft_message:
+            drafted += 1
+        elif out.errors != lead.errors:
+            failed += 1
+        else:
+            no_contact += 1
+        results.append(out)
+        write_jsonl(scored_path, results + leads[len(results):])  # incremental: a crash keeps finished drafts
+
+    write_jsonl(scored_path, results)
+    CsvSink(run_dir / "scored.csv").write(results)
+
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {"run_id": args.run}
+    manifest["stage"] = "draft"
+    manifest["draft"] = {
+        "config_snapshot": {"draft": draft_cfg, "limit": args.limit},
+        "counts": {
+            "input": len(leads), "drafted": drafted, "failed": failed,
+            "no_contact_data": no_contact, "skipped": skipped,
+        },
+        "started_at": started_at,
+        "finished_at": _now_iso(),
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    print(
+        f"run {args.run}: {drafted} drafted, {failed} failed, "
+        f"{no_contact} without contact data, {skipped} skipped"
+    )
+    for lead in results:
+        if lead.errors and lead.errors[-1].startswith("draft:") and not lead.draft_message:
+            print(f"  failed: {lead.company}: {lead.errors[-1]}")
+        elif lead.draft_notes:
+            print(f"  verify before sending: {lead.company}: {lead.draft_notes}")
+    print(f"  {scored_path} (+ scored.csv, manifest.json)")
+    return 0
+
+
 def cmd_sync(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     sink = get_sink(args.sink, config)
@@ -407,9 +484,10 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    """collect -> enrich -> score -> sync, chained via the shared args
+    """collect -> enrich -> score -> draft -> sync, chained via the shared args
     namespace (collect stamps args.run for the later stages to read)."""
-    for stage in (cmd_collect, cmd_enrich, cmd_score, cmd_sync):
+    args.include_synced = False
+    for stage in (cmd_collect, cmd_enrich, cmd_score, cmd_draft, cmd_sync):
         code = stage(args)
         if code != 0:
             return code
@@ -461,6 +539,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--limit", type=int, help="score only the first N leads — dry-run"
     )
     score_cmd.set_defaults(func=cmd_score)
+
+    draft_cmd = sub.add_parser(
+        "draft", help="draft outreach copy for qualified scored leads (via the claude CLI)"
+    )
+    draft_cmd.add_argument("--run", required=True, help="run id under data/runs/")
+    draft_cmd.add_argument(
+        "--limit", type=int, help="draft at most N leads — dry-run"
+    )
+    draft_cmd.add_argument(
+        "--include-synced",
+        action="store_true",
+        help="also draft leads already pushed to Notion (to backfill existing pages)",
+    )
+    draft_cmd.set_defaults(func=cmd_draft)
 
     sync_cmd = sub.add_parser(
         "sync", help="push scored leads to a sink, deduped via the local cache"

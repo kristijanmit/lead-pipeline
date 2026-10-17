@@ -119,3 +119,17 @@ def test_merge_keeps_collector_values_first():
 def test_lead_without_domain_passes_through_unchanged():
     lead = Lead(company="No Web Bistro", domain="", source="osm")
     assert ContactEnricher(CONFIG).enrich(lead) is lead
+
+
+def test_extract_site_text_title_meta_headings_deduped_and_capped():
+    from pipeline.enrichers.contact import extract_site_text
+
+    html = (
+        "<html><head><title>Mira Salon</title>"
+        '<meta name="description" content="Frizerski salon od 1996">'
+        "</head><body><h1>Mira Salon</h1><h2>Šišanje</h2><h3>Farbanje</h3></body></html>"
+    )
+    assert extract_site_text(html).split("\n") == [
+        "Mira Salon", "Frizerski salon od 1996", "Šišanje", "Farbanje",
+    ]
+    assert len(extract_site_text("<h1>" + "x" * 5000 + "</h1>")) == 1500

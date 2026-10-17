@@ -45,6 +45,31 @@ _DATE_LIKE_RE = re.compile(
 )
 
 
+_SITE_TEXT_MAX = 1500
+
+
+def extract_site_text(html: str) -> str:
+    """Short homepage summary for the drafting prompt: title, meta description,
+    then h1-h3 headings, deduped, capped at _SITE_TEXT_MAX chars. Pure."""
+    soup = BeautifulSoup(html, "html.parser")
+    parts: list[str] = []
+    if soup.title and soup.title.string:
+        parts.append(soup.title.string)
+    meta = soup.find("meta", attrs={"name": "description"})
+    if meta and meta.get("content"):
+        parts.append(str(meta["content"]))
+    for tag in soup.find_all(["h1", "h2", "h3"]):
+        parts.append(tag.get_text(" ", strip=True))
+    seen: set[str] = set()
+    lines: list[str] = []
+    for part in parts:
+        line = " ".join(part.split())
+        if line and line.lower() not in seen:
+            seen.add(line.lower())
+            lines.append(line)
+    return "\n".join(lines)[:_SITE_TEXT_MAX]
+
+
 _SOCIAL_SHARE_MARKERS = ("/sharer", "/share", "/intent", "share.php", "/plugins/")
 
 _CONTACT_LINK_MARKERS = ("contact", "kontakt")
@@ -190,6 +215,7 @@ class ContactEnricher:
             contact_emails=_merge_unique(lead.contact_emails, emails, str.lower),
             contact_phones=_merge_unique(lead.contact_phones, phones, phone_key),
             social_links={**socials, **lead.social_links},
+            site_text=lead.site_text or extract_site_text(html),
             errors=errors,
         )
 

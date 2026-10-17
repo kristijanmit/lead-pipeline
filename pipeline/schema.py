@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Iterable
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 SCORING_VERSION = 3
 
 
@@ -63,6 +63,17 @@ class Lead:
     # pitch implication). Never set at collection/enrichment time. v3 JSONL loads
     # as None via the default — re-running score() fills it in (docs/SCORING.md §8).
     qualified: bool = False  # industry + country filters passed AND reachability_score > 0
+
+    # outreach (v8) — filled by the draft stage, empty until then. suggested_channel
+    # is a Notion select option ("Instagram" | "Facebook" | "Viber/Whatsapp" | "Email" |
+    # "Call"); draft_message is ONE message for that channel; draft_notes is a
+    # "verify before sending" note for the human. site_text is a short homepage
+    # summary captured by the contact enricher so drafting never re-fetches.
+    # v7 JSONL loads with the defaults.
+    suggested_channel: str = ""
+    draft_message: str = ""
+    draft_notes: str = ""
+    site_text: str = ""
 
     # pipeline bookkeeping
     run_id: str = ""

@@ -43,6 +43,29 @@ DEFAULTS: dict = {
             "timeout_s": 120,
         },
     },
+    "draft": {
+        "model": "haiku",
+        "timeout_s": 120,
+    },
+    # Outreach copy rules (docs/OUTREACH.md). Link, named references and price are
+    # OFF until the operator approves them here — the drafter never invents them.
+    "outreach": {
+        "link_in_first_message": False,
+        "site_link": "onixweblab.com",
+        "named_references": [],
+        "price_from": "",
+        "signature": "Kristijan, ONIX Web Lab, onixweblab.com",
+        "examples_path": "config/outreach.md",
+        # industry key (the --categories value) -> Serbian niche phrase for prompts
+        "industry_labels": {
+            "dentist": "stomatološke ordinacije",
+            "clinic": "privatne klinike",
+            "hairdresser": "frizerske salone",
+            "beauty": "salone lepote",
+            "restaurant": "restorane",
+            "stamparija": "štamparije",
+        },
+    },
     "notion": {
         "database_id": "",
         "api_version": "2022-06-28",
@@ -148,6 +171,29 @@ def _validate(config: dict, path: Path) -> None:
         raise ConfigError(f"{path}: enrich.lighthouse.binary must be a non-empty string")
     if not isinstance(lighthouse.get("timeout_s"), int) or lighthouse["timeout_s"] <= 0:
         raise ConfigError(f"{path}: enrich.lighthouse.timeout_s must be a positive integer")
+
+    draft = config["draft"]
+    if not isinstance(draft.get("model"), str) or not draft["model"]:
+        raise ConfigError(f"{path}: draft.model must be a non-empty string")
+    if not isinstance(draft.get("timeout_s"), int) or draft["timeout_s"] <= 0:
+        raise ConfigError(f"{path}: draft.timeout_s must be a positive integer")
+
+    outreach = config["outreach"]
+    for key in ("link_in_first_message",):
+        if not isinstance(outreach.get(key), bool):
+            raise ConfigError(f"{path}: outreach.{key} must be true or false")
+    for key in ("site_link", "price_from", "signature", "examples_path"):
+        if not isinstance(outreach.get(key), str):
+            raise ConfigError(f"{path}: outreach.{key} must be a string")
+    if not isinstance(outreach.get("named_references"), list) or not all(
+        isinstance(r, str) for r in outreach["named_references"]
+    ):
+        raise ConfigError(f"{path}: outreach.named_references must be a list of strings")
+    labels = outreach.get("industry_labels")
+    if not isinstance(labels, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in labels.items()
+    ):
+        raise ConfigError(f"{path}: outreach.industry_labels must map strings to strings")
 
     notion = config["notion"]
     # database_id may legitimately be empty until Phase 4 setup — the sink
