@@ -20,7 +20,18 @@ maps:
   depth: 1           # scroll depth per query. v1.16.2 fails ("target closed", 0 rows) at 2+ — verified 2026-10-08
   language: ""       # e.g. "sr" — empty uses the scraper's default
   extract_emails: true
-  timeout_s: 900
+  timeout_s: 900     # base; a grid run adds timeout_per_cell_s per cell per category
+  # Grid mode: depth > 1 is broken, but the scraper can split an area into cells and search
+  # each one (every cell returns its own top ~20). Used automatically when the run's location
+  # matches a name below; --bbox overrides, --no-grid turns it off. Boxes are approximate:
+  # "minLat,minLon,maxLat,maxLon". Smaller cell = more coverage, more repeats, longer runs.
+  grid_cell_km: 6
+  timeout_per_cell_s: 60   # measured ~28s per cell per query; 2x margin
+  areas:
+    Beograd: "44.70,20.30,44.92,20.62"
+    Belgrade: "44.70,20.30,44.92,20.62"
+    Novi Sad: "45.22,19.74,45.31,19.93"
+    Niš: "43.28,21.84,43.36,21.98"
 
 # Phase 2 — contact scraping + Lighthouse audit.
 # Install the audit engine once: npm install -g lighthouse (see docs/RESOURCES.md).

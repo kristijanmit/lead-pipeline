@@ -25,6 +25,12 @@ properly" means in practice.
 - Notion schema cleanup: `Testville` location removed, `Communication` / `Notes` / `Draft Message` /
   `Last Contacted` documented in the property descriptions.
 - Removed the old lead-scrape and Google Sheets CRM workflow scripts from the separate `agent-swarm` repo.
+- Collect skips leads already in the Notion cache (`--include-seen` to keep them); `discovery` enrich step looks for
+  a website before a lead is called "no website".
+- Maps grid mode (`maps.areas`, `--bbox`, `--no-grid`): ~3x leads per query where depth >1 is broken; collect prints
+  new leads per category.
+- `batch` command (`batches/*.yaml`): sequential runs, resumable. Draft stops cleanly when AI credits / usage limit
+  run out (exit code 3, finished drafts kept, `run` doesn't sync undrafted leads, `batch` pauses and resumes at draft).
 
 **To do (next, in order)**
 1. Read about 10 drafts in Notion, edit the weak ones, and feed the edits back into the prompt / `config/outreach.md`.

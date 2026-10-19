@@ -12,11 +12,13 @@ https://github.com/gosom/google-maps-scraper/releases and put it on PATH
 from __future__ import annotations
 
 import csv
+import math
 import os
 import re
 import shutil
 import subprocess
 import tempfile
+import unicodedata
 from pathlib import Path
 
 from pipeline.collectors.base import register
@@ -35,6 +37,56 @@ def build_queries(location: str, categories: list[str]) -> str:
         f"{category.strip()} in {location} #!#{category.strip()}"
         for category in categories
     )
+
+
+_GRID_ID_RE = re.compile(r"-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def category_from_input_id(input_id: str) -> str:
+    """Grid mode returns "<category>-<uuid>" as input_id (one per cell);
+    plain mode returns the bare category."""
+    return _GRID_ID_RE.sub("", input_id.strip())
+
+
+def parse_bbox(raw: str) -> tuple[float, float, float, float]:
+    """"minLat,minLon,maxLat,maxLon" -> floats, validated. Raises ValueError."""
+    try:
+        min_lat, min_lon, max_lat, max_lon = (float(x) for x in raw.split(","))
+    except ValueError:
+        raise ValueError(
+            f"bbox {raw!r} must be 4 comma-separated numbers: minLat,minLon,maxLat,maxLon"
+        ) from None
+    if not (-90 <= min_lat < max_lat <= 90 and -180 <= min_lon < max_lon <= 180):
+        raise ValueError(f"bbox {raw!r}: min must be below max (lat -90..90, lon -180..180)")
+    return min_lat, min_lon, max_lat, max_lon
+
+
+def grid_cell_count(bbox: tuple[float, float, float, float], cell_km: float) -> int:
+    """Approximate number of cells the scraper will search (it never searches
+    fewer than one). 1 degree of latitude ~ 111 km; longitude shrinks with latitude."""
+    min_lat, min_lon, max_lat, max_lon = bbox
+    height_km = (max_lat - min_lat) * 111.0
+    width_km = (max_lon - min_lon) * 111.0 * math.cos(math.radians((min_lat + max_lat) / 2))
+    return max(1, math.ceil(height_km / cell_km)) * max(1, math.ceil(width_km / cell_km))
+
+
+def _ascii_key(text: str) -> str:
+    text = text.strip().lower().replace("đ", "dj")
+    return re.sub(r"[^a-z0-9]+", " ", unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()).strip()
+
+
+def resolve_bbox(params: dict, areas: dict) -> str | None:
+    """The bounding box for this run: an explicit params["bbox"] wins, then the
+    configured area for the location; params["grid"] is False -> no grid."""
+    if params.get("grid") is False:
+        return None
+    if params.get("bbox"):
+        return params["bbox"]
+    wanted = _ascii_key(params.get("location") or "")
+    for name, bbox in (areas or {}).items():
+        if _ascii_key(str(name)) == wanted:
+            return bbox
+    return None
 
 
 def _split_emails(raw: str) -> list[str]:
@@ -69,7 +121,8 @@ def parse_results_csv(path: str | Path, categories: set[str]) -> list[Lead]:
             if not company:
                 continue
             input_id = (row.get("input_id") or "").strip()
-            industry = input_id if input_id in categories else "other"
+            category = category_from_input_id(input_id)
+            industry = category if category in categories else "other"
             domain, socials = split_website(row.get("website"))
             leads.append(
                 Lead(
@@ -100,6 +153,9 @@ class MapsCollector:
         self.language: str = maps.get("language", "")
         self.extract_emails: bool = maps.get("extract_emails", True)
         self.timeout_s: int = maps.get("timeout_s", 900)
+        self.grid_cell_km: float = maps.get("grid_cell_km", 6)
+        self.timeout_per_cell_s: int = maps.get("timeout_per_cell_s", 60)
+        self.areas: dict = maps.get("areas") or {}
 
     def collect(self, params: dict) -> list[Lead]:
         location = params.get("location")
@@ -132,6 +188,18 @@ class MapsCollector:
                 "-c", "1",  # sparingly: single-threaded, same as Overpass
                 "-exit-on-inactivity", "3m",
             ]
+            timeout_s = self.timeout_s
+            bbox = resolve_bbox(params, self.areas)
+            if bbox:
+                # one search per grid cell: every cell gets its own top results,
+                # so depth 1 still covers a whole city (docs/COLLECTION.md §3)
+                cells = grid_cell_count(parse_bbox(bbox), self.grid_cell_km)
+                cmd += ["-grid-bbox", bbox, "-grid-cell", str(self.grid_cell_km)]
+                timeout_s += cells * len(categories) * self.timeout_per_cell_s
+                print(
+                    f"  maps grid: ~{cells} cells x {len(categories)} categor"
+                    f"{'y' if len(categories) == 1 else 'ies'}, timeout {timeout_s}s"
+                )
             if self.extract_emails:
                 cmd.append("-email")
             if self.language:
@@ -148,12 +216,12 @@ class MapsCollector:
             )
             try:
                 completed = subprocess.run(
-                    cmd, check=True, capture_output=True, timeout=self.timeout_s, env=env
+                    cmd, check=True, capture_output=True, timeout=timeout_s, env=env
                 )
             except subprocess.TimeoutExpired:
                 raise RuntimeError(
-                    f"maps scraper timed out after {self.timeout_s}s — lower "
-                    "maps.depth or query fewer categories per run"
+                    f"maps scraper timed out after {timeout_s}s — query fewer categories "
+                    "per run, use a smaller area or split the work with `batch`"
                 ) from None
             except subprocess.CalledProcessError as e:
                 stderr = (e.stderr or b"").decode(errors="replace").strip()

@@ -1,0 +1,11 @@
+# python -m pipeline.runner batch --file batches/example.yaml [--dry-run] [--pause-s 30]
+# Entry keys mirror `run`: source (required), location, country, input, categories,
+# limit, sink, include_seen. no_draft: true stops after score (draft + sync later).
+runs:
+  - source: maps
+    location: Beograd
+    categories: detailing
+  - source: maps
+    location: Novi Sad
+    categories: "detailing"
+    limit: 20

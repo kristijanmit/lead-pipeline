@@ -31,6 +31,9 @@ All stages run through one CLI entrypoint (`pipeline/runner.py`):
 - `python -m pipeline.runner draft --run <run_id>` — suggested channel + one Serbian first message per qualified lead via `claude -p` (rules in docs/OUTREACH.md); run before sync, since fields are written only when a Notion page is created
 - `python -m pipeline.runner draft-notion [--limit N] [--yes]` — draft for hand-made Notion pages (`Source = Manual`, notes in `SM Audit`); dry run unless `--yes`
 - `python -m pipeline.runner sync --run <run_id> --sink notion` — push to Notion (Phase 4)
+- `python -m pipeline.runner go [--source ...] [--limit N]` — interactive: pick maps/osm/Notion drafts, then prompts (location + comma-separated categories), then runs
+- Maps leads: depth >1 is broken, so a location in `maps.areas` (or `--bbox`) runs in grid mode automatically; `--no-grid` disables — see docs/COLLECTION.md §3
+- `python -m pipeline.runner batch --file batches/<name>.yaml [--dry-run] [--pause-s N]` — runs the listed `run` entries one after another; one failure doesn't stop the rest, but running out of AI credits pauses the batch (state in `data/batches/<name>.json`, re-run to resume at draft)
 - Every command accepts `--limit N` — use it as a dry run before spending rate-limit budget on a full batch
 - `pytest` — run tests
 

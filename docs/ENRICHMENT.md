@@ -13,12 +13,13 @@ class Enricher(Protocol):
 `runner.py enrich --run <run_id>` reads `collected.jsonl`, and for each
 lead not already `status: enriched`, runs `pipeline.enrichers.base
 .apply_enrichers()` against the ordered step list `_ENRICH_STEPS =
-("contact", "audit")` — contact data first, since knowing whether a lead
+("discovery", "contact", "audit")` — discovery first (a found site feeds the other two), then contact data, since knowing whether a lead
 is reachable at all is cheaper to establish than a full website audit,
 and the audit step's notes want to summarize both.
 
 | Enricher | Module | What it adds |
 | --- | --- | --- |
+| `discovery` | `pipeline/enrichers/discovery.py` | for leads with no website: guesses domains from the company name (`name.rs/.com/.co.rs`, hyphenated too) and adopts one only if the page shows a known phone or the full company name in its title/headings; the lead then becomes a normal audited lead |
 | `contact` | `pipeline/enrichers/contact.py` | emails, phone numbers, social links |
 | `audit` | `pipeline/enrichers/audit.py` | HTTPS, CMS, Lighthouse scores, mobile-friendly |
 

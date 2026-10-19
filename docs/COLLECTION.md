@@ -88,9 +88,21 @@ Mechanics:
   in the subprocess environment as a working mirror (verified 2026-07) —
   if a future Playwright-Go release changes its download layout, this is
   the first place to check.
-- `maps.depth` (default 3) and `maps.timeout_s` (default 900) are the
-  knobs to reach for if a run times out — lower `depth` or split the
-  category list across runs rather than raising the timeout indefinitely.
+- **Depth is stuck at 1.** `maps.depth` above 1 fails on this scraper (tested v1.16.2 and v1.18.1 on an
+  arm64 Mac, where the x86 binary runs under Rosetta): the browser crashes ("target closed") and the run
+  returns 0 rows with a clean exit code. One plain query therefore returns about 20 leads.
+- **Grid mode is the way to get more.** The scraper's `-grid-bbox` / `-grid-cell` flags split an area into
+  cells and search each one, so every cell returns its own top ~20. The collector adds them automatically
+  when the run's location matches a name in `maps.areas` (config.yaml, matched ignoring case and
+  diacritics: `nis` finds `Niš`); `--bbox "minLat,minLon,maxLat,maxLon"` (or `bbox:` in a batch entry)
+  overrides and works for any district; `--no-grid` (`grid: false`) goes back to one plain query. Measured
+  once: a 6-cell box gave 60 unique leads vs 20, in 165s (~28s per cell per query). Neighbouring cells
+  overlap and categories overlap each other, so expect well under cells x 20 new leads.
+- **Timeout** is `maps.timeout_s` plus `maps.timeout_per_cell_s` per cell per category; the collector
+  prints the cell count and the resulting timeout. If a run still times out, use fewer categories, a
+  smaller box, or split the work with `batch`.
+- **Per-category counts:** collect prints new leads per category (`new per category: ...`). Dedupe keeps
+  the first occurrence, so a category listed later shows only what the earlier ones missed.
 
 ## 4. Manual collector
 

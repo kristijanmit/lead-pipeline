@@ -15,21 +15,37 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
+import yaml
+
 from pipeline.collectors import get_collector
+from pipeline.collectors.maps import grid_cell_count, parse_bbox, resolve_bbox
 from pipeline.config import ConfigError, load_config
 from pipeline.dedupe import dedupe_leads, lead_key
-from pipeline.drafting import draft_lead, load_examples
+from pipeline.drafting import DraftBudgetError, draft_lead, load_examples
 from pipeline.enrichers import apply_enrichers, get_enricher
 from pipeline.schema import read_jsonl, write_jsonl
 from pipeline.scoring import score
 from pipeline.sinks import get_sink
 from pipeline.sinks.csv_sink import CsvSink
-from pipeline.sinks.notion_sink import _select_name, _text, lead_from_page
+from pipeline.sinks.notion_sink import _select_name, _text, cache_key, lead_from_page, load_seen
 
-# contact data first, then the website audit — ROADMAP Phase 2 ordering
-_ENRICH_STEPS = ("contact", "audit")
+# find a missing website first, then contact data, then the website audit
+_ENRICH_STEPS = ("discovery", "contact", "audit")
 
 RUNS_DIR = Path("data/runs")
+BATCHES_DIR = Path("data/batches")
+
+# exit code for "out of AI credits / usage limit" — `run` stops before sync (draft
+# fields are only written when a Notion page is created) and `batch` pauses
+EXIT_OUT_OF_CREDITS = 3
+
+
+def _out_of_credits_message(detail: str) -> str:
+    return (
+        "drafting stopped: the claude CLI reports no credits / usage limit left "
+        f"({detail}). Finished drafts are saved. Once credits are back, resume with "
+        "`draft --run <run_id>` (skips leads that already have a draft), then `sync`."
+    )
 
 
 def _now_iso() -> str:
@@ -54,6 +70,8 @@ def cmd_collect(args: argparse.Namespace) -> int:
             else config["collect"]["categories"]
         ),
         "input": args.input,
+        "bbox": getattr(args, "bbox", None),
+        "grid": not getattr(args, "no_grid", False),
     }
     sources = [s.strip() for s in args.source.split(",") if s.strip()]
 
@@ -95,7 +113,22 @@ def cmd_collect(args: argparse.Namespace) -> int:
         details = "; ".join(f"{s}: {e}" for s, e in errors_by_source.items())
         raise RuntimeError(f"all collectors failed: {details}")
     deduped = dedupe_leads(raw_leads)
+    # leads already in Notion would be enriched and drafted for nothing —
+    # draft fields are only written when a page is created — so drop them
+    # here, by the same cache sync checks (email matches need enrichment, so
+    # sync still catches those)
+    already_in_notion = 0
+    if not getattr(args, "include_seen", False):
+        seen = load_seen(config["notion"]["cache_path"])
+        fresh = [lead for lead in deduped if cache_key(lead) not in seen]
+        already_in_notion = len(deduped) - len(fresh)
+        deduped = fresh
     leads = deduped if args.limit is None else deduped[: args.limit]
+    # new leads per category — dedupe keeps the first occurrence, so a category
+    # listed later only shows what earlier ones didn't already find
+    new_by_category: dict[str, int] = {}
+    for lead in leads:
+        new_by_category[lead.industry] = new_by_category.get(lead.industry, 0) + 1
     for lead in leads:
         lead.run_id = run_id
         # stamp the market/country the run targeted; a collector that set
@@ -124,6 +157,8 @@ def cmd_collect(args: argparse.Namespace) -> int:
         "counts": {
             "raw": len(raw_leads),
             "raw_by_source": raw_by_source,
+            "already_in_notion": already_in_notion,
+            "new_by_category": new_by_category,
             "after_dedupe": len(deduped),
             "written": len(leads),
         },
@@ -140,9 +175,21 @@ def cmd_collect(args: argparse.Namespace) -> int:
     print(f"run {run_id}: {len(raw_leads)} raw ({source_summary}) -> {len(leads)} written")
     if errors_by_source:
         print(f"  {len(errors_by_source)} source(s) failed: {', '.join(errors_by_source)} (see manifest.json)")
+    if already_in_notion:
+        print(f"  {already_in_notion} already in Notion (cache) — skipped")
+    if len(new_by_category) > 1:
+        breakdown = ", ".join(f"{c} {n}" for c, n in new_by_category.items())
+        print(f"  new per category: {breakdown}")
     print(f"  {with_domain} with a website, {len(leads) - with_domain} without")
     print(f"  {run_dir}/collected.jsonl (+ collected.csv, manifest.json)")
     return 0
+
+
+def _stage_keys(lead) -> set[tuple[str, str]]:
+    """Keys a stage's output lead is matched by on re-runs: its own, plus the
+    company key — discovery gives a lead a domain after collect, so the
+    collected lead (still keyed by company) must find it."""
+    return {lead_key(lead), ("company", lead.company.strip().lower())}
 
 
 def cmd_enrich(args: argparse.Namespace) -> int:
@@ -159,9 +206,10 @@ def cmd_enrich(args: argparse.Namespace) -> int:
     previous = {}
     if enriched_path.exists():
         previous = {
-            lead_key(lead): lead
+            key: lead
             for lead in read_jsonl(enriched_path)
             if lead.status == "enriched"
+            for key in _stage_keys(lead)
         }
 
     # leads with no email/phone/social/website are nothing to outreach
@@ -171,7 +219,9 @@ def cmd_enrich(args: argparse.Namespace) -> int:
     filtered_path = run_dir / "filtered.jsonl"
     previous_filtered = {}
     if filtered_path.exists():
-        previous_filtered = {lead_key(lead): lead for lead in read_jsonl(filtered_path)}
+        previous_filtered = {
+            key: lead for lead in read_jsonl(filtered_path) for key in _stage_keys(lead)
+        }
 
     enrichers = [(name, get_enricher(name, config)) for name in _ENRICH_STEPS]
     delay_s = config["enrich"]["delay_s"]
@@ -182,12 +232,13 @@ def cmd_enrich(args: argparse.Namespace) -> int:
     processed = skipped = already_filtered = failed = filtered_count = 0
     for lead in leads:
         key = lead_key(lead)
-        done = previous.get(key)
+        company_key = ("company", lead.company.strip().lower())
+        done = previous.get(key) or previous.get(company_key)
         if done is not None:
             results.append(done)
             skipped += 1
             continue
-        if key in previous_filtered:
+        if key in previous_filtered or company_key in previous_filtered:
             already_filtered += 1
             continue
         if args.limit is not None and processed >= args.limit:
@@ -200,9 +251,12 @@ def cmd_enrich(args: argparse.Namespace) -> int:
         if enriched.status == "enrich_failed":
             failed += 1
         no_contact = _has_no_contact_info(enriched)
+        site = lead.domain or "no website"
+        if enriched.domain != lead.domain:
+            site = f"site found: {enriched.domain}"
         print(
             f"  [{processed}] {lead.company} "
-            f"({lead.domain or 'no website'}): "
+            f"({site}): "
             f"{'filtered (no contact info)' if no_contact else enriched.status}"
         )
         if no_contact:
@@ -359,6 +413,7 @@ def cmd_draft(args: argparse.Namespace) -> int:
     examples = load_examples(outreach["examples_path"])
     drafted = failed = skipped = no_contact = 0
     results = []
+    out_of_credits = ""
     for lead in leads:
         statuses = ("scored", "synced") if args.include_synced else ("scored",)
         eligible = lead.status in statuses and lead.qualified and not lead.draft_message
@@ -366,7 +421,11 @@ def cmd_draft(args: argparse.Namespace) -> int:
             skipped += 1
             results.append(lead)
             continue
-        out = draft_lead(lead, outreach, draft_cfg, variant=drafted + failed, examples=examples)
+        try:
+            out = draft_lead(lead, outreach, draft_cfg, variant=drafted + failed, examples=examples)
+        except DraftBudgetError as e:
+            out_of_credits = str(e)
+            break
         if out.draft_message:
             drafted += 1
         elif out.errors != lead.errors:
@@ -376,6 +435,7 @@ def cmd_draft(args: argparse.Namespace) -> int:
         results.append(out)
         write_jsonl(scored_path, results + leads[len(results):])  # incremental: a crash keeps finished drafts
 
+    results = results + leads[len(results):]  # untouched leads after an early stop
     write_jsonl(scored_path, results)
     CsvSink(run_dir / "scored.csv").write(results)
 
@@ -388,6 +448,7 @@ def cmd_draft(args: argparse.Namespace) -> int:
             "input": len(leads), "drafted": drafted, "failed": failed,
             "no_contact_data": no_contact, "skipped": skipped,
         },
+        "stopped_out_of_credits": bool(out_of_credits),
         "started_at": started_at,
         "finished_at": _now_iso(),
     }
@@ -405,6 +466,9 @@ def cmd_draft(args: argparse.Namespace) -> int:
         elif lead.draft_notes:
             print(f"  verify before sending: {lead.company}: {lead.draft_notes}")
     print(f"  {scored_path} (+ scored.csv, manifest.json)")
+    if out_of_credits:
+        print(_out_of_credits_message(out_of_credits), file=sys.stderr)
+        return EXIT_OUT_OF_CREDITS
     return 0
 
 
@@ -538,6 +602,188 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+_BATCH_KEYS = {"source", "location", "country", "input", "categories", "limit", "sink", "include_seen", "no_draft", "bbox", "grid"}
+
+
+def _load_batch(path: Path) -> list[dict]:
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    runs = data.get("runs")
+    if not isinstance(runs, list) or not runs:
+        raise ValueError(f"{path}: expected a non-empty `runs:` list")
+    for i, entry in enumerate(runs, 1):
+        if not isinstance(entry, dict) or not entry.get("source"):
+            raise ValueError(f"{path}: run #{i} needs at least `source`")
+        unknown = set(entry) - _BATCH_KEYS
+        if unknown:
+            raise ValueError(f"{path}: run #{i} has unknown keys {sorted(unknown)}")
+    return runs
+
+
+def _run_args(base: argparse.Namespace, entry: dict) -> argparse.Namespace:
+    """Same namespace `run` would get from the CLI, filled from one batch entry."""
+    return argparse.Namespace(
+        config=base.config,
+        source=entry["source"],
+        location=entry.get("location"),
+        country=entry.get("country"),
+        input=entry.get("input"),
+        categories=entry.get("categories"),
+        limit=entry.get("limit"),
+        sink=entry.get("sink", "notion"),
+        include_seen=bool(entry.get("include_seen", False)),
+        bbox=entry.get("bbox"),
+        no_grid=entry.get("grid") is False,
+        refresh_cache=False,
+        include_synced=False,
+        run=None,
+    )
+
+
+def _describe(entry: dict) -> str:
+    return ", ".join(f"{k}={v}" for k, v in entry.items())
+
+
+def cmd_batch(args: argparse.Namespace) -> int:
+    """Run the entries of a batch file one after another (strictly sequential).
+
+    One entry failing doesn't stop the rest. Running out of AI credits does:
+    every later draft would fail the same way, so the batch pauses there and
+    the next invocation resumes that entry at draft (its collect/enrich/score
+    are already done), then carries on. Finished entries are recorded in
+    data/batches/<name>.json and skipped on re-runs."""
+    batch_path = Path(args.file)
+    entries = _load_batch(batch_path)
+    state_path = BATCHES_DIR / f"{batch_path.stem}.json"
+    state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+
+    def key(entry: dict) -> str:
+        return json.dumps(entry, sort_keys=True, ensure_ascii=False)
+
+    def save() -> None:
+        BATCHES_DIR.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    todo = [e for e in entries if state.get(key(e), {}).get("status") != "done"]
+    print(f"batch {batch_path.name}: {len(todo)} to run, {len(entries) - len(todo)} already done")
+    if args.dry_run:
+        for i, entry in enumerate(todo, 1):
+            paused = state.get(key(entry), {}).get("status") == "paused"
+            print(f"  [{i}] {_describe(entry)}" + ("  (resumes at draft)" if paused else ""))
+        return 0
+
+    summary: list[tuple[str, str]] = []
+    problems = 0
+    for i, entry in enumerate(todo, 1):
+        entry_state = state.get(key(entry), {})
+        run_args = _run_args(args, entry)
+        resuming = entry_state.get("status") == "paused" and entry_state.get("run_id")
+        print(f"[{i}/{len(todo)}] {_describe(entry)}" + (f"  (resuming run {entry_state['run_id']})" if resuming else ""))
+        try:
+            if resuming:
+                run_args.run = entry_state["run_id"]
+                stages = (cmd_draft, cmd_sync)
+            else:
+                stages = (cmd_collect, cmd_enrich, cmd_score) + (
+                    () if entry.get("no_draft") else (cmd_draft, cmd_sync)
+                )
+            code = 0
+            for stage in stages:
+                code = stage(run_args)
+                if code != 0:
+                    break
+                print()
+        except (ConfigError, ValueError, RuntimeError) as e:
+            print(f"  error: {e}", file=sys.stderr)
+            state[key(entry)] = {"status": "failed", "run_id": run_args.run, "error": str(e)}
+            save()
+            summary.append((_describe(entry), f"FAILED: {e}"))
+            problems += 1
+            continue
+        if code == EXIT_OUT_OF_CREDITS:
+            state[key(entry)] = {"status": "paused", "run_id": run_args.run}
+            save()
+            summary.append((_describe(entry), "PAUSED: out of AI credits"))
+            problems += 1
+            print(
+                f"batch paused at run {run_args.run}: out of AI credits. Nothing after this entry "
+                f"was started. Re-run `batch --file {args.file}` once credits are back — it resumes "
+                "this entry at draft, then continues.",
+                file=sys.stderr,
+            )
+            break
+        status = "done" if code == 0 else "failed"
+        state[key(entry)] = {"status": status, "run_id": run_args.run}
+        save()
+        summary.append((_describe(entry), f"run {run_args.run}: {status}"))
+        problems += status == "failed"
+        if i < len(todo) and args.pause_s:
+            time.sleep(args.pause_s)  # courtesy between runs (Maps / Notion rate limits)
+
+    print("\nbatch summary:")
+    for desc, result in summary:
+        print(f"  {desc} -> {result}")
+    return 1 if problems else 0
+
+
+def _ask(question: str, default: str = "") -> str:
+    suffix = f" [{default}]" if default else ""
+    while True:
+        answer = input(f"{question}{suffix}: ").strip()
+        if answer or default:
+            return answer or default
+        print("  required — please enter a value")
+
+
+def cmd_go(args: argparse.Namespace) -> int:
+    """Interactive entry point: pick what to run, answer the prompts, run it.
+    Defaults come from config.yaml."""
+    config = load_config(args.config)
+    collect_cfg = config["collect"]
+    source = args.source or _ask(
+        "What to run? maps / osm / notion (draft hand-made Notion pages)", "maps"
+    ).lower()
+
+    if source == "notion":
+        # dry run first; writing needs an explicit yes, same as `draft-notion`
+        base = dict(config=args.config, limit=args.limit, yes=False)
+        code = cmd_draft_notion(argparse.Namespace(**base))
+        if code != 0 or _ask("Write these drafts to Notion? (y/n)", "n").lower() not in ("y", "yes"):
+            return code
+        return cmd_draft_notion(argparse.Namespace(**{**base, "yes": True}))
+
+    if source not in ("maps", "osm"):
+        raise ValueError(f"unknown source {source!r} — choose maps, osm or notion")
+    location = _ask("Scrape location", collect_cfg["location"])
+    raw = _ask("Category/categories (comma-separated)", ",".join(collect_cfg["categories"]))
+    categories = ",".join(c.strip() for c in raw.split(",") if c.strip())
+    print(f"\n  source: {source}\n  location: {location}\n  categories: {categories}")
+    bbox = resolve_bbox({"location": location}, config["maps"]["areas"]) if source == "maps" else None
+    if bbox:
+        cells = grid_cell_count(parse_bbox(bbox), config["maps"]["grid_cell_km"])
+        n = len([c for c in categories.split(",") if c])
+        print(f"  grid: ~{cells} cells x {n} categories (longer run, many more leads)")
+    if _ask("Start? (y/n)", "y").lower() not in ("y", "yes"):
+        print("cancelled")
+        return 0
+    print()
+    return cmd_run(
+        argparse.Namespace(
+            config=args.config,
+            source=source,
+            location=location,
+            country=None,
+            input=None,
+            categories=categories,
+            limit=args.limit,
+            sink="notion",
+            include_seen=False,
+            bbox=None,
+            no_grid=False,
+            refresh_cache=False,
+        )
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m pipeline.runner")
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
@@ -562,6 +808,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     collect.add_argument(
         "--limit", type=int, help="keep only the first N leads — dry-run a batch"
+    )
+    collect.add_argument(
+        "--include-seen",
+        action="store_true",
+        help="keep leads already in the Notion cache (default: skip them after collect)",
+    )
+    collect.add_argument(
+        "--bbox",
+        help='maps grid area "minLat,minLon,maxLat,maxLon" (default: maps.areas entry for --location)',
+    )
+    collect.add_argument(
+        "--no-grid", action="store_true", help="maps: one plain query, no grid (about 20 leads per category)"
     )
     collect.set_defaults(func=cmd_collect)
 
@@ -647,7 +905,38 @@ def build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument(
         "--sink", default="notion", help='sink name, e.g. "notion" (default)'
     )
+    run_cmd.add_argument(
+        "--include-seen",
+        action="store_true",
+        help="keep leads already in the Notion cache (default: skip them after collect)",
+    )
+    run_cmd.add_argument(
+        "--bbox",
+        help='maps grid area "minLat,minLon,maxLat,maxLon" (default: maps.areas entry for --location)',
+    )
+    run_cmd.add_argument(
+        "--no-grid", action="store_true", help="maps: one plain query, no grid (about 20 leads per category)"
+    )
     run_cmd.set_defaults(func=cmd_run, refresh_cache=False)
+
+    go_cmd = sub.add_parser(
+        "go", help="interactive run: prompts for location and categories"
+    )
+    go_cmd.add_argument("--source", help="skip the first prompt: maps, osm or notion")
+    go_cmd.add_argument("--limit", type=int, help="dry-run: cap leads at N")
+    go_cmd.set_defaults(func=cmd_go)
+
+    batch_cmd = sub.add_parser(
+        "batch", help="run the entries of a batches/<name>.yaml file one after another"
+    )
+    batch_cmd.add_argument("--file", required=True, help="batch YAML with a `runs:` list")
+    batch_cmd.add_argument(
+        "--pause-s", type=int, default=30, help="seconds to wait between runs (default 30)"
+    )
+    batch_cmd.add_argument(
+        "--dry-run", action="store_true", help="print the planned runs without executing"
+    )
+    batch_cmd.set_defaults(func=cmd_batch)
 
     return parser
 
@@ -656,6 +945,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
+    except DraftBudgetError as e:  # draft-notion; cmd_draft handles its own
+        print(_out_of_credits_message(str(e)), file=sys.stderr)
+        return EXIT_OUT_OF_CREDITS
     except (ConfigError, ValueError, RuntimeError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

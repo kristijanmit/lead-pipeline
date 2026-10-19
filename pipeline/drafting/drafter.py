@@ -163,6 +163,20 @@ def build_prompt(lead: Lead, channel: str, outreach: dict, variant: int, example
     )
 
 
+class DraftBudgetError(RuntimeError):
+    """The claude CLI refused because credits or the usage limit ran out.
+    Unlike a per-lead failure, every further call would fail the same way, so
+    draft_lead re-raises it and the stage stops instead of burning the batch."""
+
+
+# wording seen from the CLI / API when an account is out of budget; matched
+# loosely on purpose — a false positive only pauses, and drafting resumes later
+_BUDGET_RE = re.compile(
+    r"usage limit|rate limit|credit balance|limit reached|out of credits|quota|insufficient credit",
+    re.IGNORECASE,
+)
+
+
 def _call_claude(prompt: str, model: str, timeout_s: int) -> dict:
     with tempfile.TemporaryDirectory() as cwd:
         proc = subprocess.run(
@@ -180,6 +194,9 @@ def _call_claude(prompt: str, model: str, timeout_s: int) -> dict:
             capture_output=True, text=True, timeout=timeout_s, cwd=cwd,
         )
     if proc.returncode != 0:
+        detail = f"{proc.stderr.strip()} {proc.stdout.strip()}"
+        if _BUDGET_RE.search(detail):
+            raise DraftBudgetError(detail.strip()[:200])
         raise RuntimeError(f"claude exited {proc.returncode}: {proc.stderr.strip()[:200]}")
     out = json.loads(proc.stdout).get("structured_output")
     if not isinstance(out, dict):
@@ -192,7 +209,8 @@ def draft_lead(
 ) -> Lead:
     """Return a new Lead with suggested_channel/draft_message/draft_notes filled.
     No usable contact data -> returned unchanged. A failure lands in Lead.errors instead
-    of raising, so one bad call doesn't halt the batch."""
+    of raising, so one bad call doesn't halt the batch — except DraftBudgetError
+    (out of credits), which propagates."""
     channel = lead.suggested_channel or suggest_channel(lead)
     if not channel:
         return lead  # nothing to send to; the runner counts these, no error recorded
@@ -206,6 +224,8 @@ def draft_lead(
             problems = validate_message(str(raw.get("message", "")), channel)
         if problems:
             raise RuntimeError("; ".join(problems))
+    except DraftBudgetError:
+        raise
     except Exception as e:
         return replace(lead, suggested_channel=channel, errors=[*lead.errors, f"draft: {e}"])
     return replace(

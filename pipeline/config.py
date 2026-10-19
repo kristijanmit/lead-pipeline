@@ -12,6 +12,8 @@ from pathlib import Path
 
 import yaml
 
+from pipeline.collectors.maps import parse_bbox
+
 
 class ConfigError(Exception):
     pass
@@ -34,6 +36,9 @@ DEFAULTS: dict = {
         "language": "",
         "extract_emails": True,
         "timeout_s": 900,
+        "grid_cell_km": 6,
+        "timeout_per_cell_s": 60,
+        "areas": {},
     },
     "enrich": {
         "delay_s": 2,
@@ -161,6 +166,16 @@ def _validate(config: dict, path: Path) -> None:
     for key in ("depth", "timeout_s"):
         if not isinstance(maps.get(key), int) or maps[key] <= 0:
             raise ConfigError(f"{path}: maps.{key} must be a positive integer")
+    for key in ("grid_cell_km", "timeout_per_cell_s"):
+        if not isinstance(maps.get(key), (int, float)) or maps[key] <= 0:
+            raise ConfigError(f"{path}: maps.{key} must be a positive number")
+    if not isinstance(maps.get("areas"), dict):
+        raise ConfigError(f"{path}: maps.areas must be a mapping of location -> bbox")
+    for name, bbox in maps["areas"].items():
+        try:
+            parse_bbox(str(bbox))
+        except ValueError as e:
+            raise ConfigError(f"{path}: maps.areas.{name}: {e}") from None
     enrich = config["enrich"]
     if not isinstance(enrich.get("delay_s"), (int, float)) or enrich["delay_s"] < 0:
         raise ConfigError(f"{path}: enrich.delay_s must be a non-negative number")
