@@ -41,6 +41,9 @@ CATEGORY_TAGS: dict[str, tuple[str, str]] = {
     "optician": ("shop", "optician"),
     "car_repair": ("shop", "car_repair"),
     "car_dealer": ("shop", "car"),
+    "car_wash": ("amenity", "car_wash"),
+    # No dedicated OSM tag for detailing; studios are mapped as car washes.
+    "detailing": ("amenity", "car_wash"),
     "bicycle_shop": ("shop", "bicycle"),
     "travel_agency": ("shop", "travel_agency"),
     "plumber": ("craft", "plumber"),

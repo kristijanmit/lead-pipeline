@@ -64,6 +64,8 @@ DEFAULTS: dict = {
             "beauty": "salone lepote",
             "restaurant": "restorane",
             "stamparija": "štamparije",
+            "detailing": "auto-detailing studije",
+            "car detailing": "auto-detailing studije",
         },
     },
     "notion": {
