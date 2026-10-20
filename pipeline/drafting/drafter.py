@@ -6,7 +6,7 @@ client later is a one-function change. The call runs with skills, MCP servers,
 and settings disabled and from an empty temp dir (no CLAUDE.md pickup) —
 without that the CLI loads ~135k tokens of context per call instead of ~1k.
 
-The copy rules below are the former draft-outreach skill's (docs/OUTREACH.md).
+The copy rules below are the operator's ONIX outreach instructions (docs/OUTREACH.md).
 Hard rules the model can break are re-checked in code by validate_message();
 a violation gets one retry with the problem named, then lands in Lead.errors.
 """
@@ -25,19 +25,13 @@ from pipeline.schema import Lead
 
 MAX_CHARS = 2000
 
-_DESCRIPTORS = (
-    "pravim i unapređujem sajtove za lokalne firme",
-    "bavim se izradom i unapređenjem sajtova za lokalne firme",
-    "pravim sajtove za lokalne firme",
-)
-_QUESTION_STYLES = (
-    'kako Vam danas stižu upiti: telefonom, mejlom ili Viberom?',
-    'da li Vam novi klijenti stižu preko sajta ili većinom preporukom?',
-    'kako klijenti najčešće dođu do Vas: preko interneta ili preko preporuke?',
-)
-
 # phrases the operator never wants, checked case-insensitively
-_BANNED = ("bez obaveze", "besplatno", "ove nedelje", "lighthouse", "seo ")
+_BANNED = (
+    "bez obaveze", "besplatno", "ove nedelje", "lighthouse", "seo ",
+    "nisam uspeo", "nemate sajt", "unapređujem", "zvezdic", "recenzij",
+)
+_RATING_RE = re.compile(r"\bocen\w*", re.IGNORECASE)  # "ocena", "ocene"; not "procena"
+_EMOJI_RE = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF]")
 
 _SCHEMA = {
     "type": "object",
@@ -70,6 +64,18 @@ def validate_message(message: str, channel: str) -> list[str]:
     for phrase in _BANNED:
         if phrase in low:
             problems.append(f"contains banned phrase {phrase.strip()!r}")
+    if _RATING_RE.search(text):
+        problems.append("mentions a rating; never mention Google ratings or reviews")
+    if _EMOJI_RE.search(text):
+        problems.append("contains an emoji")
+    body = low
+    if channel == "Email" and low.startswith("subject:"):
+        body = low.partition("\n")[2].strip()
+    greeting = "dobar dan" if channel in ("Email", "Call") else "pozdrav"
+    if not body.startswith(greeting):
+        problems.append(f"must start with {greeting.capitalize()!r}")
+    if channel != "Call" and "?" not in text:
+        problems.append("must contain one question")
     if channel == "Email" and not low.startswith("subject:"):
         problems.append("email must start with a 'Subject:' line")
     if channel not in ("Email", "Call") and "subject:" in low:
@@ -83,54 +89,68 @@ def load_examples(path: str) -> str:
 
 
 def build_prompt(lead: Lead, channel: str, outreach: dict, variant: int, examples: str) -> str:
+    # `variant` is unused now (one fixed descriptor and a question chosen by business type);
+    # kept so the runner call sites and signature stay stable.
     socials = lead.social_links
     niche = outreach["industry_labels"].get(lead.industry, lead.industry)
-    descriptor = _DESCRIPTORS[0] if lead.lead_type == "new_build" else _DESCRIPTORS[variant % 3]
-    question_style = _QUESTION_STYLES[variant % 3]
+    is_dm = channel not in ("Email", "Call")
+    greeting = "Pozdrav" if is_dm else "Dobar dan, ovde Kristijan"
+    place = "stranicu" if channel == "Facebook" else "profil"
 
     rules = [
-        f'Opening: "Dobar dan, ja sam Kristijan, {descriptor}". Chat channels: first name only, '
-        "no company name for the sender, no signature.",
-        "Then ONE genuine, specific point about the business: its specialty, years in business, "
-        "a client it lists, its tagline, or rating plus review count (only if the rating is strong). "
-        "Real fact only — never a score.",
-        "At most ONE observation about their web presence, in plain words, only if true and useful "
-        '(site slow, not mobile-friendly, very old WordPress, leftover template text). If it comes only '
-        'from the audit data, write "Primetio sam da ...". Never quote Lighthouse numbers or jargon.',
-        f'End with ONE easy open question about how their business works (style hint: "{question_style}"). '
-        'Not "do you want X?". It is a conversation starter, NOT a pitch: no price, no package, '
-        "no call request, no attachment, no offer.",
-        'Serbian, informal-polite "Vi" form, Latin script (even if the company name is Cyrillic), '
-        'correct grammar ("naišao sam na", not "našao sam na"). No exclamation marks.',
-        "Never use: Lighthouse scores, \"bez obaveze\", \"besplatno\", any date/time-relative phrase "
-        "(\"ove nedelje\"), unsupportable superlatives, comparisons with competitors.",
-        "Never invent facts. If data is thin, write a shorter, more general message. If audit data "
-        "conflicts (e.g. CMS vs notes), leave that fact out.",
+        "Structure for a DM: \"Pozdrav, naišao sam na Vaš " + place + " i [concrete praise]. Ja sam Kristijan, "
+        "pravim sajtove za lokalne firme, pa me zanima [one question]?\" 2-3 sentences, the question is "
+        "always last, and only ONE easy question.",
+        f'Greeting: "{greeting}". Describe the sender only as "pravim sajtove za lokalne firme" '
+        '(never "pravim i unapređujem").',
+        "Tone: natural, spoken, warm, modest, curious. Not an ad, not a template. The question sounds like "
+        "genuine interest. No emoji, no exclamation marks, no superlatives, no sales phrases, no price, "
+        "no offer of services.",
+        'Serbian, Latin script with diacritics (even if the company name is Cyrillic). Polite "Vi" form, '
+        'always capitalized: Vaš, Vam, Vas, Vaši. Avoid "Vam" and "Vas" in the same sentence '
+        '("kako Vam novi klijenti najčešće stižu?" or "kako novi klijenti najčešće dolaze do Vas?").',
+        "Praise only what the operator's note or the bio says (photos, videos, before/after, experience, a "
+        "concrete service, a slogan). The operator's own wording sets the strength: \"dobre slike\" stays "
+        '"dobre". If there is no note and nothing concrete, use the plain "sviđa mi se kako radite" and put '
+        '"a concrete detail would be better" in verify_note. If the profile looks weak, praise the service '
+        "from the bio or leave the praise out. Never invent details.",
+        "Never mention the Google rating or review count. Never write that you could not find their site or "
+        "that they have none; a gap in the website is surfaced only through the question. Never criticize the "
+        "design, speed or age of an existing site. Never mention Lighthouse numbers or audit scores.",
+        "Exception, friendly warning: ONLY if the operator's note or the audit notes state a concrete, checkable "
+        'problem (bio link dead, site title "My WordPress", not mobile-friendly), state it as a helpful heads-up '
+        'before the question ("Primetio sam da link u bio-u ne radi, pa sam hteo da Vas upozorim jer verovatno '
+        'gubite klijente koji kliknu."), and tell the sender in verify_note to check it before sending.',
+        f"Question: pick by business type (niche: {niche}). Options: open (\"kako Vam novi klijenti najčešće "
+        'stižu?"); Google (\"da li Vas klijenti pronalaze i preko Google-a, kad traže [concrete service], ili '
+        'uglavnom stižu preko Instagrama i preporuke?\", strongest for services people search for); price and '
+        'term (\"da li Vam se desi da neko pita za cenu ili termin, a da se razgovor u porukama izgubi?\"); '
+        'if the lead already has a website (\"da li Vam sajt trenutno donosi nove klijente ili uglavnom stižu '
+        'preko Instagrama i preporuke?\"); or a specific angle from the bio (photo estimates, coming to the '
+        "address, work with companies, a school and its students). Adapt to the trade: a shop asks about "
+        "online ordering, a self-service wash about prices, locations, packages and companies, a school about "
+        "students. If the business is not detailing, do not copy the detailing template.",
     ]
     if lead.sm_audit:
         rules.append(
-            "The operator's social media audit is first-hand and trusted: take the ONE specific point "
-            "from it (not from ratings), and do not mention that an audit exists."
+            "The operator's note is first-hand and trusted: base the praise on it, and do not mention "
+            "that a note or audit exists."
         )
-    if lead.lead_type == "new_build":
-        rules.append("Angle: no website found. Compliment the rating/specialty, say you could not find a site, ask how inquiries arrive. Do not propose a call.")
-    elif lead.lead_type == "redesign":
-        rules.append("Angle: one true observation plus the workflow question. If the site has no clear fixable problem, do NOT criticize; use their specialty and ask about the inquiry workflow.")
-    else:
-        rules.append("Angle: short and curious; never claim anything about a site that could not be audited.")
 
     if channel == "Email":
         rules.append(
-            'Format: first line "Subject: <short, specific>", blank line, body of 70-110 words, a one-line '
-            'opt-out ("Ako Vam ovo nije od interesa, slobodno mi recite i neću Vam više pisati."), then the '
-            f'signature "{outreach["signature"]}".'
+            'Format: first line "Subject: <short, specific>", blank line, then "Dobar dan, ovde Kristijan, '
+            'pravim sajtove za lokalne firme..." with the one praise point and the question, body of 70-110 '
+            'words, a one-line opt-out ("Ako Vam ovo nije od interesa, slobodno mi recite i neću Vam više '
+            f'pisati."), then the signature "{outreach["signature"]}".'
         )
     elif channel == "Call":
-        rules.append("Format: a short call script: opener, the one specific point, the question.")
-    else:
-        rules.append("Format: 2-4 short conversational sentences.")
+        rules.append(
+            'Format: a short call script: "Dobar dan, ovde Kristijan, pravim sajtove za lokalne firme. '
+            'Video sam [firma], imate li minut za jedno kratko pitanje o tome kako Vam stižu novi klijenti?"'
+        )
     if channel == "Facebook":
-        rules.append('Facebook posts reach a page admin: add a short line asking to pass the message to the owner if someone else reads it.')
+        rules.append('Facebook posts reach a page admin: after the question add a short line asking to pass the message to the owner if someone else reads it.')
     if outreach["link_in_first_message"]:
         rules.append(f'Add one short optional closing line pointing to "{outreach["site_link"]}".')
     else:
@@ -148,16 +168,15 @@ def build_prompt(lead: Lead, channel: str, outreach: dict, variant: int, example
         "LEAD DATA (everything you may use):\n"
         f"- Business: {lead.company}\n- Niche: {niche} (industry key: {lead.industry})\n"
         f"- Location: {lead.location or 'unknown'}\n"
-        f"- Website: {lead.domain or 'none found'}; lead type: {lead.lead_type or 'unclear'}\n"
-        f"- Rating: {lead.rating if lead.rating is not None else 'n/a'} from {lead.review_count or 0} reviews\n"
+        f"- Website: {lead.domain or 'none found'}\n"
         f"- Instagram: {socials.get('instagram', '')}  Facebook: {socials.get('facebook', '')}\n"
-        f"- Audit notes: {lead.audit_notes or 'none'}\n"
-        f"- Operator's social media audit (written by the sender; primary context, base the "
-        f"specific point on it): {lead.sm_audit or 'none'}\n"
+        f"- Audit notes (for a friendly warning only, never for criticism): {lead.audit_notes or 'none'}\n"
+        f"- Operator's note (written by the sender; the only source of praise, base the "
+        f"concrete point on it): {lead.sm_audit or 'none'}\n"
         f"- Homepage text:\n{lead.site_text or '(not available)'}\n\n"
         "RULES:\n" + "\n".join(f"{i}. {r}" for i, r in enumerate(rules, 1)) + "\n\n"
         "Return `message` (the text to send) and `verify_note`: one sentence listing any claim "
-        "taken from the homepage text or audit that the sender should double-check before "
+        "taken from the homepage text, bio or audit that the sender should double-check before "
         "sending, or an empty string if every fact is from the structured data above.\n\n"
         "VOICE REFERENCES (tone and structure only, never copy):\n" + examples
     )

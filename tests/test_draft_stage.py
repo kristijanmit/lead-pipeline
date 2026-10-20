@@ -24,7 +24,7 @@ def _make_run(tmp_path, monkeypatch, leads):
     return run_dir
 
 
-def _fake(monkeypatch, fail_for=(), message="Dobar dan, ja sam Kristijan. Kako Vam stižu upiti?"):
+def _fake(monkeypatch, fail_for=(), message="Pozdrav, ja sam Kristijan. Kako Vam stižu upiti?"):
     calls = []
 
     def fake(prompt, model, timeout_s):
@@ -47,7 +47,7 @@ def test_only_qualified_scored_undrafted_leads_are_drafted(tmp_path, monkeypatch
     _fake(monkeypatch)
     assert main(["draft", "--run", "r"]) == 0
     by = {l.company: l for l in read_jsonl(run_dir / "scored.jsonl")}
-    assert by["A"].draft_message.startswith("Dobar dan")
+    assert by["A"].draft_message.startswith("Pozdrav")
     assert by["A"].suggested_channel == "Instagram"
     assert by["A"].draft_notes == "check the slogan"
     assert by["B"].draft_message == "" and by["C"].draft_message == ""
@@ -92,7 +92,7 @@ def test_limit_caps_calls(tmp_path, monkeypatch):
 
 def test_rule_violation_retries_once_then_succeeds(tmp_path, monkeypatch):
     run_dir = _make_run(tmp_path, monkeypatch, [_lead("A", "a.rs")])
-    answers = iter(["Dobar dan, besplatno!", "Dobar dan. Kako Vam stižu upiti?"])
+    answers = iter(["Pozdrav, besplatno?", "Pozdrav. Kako Vam stižu upiti?"])
     prompts = []
 
     def fake(prompt, model, timeout_s):
@@ -102,7 +102,7 @@ def test_rule_violation_retries_once_then_succeeds(tmp_path, monkeypatch):
     monkeypatch.setattr(drafter, "_call_claude", fake)
     main(["draft", "--run", "r"])
     lead = read_jsonl(run_dir / "scored.jsonl")[0]
-    assert lead.draft_message == "Dobar dan. Kako Vam stižu upiti?"
+    assert lead.draft_message == "Pozdrav. Kako Vam stižu upiti?"
     assert "rejected" in prompts[1] and "banned phrase" in prompts[1]
 
 
@@ -116,11 +116,19 @@ def test_persistent_violation_is_an_error_not_a_draft(tmp_path, monkeypatch):
 
 def test_validate_message_rules():
     v = drafter.validate_message
-    assert v("Dobar dan. Kako Vam stižu upiti?", "Instagram") == []
+    assert v("Pozdrav. Kako Vam stižu upiti?", "Instagram") == []
     assert any("Cyrillic" in p for p in v("Добар дан", "Instagram"))
     assert any("exclamation" in p for p in v("Zdravo!", "Instagram"))
-    assert any("Subject" in p for p in v("Dobar dan", "Email"))
-    assert v("Subject: Pitanje\n\nDobar dan", "Email") == []
+    assert any("Subject" in p for p in v("Dobar dan, pitanje?", "Email"))
+    assert v("Subject: Pitanje\n\nDobar dan, pitanje?", "Email") == []
+    assert any("Dobar dan" in p for p in v("Pozdrav, pitanje?", "Call"))
+    assert any("Pozdrav" in p for p in v("Dobar dan, pitanje?", "Instagram"))
+    assert any("question" in p for p in v("Pozdrav, ja sam Kristijan.", "Instagram"))
+    assert any("rating" in p for p in v("Pozdrav, imate dobru ocenu. Pitanje?", "Instagram"))
+    assert not any("rating" in p for p in v("Pozdrav, procena preko slika. Pitanje?", "Instagram"))
+    assert any("banned" in p for p in v("Pozdrav, nisam uspeo da pronađem sajt. Pitanje?", "Instagram"))
+    assert any("banned" in p for p in v("Pozdrav, 5 zvezdica. Pitanje?", "Instagram"))
+    assert any("emoji" in p for p in v("Pozdrav 🙂 Pitanje?", "Instagram"))
     assert any("subject" in p for p in v("Subject: x\n\nhej", "Viber/Whatsapp"))
     assert any("limit" in p for p in v("a" * 2000, "Instagram"))
 
@@ -131,7 +139,7 @@ def test_prompt_respects_outreach_settings():
     outreach = dict(DEFAULTS["outreach"])
     lead = _lead("Salon Mira", "", industry="hairdresser", lead_type="new_build", site_text="Mira frizer")
     p = drafter.build_prompt(lead, "Instagram", outreach, 0, "EXAMPLES")
-    assert "frizerske salone" in p and "no website found" in p.lower()
+    assert "frizerske salone" in p and "rating" in p.lower()
     assert "Do NOT include any link" in p and "Do NOT name any past client" in p
     assert "EXAMPLES" in p and "Mira frizer" in p
     on = {**outreach, "link_in_first_message": True, "named_references": ["Acme"]}

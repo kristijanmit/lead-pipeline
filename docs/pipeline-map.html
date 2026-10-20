@@ -1,0 +1,671 @@
+<title>Lead Pipeline Map</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one wide flow diagram with a mode switch, then two zoomed-in tools for the draft stage.
+   Tokens: ink/paper neutrals tinted toward teal, one teal accent, amber for "paused or failed". */
+:root {
+  --bg: #f2f5f4; --surface: #ffffff; --ink: #121a19; --muted: #536362; --line: #cfd9d7;
+  --accent: #0f766e; --accent-soft: #d5eeeb; --accent-ink: #ffffff;
+  --warn: #b45309; --warn-soft: #fbe6cc; --bad: #b42318; --bad-soft: #fbdad6; --ok: #166534; --ok-soft: #d8f0df;
+  --seg1: #d5eeeb; --seg2: #e3eaf6; --seg3: #f3e6d2; --seg4: #ebe0f3; --seg5: #dbefd8;
+  --font-display: "Bricolage Grotesque", "Segoe UI", sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0c1312; --surface: #131d1c; --ink: #e5eeec; --muted: #8fa3a0; --line: #263634;
+    --accent: #2dd4bf; --accent-soft: #123530; --accent-ink: #062320;
+    --warn: #f5a524; --warn-soft: #3a2a0d; --bad: #f87171; --bad-soft: #3d1a17; --ok: #4ade80; --ok-soft: #12301c;
+    --seg1: #123530; --seg2: #19263d; --seg3: #382b14; --seg4: #2c1f3a; --seg5: #1a3219;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0c1312; --surface: #131d1c; --ink: #e5eeec; --muted: #8fa3a0; --line: #263634;
+  --accent: #2dd4bf; --accent-soft: #123530; --accent-ink: #062320;
+  --warn: #f5a524; --warn-soft: #3a2a0d; --bad: #f87171; --bad-soft: #3d1a17; --ok: #4ade80; --ok-soft: #12301c;
+  --seg1: #123530; --seg2: #19263d; --seg3: #382b14; --seg4: #2c1f3a; --seg5: #1a3219;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+  padding-block: 28px 48px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 40px; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.15; }
+h1 { font-size: clamp(28px, 5vw, 40px); font-weight: 700; }
+h2 { font-size: 22px; font-weight: 700; }
+h3 { font-size: 16px; font-weight: 700; }
+p { margin: 0; }
+.lede { color: var(--muted); max-width: 62ch; margin-top: 8px; }
+.eyebrow { font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+code, .mono { font-family: var(--font-mono); font-size: 12.5px; }
+section { display: flex; flex-direction: column; gap: 16px; }
+.sec-head p { color: var(--muted); max-width: 66ch; margin-top: 6px; }
+
+/* mode switch */
+.modes { display: flex; flex-wrap: wrap; gap: 8px; }
+.mode { font: 500 13px var(--font-body); color: var(--ink); background: var(--surface); border: 1px solid var(--line);
+  border-radius: 8px; padding: 8px 12px; cursor: pointer; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; }
+.mode small { font: 400 11.5px var(--font-body); color: var(--muted); }
+.mode[aria-checked="true"] { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+button:focus-visible, .node:focus-visible, textarea:focus-visible, input:focus-visible, .seg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* diagram */
+.stage-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+.scroll-x { overflow-x: auto; }
+.flow-svg { display: block; width: 100%; min-width: 760px; height: auto; color: var(--ink); }
+.flow-svg text { font-family: var(--font-body); fill: currentColor; }
+.flow-svg .t-mono { font-family: var(--font-mono); }
+.flow-svg .muted { fill: var(--muted); }
+.node rect { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; transition: fill .25s, stroke .25s; }
+.node { cursor: pointer; }
+.node:hover rect { stroke: var(--accent); }
+.node.sel rect { stroke: var(--accent); stroke-width: 2.5; }
+.node.done rect { fill: var(--accent-soft); stroke: var(--accent); }
+.node.active rect { fill: var(--accent); stroke: var(--accent); }
+.node.active text { fill: var(--accent-ink); }
+.node.warn rect { fill: var(--warn-soft); stroke: var(--warn); stroke-width: 2.5; }
+.node.dim { opacity: .35; }
+.node .n-title { font-weight: 600; font-size: 16px; }
+.chip rect { fill: var(--bg); stroke: var(--line); stroke-width: 1; }
+.chip text { font-size: 12px; }
+.chip.dim { opacity: .35; }
+.wire { fill: none; stroke: var(--line); stroke-width: 1.5; }
+.wire.flow { stroke: var(--muted); stroke-dasharray: 5 6; animation: dash 1.2s linear infinite; }
+@keyframes dash { to { stroke-dashoffset: -11; } }
+.store { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 3 4; }
+.pk circle { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+.pk.bad circle { fill: var(--warn); }
+.pk text { font-size: 11px; font-weight: 600; }
+.pk { transition: opacity .2s; }
+
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 10px; }
+.btn { font: 500 13px var(--font-body); color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.spacer { flex: 1; }
+.speed { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.caption { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); min-height: 64px; }
+.caption .step { font-family: var(--font-mono); font-size: 11px; color: var(--muted); display: block; margin-bottom: 2px; }
+.caption.warn { background: var(--warn-soft); border-color: var(--warn); }
+
+.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 760px) { .two { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.cmd { position: relative; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 56px 10px 12px; overflow-x: auto; white-space: pre; font-family: var(--font-mono); font-size: 12.5px; }
+.cmd button { position: absolute; top: 6px; right: 6px; font: 500 11px var(--font-body); padding: 3px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
+dl.kv { margin: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; font-size: 13.5px; }
+dl.kv dt { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding-top: 2px; }
+dl.kv dd { margin: 0; }
+.flags { display: flex; flex-wrap: wrap; gap: 6px; }
+.flag { font-family: var(--font-mono); font-size: 11.5px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; }
+
+/* channel picker */
+.checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px; }
+.checks label { display: flex; align-items: center; gap: 8px; font-size: 13.5px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; background: var(--bg); }
+.checks input { accent-color: var(--accent); }
+.prio { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; counter-reset: p; }
+.prio li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); font-size: 13.5px; transition: background .2s, border-color .2s; }
+.prio li small { color: var(--muted); font-size: 12px; }
+.prio li.win { background: var(--accent-soft); border-color: var(--accent); font-weight: 600; }
+.prio li.off { opacity: .45; }
+.result { font-size: 14px; }
+.result b { font-family: var(--font-mono); }
+
+/* validator */
+textarea { width: 100%; min-height: 116px; resize: vertical; font: 14px/1.5 var(--font-body); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+select { font: 13px var(--font-body); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+.rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 6px; }
+.rule { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); }
+.rule i { font-style: normal; font-family: var(--font-mono); width: 16px; flex: none; text-align: center; }
+.rule.ok { background: var(--ok-soft); border-color: transparent; }
+.rule.ok i { color: var(--ok); }
+.rule.no { background: var(--bad-soft); border-color: var(--bad); }
+.rule.no i { color: var(--bad); }
+.verdict { font-size: 13.5px; font-weight: 600; }
+.verdict.ok { color: var(--ok); } .verdict.no { color: var(--bad); }
+
+/* anatomy */
+.msg { font-size: 16.5px; line-height: 2; }
+.seg { border-radius: 6px; padding: 3px 5px; cursor: pointer; border: 0; font: inherit; color: inherit; text-align: left; box-decoration-break: clone; -webkit-box-decoration-break: clone; background: var(--seg1); margin-right: 2px; }
+.seg[data-k="2"] { background: var(--seg2); } .seg[data-k="3"] { background: var(--seg3); }
+.seg[data-k="4"] { background: var(--seg4); } .seg[data-k="5"] { background: var(--seg5); }
+.seg[aria-pressed="true"] { outline: 2px solid var(--ink); outline-offset: 1px; }
+.never { display: flex; flex-wrap: wrap; gap: 6px; }
+.never span { font-size: 12.5px; padding: 3px 9px; border-radius: 99px; background: var(--bad-soft); color: var(--ink); border: 1px solid var(--bad); }
+.outcome-svg { display: block; width: 100%; min-width: 640px; height: auto; color: var(--ink); }
+.outcome-svg text { font-family: var(--font-body); fill: currentColor; font-size: 12px; }
+.outcome-svg .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+.outcome-svg .good { fill: var(--ok-soft); stroke: var(--ok); }
+.outcome-svg .stop { fill: var(--warn-soft); stroke: var(--warn); }
+.outcome-svg .err { fill: var(--bad-soft); stroke: var(--bad); }
+.outcome-svg .arr { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.outcome-svg .arr.anim { stroke-dasharray: 5 6; animation: dash 1.2s linear infinite; }
+.outcome-svg .lbl { fill: var(--muted); font-size: 11px; }
+figcaption { color: var(--muted); font-size: 13px; margin-top: 8px; }
+figure { margin: 0; }
+@media (prefers-reduced-motion: reduce) { .wire.flow, .outcome-svg .arr.anim { animation: none; } * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">ONIX · lead pipeline</div>
+    <h1>Lead Pipeline Map</h1>
+    <p class="lede">From a business on a map to a Serbian first message waiting in Notion. Pick how you run it, watch a lead travel through, and click any stage for its command and options.</p>
+  </header>
+
+  <section id="flow" aria-labelledby="flow-h">
+    <div class="sec-head">
+      <h2 id="flow-h">How a lead moves</h2>
+      <p>Four ways in. They all use the same stages; they differ in who chains them and what happens when something goes wrong.</p>
+    </div>
+    <div class="modes" role="radiogroup" aria-label="Way to run the pipeline" id="modes"></div>
+
+    <div class="stage-card">
+      <div class="scroll-x">
+        <svg class="flow-svg" id="flowsvg" viewBox="0 0 1000 330" role="img"
+          aria-label="Sources feed collect, then enrich, score, draft and sync to Notion; every stage reads and writes JSONL files in one run folder.">
+          <defs>
+            <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="currentColor" class="muted"/>
+            </marker>
+          </defs>
+          <!-- source wires -->
+          <g id="wires"></g>
+          <!-- stage wires -->
+          <g id="links"></g>
+          <!-- notion manual route -->
+          <path class="wire" id="w-notion" d="M790 62 L765 113" marker-end="url(#arr)"/>
+          <text x="873" y="40" class="muted t-mono" font-size="11" text-anchor="start" id="lbl-dn"></text>
+          <!-- store -->
+          <rect class="store" x="190" y="268" width="800" height="44" rx="10"/>
+          <text x="590" y="287" text-anchor="middle" font-size="12.5" class="t-mono">data/runs/&lt;run_id&gt;/  ·  JSONL per stage + manifest.json</text>
+          <text x="590" y="304" text-anchor="middle" font-size="11.5" class="muted">JSONL is the source of truth. Re-runs are idempotent: enrich skips enriched leads, sync checks seen_domains.json.</text>
+          <g id="drops"></g>
+          <g id="chips"></g>
+          <g id="nodes"></g>
+          <g class="pk" id="pk" transform="translate(130 78)" opacity="0">
+            <circle r="8"/>
+            <text x="14" y="-12" id="pk-l"></text>
+          </g>
+        </svg>
+      </div>
+      <div class="controls">
+        <button class="btn primary" id="play" type="button">Pause</button>
+        <button class="btn" id="step" type="button">Step</button>
+        <button class="btn" id="restart" type="button">Restart</button>
+        <span class="spacer"></span>
+        <label class="speed">Speed
+          <select id="speed" aria-label="Animation speed"><option value="0.6">Slow</option><option value="1" selected>Normal</option><option value="2">Fast</option></select>
+        </label>
+      </div>
+      <div class="caption" id="caption" aria-live="polite"></div>
+    </div>
+
+    <div class="two">
+      <div class="panel" id="modepanel"></div>
+      <div class="panel" id="detail"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="draft-h">
+    <div class="sec-head">
+      <h2 id="draft-h">Inside the draft stage</h2>
+      <p>Two things decide a draft: which channel it is written for, and whether the text passes the rules before it is saved. Try both.</p>
+    </div>
+    <div class="two">
+      <div class="panel">
+        <h3>Which channel does a lead get?</h3>
+        <div class="checks" id="chk">
+          <label><input type="checkbox" id="c-ig"> Instagram link</label>
+          <label><input type="checkbox" id="c-fb"> Facebook link</label>
+          <label><input type="checkbox" id="c-mob" checked> Serbian mobile</label>
+          <label><input type="checkbox" id="c-mail" checked> Email</label>
+          <label><input type="checkbox" id="c-land"> Landline</label>
+        </div>
+        <ol class="prio" id="prio"></ol>
+        <p class="result" id="chres"></p>
+      </div>
+      <div class="panel">
+        <h3>Does a message pass the check?</h3>
+        <div class="row">
+          <label for="vchan" class="eyebrow">Channel</label>
+          <select id="vchan"><option>Instagram</option><option>Facebook</option><option>Viber/Whatsapp</option><option>Email</option><option>Call</option></select>
+        </div>
+        <textarea id="vtext" aria-label="Message to check" spellcheck="false">Pozdrav, naišao sam na Vaš profil i svidele su mi se slike i snimci radova. Ja sam Kristijan, pravim sajtove za lokalne firme, pa me zanima da li Vas klijenti pronalaze i preko Google-a, ili uglavnom stižu preko Instagrama i preporuke?</textarea>
+        <div class="row">
+          <button class="btn" type="button" id="bad1">Try: rating + "no site"</button>
+          <button class="btn" type="button" id="bad2">Try: wrong greeting</button>
+          <button class="btn" type="button" id="good">Reset</button>
+        </div>
+        <div class="rules" id="rules"></div>
+        <p class="verdict" id="verdict"></p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>What happens after the model answers</h3>
+      <figure>
+        <div class="scroll-x">
+          <svg class="outcome-svg" viewBox="0 0 900 190" role="img" aria-label="The model answer is checked in code. A pass is saved. A fail retries once with the problem named. A second fail goes to the lead's errors list. Running out of credits stops the whole stage.">
+            <defs><marker id="a2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="currentColor" style="color:var(--muted)"/></marker></defs>
+            <rect class="box" x="10" y="60" width="140" height="56" rx="10"/><text x="80" y="85" text-anchor="middle" font-weight="600">claude -p</text><text x="80" y="102" text-anchor="middle" class="lbl">one call per lead</text>
+            <rect class="box" x="230" y="60" width="150" height="56" rx="10"/><text x="305" y="85" text-anchor="middle" font-weight="600">validate_message</text><text x="305" y="102" text-anchor="middle" class="lbl">deterministic rules</text>
+            <rect class="box good" x="470" y="14" width="190" height="52" rx="10"/><text x="565" y="38" text-anchor="middle" font-weight="600">Draft Message saved</text><text x="565" y="54" text-anchor="middle" class="lbl">+ verify note for you</text>
+            <rect class="box" x="470" y="110" width="190" height="52" rx="10"/><text x="565" y="131" text-anchor="middle" font-weight="600">Retry once</text><text x="565" y="148" text-anchor="middle" class="lbl">problem named in the prompt</text>
+            <rect class="box err" x="730" y="110" width="160" height="52" rx="10"/><text x="810" y="131" text-anchor="middle" font-weight="600">Lead.errors</text><text x="810" y="148" text-anchor="middle" class="lbl">batch keeps going</text>
+            <rect class="box stop" x="230" y="146" width="150" height="36" rx="10"/><text x="305" y="169" text-anchor="middle" font-weight="600">out of credits</text>
+            <path class="arr anim" d="M150 88 L228 88" marker-end="url(#a2)"/>
+            <path class="arr anim" d="M380 78 L420 78 L420 40 L468 40" marker-end="url(#a2)"/><text x="424" y="62" class="lbl">passes</text>
+            <path class="arr anim" d="M380 98 L420 98 L420 136 L468 136" marker-end="url(#a2)"/><text x="424" y="120" class="lbl">breaks a rule</text>
+            <path class="arr anim" d="M660 136 L728 136" marker-end="url(#a2)"/><text x="664" y="128" class="lbl">fails again</text>
+            <path class="arr" d="M565 110 L565 98 L620 98 L620 66" marker-end="url(#a2)" transform="translate(30 0)"/><text x="660" y="94" class="lbl">passes the retry</text>
+            <path class="arr" d="M80 116 L80 164 L228 164" marker-end="url(#a2)"/><text x="86" y="158" class="lbl">CLI refuses</text>
+            <text x="388" y="178" class="lbl">stage stops, finished drafts are kept, re-run resumes</text>
+          </svg>
+        </div>
+        <figcaption>A rule failure costs one extra call for that lead only. A credit failure would fail every later call the same way, so it stops the stage instead.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section aria-labelledby="anat-h">
+    <div class="sec-head">
+      <h2 id="anat-h">Anatomy of a first message</h2>
+      <p>Click a part to see the rule behind it. Everything here comes from your outreach instructions.</p>
+    </div>
+    <div class="panel">
+      <p class="msg" id="msg"></p>
+      <div id="segnote" class="caption" style="margin-top:0" aria-live="polite"></div>
+      <div>
+        <div class="eyebrow" style="margin-bottom:6px">Never in a first message</div>
+        <div class="never">
+          <span>Google rating or review count</span><span>"nemate sajt" / "nisam uspeo da pronađem"</span><span>design or speed criticism</span><span>Lighthouse numbers</span><span>"pravim i unapređujem"</span><span>price or offer</span><span>emoji and !</span>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (s) { return document.querySelector(s); };
+  var NS = "http://www.w3.org/2000/svg";
+  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function el(tag, attrs, parent) {
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function esc(s) { return String(s).replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); }
+
+  /* ---------- data ---------- */
+  var STAGES = [
+    { id: "collect", title: "Collect", sub: "deduped leads", x: 190,
+      cmd: 'python -m pipeline.runner collect \\\n  --source osm --location "Beograd" --categories "detailing"',
+      does: "Pulls businesses from the chosen source, normalizes each domain, and drops leads already in the Notion cache. Starts a new run folder.",
+      flags: ["--source osm|maps|manual", "--location", "--categories", "--limit N", "--country", "--input file.csv", "--bbox", "--no-grid", "--include-seen"],
+      reads: "Overpass (OSM), gosom Maps scraper, or a manual CSV", writes: "data/runs/<run_id>/ with manifest.json",
+      risk: "Maps is a supplement only. A location listed in maps.areas (or --bbox) runs in grid mode automatically, because depth above 1 is broken. Never run Overpass queries in parallel." },
+    { id: "enrich", title: "Enrich", sub: "contacts · audit", x: 360,
+      cmd: "python -m pipeline.runner enrich --run <run_id>",
+      does: "Finds emails and social links (checking robots.txt first), then audits the website with the local Lighthouse CLI.",
+      flags: ["--run (required)", "--limit N"],
+      reads: "the collected leads", writes: "enriched leads, every email kept in contact_emails",
+      risk: "A missing email, dead site or failed Lighthouse run is recorded in Lead.errors with a status. It never stops the batch. Leads already enriched are skipped." },
+    { id: "score", title: "Score", sub: "qualified or not", x: 530,
+      cmd: "python -m pipeline.runner score --run <run_id>",
+      does: "Applies the weights in config.yaml to rank outreach priority and mark who is qualified. A pure function with no I/O.",
+      flags: ["--run (required)", "--limit N"],
+      reads: "the enriched leads and config.yaml weights", writes: "scored.jsonl (and a CSV view)",
+      risk: "Only qualified leads move on to drafting. Change weights in config.yaml; see docs/SCORING.md before retuning." },
+    { id: "draft", title: "Draft", sub: "channel · message", x: 700,
+      cmd: "python -m pipeline.runner draft --run <run_id>",
+      does: "For each qualified lead without a draft: picks a channel, asks claude -p for one Serbian first message, checks the rules in code.",
+      flags: ["--run (required)", "--limit N", "--include-synced"],
+      reads: "scored leads, your note (SM Audit) if any, config/outreach.md examples", writes: "Suggested Channel, Draft Message, a verify note; Status = Queued",
+      risk: "Run it before sync: draft fields are written only when a Notion page is created. No contact data means no draft (counted as no_contact_data). Out of AI credits stops the stage." },
+    { id: "sync", title: "Sync", sub: "Notion pages", x: 870,
+      cmd: "python -m pipeline.runner sync --run <run_id> --sink notion",
+      does: "Creates Notion pages for new leads only, using a local seen_domains.json cache instead of querying Notion per lead.",
+      flags: ["--run", "--sink notion", "--limit N", "--refresh-cache"],
+      reads: "scored (and drafted) leads", writes: "Notion pages; updates seen_domains.json",
+      risk: "Existing pages are skipped, so they never receive draft fields. Use --limit as a dry run before a full push." }
+  ];
+  var BY = {}; STAGES.forEach(function (s) { BY[s.id] = s; });
+  var CY = 153, NW = 120, NH = 80;
+  function ctr(id) { return [BY[id].x + NW / 2, CY]; }
+  var CHIPS = [
+    { id: "osm", label: "OSM Overpass", y: 60, ctr: [130, 78] },
+    { id: "maps", label: "Google Maps", y: 110, ctr: [130, 128] },
+    { id: "csv", label: "Manual CSV", y: 160, ctr: [130, 178] }
+  ];
+  var NOTION = [790, 46];
+  var MODES = [
+    { id: "stages", name: "Stage by stage", hint: "one command each",
+      cmd: 'python -m pipeline.runner collect --source osm --location "Beograd" --categories "detailing"\npython -m pipeline.runner enrich --run <run_id>\npython -m pipeline.runner score  --run <run_id>\npython -m pipeline.runner draft  --run <run_id>\npython -m pipeline.runner sync   --run <run_id> --sink notion',
+      points: [["You run", "Each stage yourself, passing the same run id."], ["Good for", "Checking output between stages, or re-running one stage after a fix."], ["Tip", "Add --limit N to any command for a cheap dry run."]] },
+    { id: "go", name: "go / run", hint: "chained, interactive",
+      cmd: "python -m pipeline.runner go [--source maps|osm|notion] [--limit N]\n# or non-interactive:\npython -m pipeline.runner run --source osm --location \"Beograd\" --categories \"detailing\"",
+      points: [["You answer", "Source, location, comma-separated categories, then Start? (y/n)."], ["Runs", "collect, enrich, score, draft, sync in one go, sharing one run id."], ["Maps", "A location in maps.areas switches to grid mode on its own. --no-grid turns that off."]] },
+    { id: "batch", name: "batch", hint: "many runs from a file",
+      cmd: "python -m pipeline.runner batch --file batches/<name>.yaml [--dry-run] [--pause-s 30]",
+      points: [["Runs", "Each entry of the file's runs: list, one after another, pausing between them."], ["Failure", "One failing run does not stop the rest."], ["Credits", "Running out of AI credits pauses the batch. State is saved in data/batches/<name>.json; re-run to resume at draft."]] },
+    { id: "notion", name: "Hand-made leads", hint: "draft-notion",
+      cmd: "python -m pipeline.runner draft-notion --limit 1   # dry run\npython -m pipeline.runner draft-notion --yes       # writes",
+      points: [["Input", "Notion pages with Source = Manual, an empty Draft Message, and your notes in SM Audit."], ["Writes", "Suggested Channel and Draft Message. Status becomes Queued only from Not started."], ["Skips", "No run folder, no collect/enrich/score/sync, never overwrites a draft."]] }
+  ];
+
+  /* ---------- static diagram ---------- */
+  var gW = $("#wires"), gL = $("#links"), gD = $("#drops"), gC = $("#chips"), gN = $("#nodes");
+  CHIPS.forEach(function (c) {
+    el("path", { "class": "wire flow", d: "M130 " + c.ctr[1] + " C165 " + c.ctr[1] + " 160 153 188 153", "marker-end": "url(#arr)", "data-chip": c.id }, gW);
+    var g = el("g", { "class": "chip", id: "chip-" + c.id }, gC);
+    el("rect", { x: 10, y: c.y, width: 120, height: 36, rx: 8 }, g);
+    var t = el("text", { x: 70, y: c.y + 23, "text-anchor": "middle" }, g); t.textContent = c.label;
+  });
+  var nChip = el("g", { "class": "chip", id: "chip-notion" }, gC);
+  el("rect", { x: 690, y: 30, width: 200, height: 34, rx: 8 }, nChip);
+  var nt = el("text", { x: 790, y: 51, "text-anchor": "middle" }, nChip); nt.textContent = "Notion · Source = Manual";
+  for (var i = 0; i < STAGES.length - 1; i++) {
+    var a = STAGES[i].x + NW, b = STAGES[i + 1].x;
+    el("path", { "class": "wire", d: "M" + a + " " + CY + " L" + (b - 1) + " " + CY, "marker-end": "url(#arr)", "data-l": STAGES[i].id }, gL);
+  }
+  STAGES.forEach(function (s) {
+    el("path", { "class": "wire", d: "M" + (s.x + NW / 2) + " 228 L" + (s.x + NW / 2) + " 266", "stroke-dasharray": "3 4" }, gD);
+    var g = el("g", { "class": "node", id: "node-" + s.id, tabindex: "0", role: "button", "aria-label": s.title + " stage details" }, gN);
+    el("rect", { x: s.x, y: CY - NH / 2, width: NW, height: NH, rx: 12 }, g);
+    var t1 = el("text", { x: s.x + NW / 2, y: CY - 2, "text-anchor": "middle", "class": "n-title" }, g); t1.textContent = s.title;
+    var t2 = el("text", { x: s.x + NW / 2, y: CY + 20, "text-anchor": "middle", "font-size": 11.5 }, g); t2.textContent = s.sub;
+    g.addEventListener("click", function () { selectStage(s.id); });
+    g.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectStage(s.id); } });
+  });
+  var lt = el("text", { x: 190, y: 250, "font-size": 11.5, "class": "muted" }, gD);
+  lt.textContent = "each stage reads the previous stage's file and writes its own";
+
+  /* ---------- detail panel ---------- */
+  var current = "collect";
+  function selectStage(id) {
+    current = id;
+    STAGES.forEach(function (s) { $("#node-" + s.id).classList.toggle("sel", s.id === id); });
+    var s = BY[id];
+    $("#detail").innerHTML =
+      '<div class="eyebrow">Stage · click another to compare</div><h3>' + esc(s.title) + '</h3>' +
+      '<div class="cmd">' + esc(s.cmd) + '<button type="button" data-copy="' + esc(s.cmd).replace(/"/g, "&quot;") + '">Copy</button></div>' +
+      '<p>' + esc(s.does) + '</p>' +
+      '<div class="flags">' + s.flags.map(function (f) { return '<span class="flag">' + esc(f) + '</span>'; }).join("") + '</div>' +
+      '<dl class="kv"><dt>Reads</dt><dd>' + esc(s.reads) + '</dd><dt>Writes</dt><dd>' + esc(s.writes) + '</dd><dt>Watch for</dt><dd>' + esc(s.risk) + '</dd></dl>';
+  }
+  var mode = MODES[0];
+  function renderModePanel() {
+    $("#modepanel").innerHTML =
+      '<div class="eyebrow">Mode</div><h3>' + esc(mode.name) + '</h3>' +
+      '<div class="cmd">' + esc(mode.cmd) + '<button type="button" data-copy="' + esc(mode.cmd).replace(/"/g, "&quot;") + '">Copy</button></div>' +
+      '<dl class="kv">' + mode.points.map(function (p) { return '<dt>' + esc(p[0]) + '</dt><dd>' + esc(p[1]) + '</dd>'; }).join("") + '</dl>';
+  }
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest && e.target.closest("[data-copy]");
+    if (!b) return;
+    var text = b.getAttribute("data-copy");
+    var done = function (ok) { b.textContent = ok ? "Copied" : "Select"; setTimeout(function () { b.textContent = "Copy"; }, 1400); };
+    try { navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); }); } catch (_) { done(false); }
+  });
+
+  /* ---------- scenarios ---------- */
+  function P(id) { return ctr(id); }
+  function chain(from, cap) {
+    var out = [];
+    ["collect", "enrich", "score", "draft", "sync"].forEach(function (id) { out.push({ to: P(id), node: id, cap: cap[id] }); });
+    return out;
+  }
+  var SCEN = {
+    stages: [{ reset: CHIPS[0].ctr, label: "run 1", id: "osm", cap: "A lead starts as a row from one source. Nothing runs until you type a command." }]
+      .concat(chain(0, {
+        collect: "<b>collect</b>: the lead is normalized, deduped by domain and saved in a new run folder.",
+        enrich: "<b>enrich</b> (you run it next): emails and socials found, website audited with Lighthouse.",
+        score: "<b>score</b>: weights from config.yaml decide if the lead is qualified.",
+        draft: "<b>draft</b>: a channel is picked and one Serbian message is written and checked. Do this before sync.",
+        sync: "<b>sync</b>: a Notion page is created with the draft attached. The domain goes into seen_domains.json."
+      })),
+    go: [{ reset: CHIPS[1].ctr, label: "run 1", id: "maps", cap: "<b>go</b> asks: source, location, categories, then \"Start? (y/n)\". Defaults come from config.yaml." }]
+      .concat(chain(0, {
+        collect: "Starts the chain. Maps locations listed in maps.areas run in grid mode.",
+        enrich: "Same run id is passed along, so nothing to type.",
+        score: "Scoring uses config.yaml weights.",
+        draft: "Drafting is part of the chain, so the page is created with its draft.",
+        sync: "Chain finished: the lead is in Notion. --limit N would have made enrich, score and sync a dry run."
+      })),
+    batch: [{ reset: CHIPS[1].ctr, label: "run 1", id: "maps", cap: "<b>batch</b> reads batches/&lt;name&gt;.yaml and starts the first entry." }]
+      .concat(chain(0, {
+        collect: "Run 1 collects.", enrich: "Run 1 enriches.", score: "Run 1 scores.", draft: "Run 1 drafts.", sync: "Run 1 synced. Pausing (--pause-s) before the next entry."
+      }))
+      .concat([
+        { reset: CHIPS[0].ctr, label: "run 2", id: "osm", cap: "Run 2 starts." },
+        { to: P("collect"), node: "collect", cap: "Run 2 collects." },
+        { to: P("enrich"), node: "enrich", fail: true, cap: "<b>Run 2 fails here.</b> The batch records it and moves on; one failure does not stop the rest.", warn: true },
+        { reset: CHIPS[2].ctr, label: "run 3", id: "csv", cap: "Run 3 starts." },
+        { to: P("collect"), node: "collect", cap: "Run 3 collects." },
+        { to: P("enrich"), node: "enrich", cap: "Run 3 enriches." },
+        { to: P("score"), node: "score", cap: "Run 3 scores." },
+        { to: P("draft"), node: "draft", fail: true, cap: "<b>AI credits ran out during draft.</b> The batch pauses and saves its state in data/batches/&lt;name&gt;.json. Re-running resumes at draft.", warn: true }
+      ]),
+    notion: [{ reset: NOTION, label: "page", id: "notion", cap: "You created a Notion page by hand: Company, Industry, Location, Instagram link, your notes in SM Audit." },
+      { to: P("draft"), node: "draft", cap: "<b>draft-notion</b> reads Manual pages with an empty Draft Message and drafts from your note. It is a dry run unless you pass --yes." },
+      { to: NOTION, node: null, cap: "With --yes the channel and message are written back to the same page. Status becomes Queued only if it was Not started. No run folder is touched." }]
+  };
+
+  /* ---------- animation engine ---------- */
+  var pk = $("#pk"), pkl = $("#pk-l"), caption = $("#caption");
+  var steps = SCEN.stages, idx = 0, pos = CHIPS[0].ctr.slice(), playing = !reduce, busy = false, token = 0, timer = null;
+  function setPos(p) { pos = p.slice(); pk.setAttribute("transform", "translate(" + p[0] + " " + p[1] + ")"); }
+  function clearNodes() {
+    STAGES.forEach(function (s) { $("#node-" + s.id).classList.remove("active", "done", "warn"); });
+  }
+  function dimFor() {
+    var m = mode.id;
+    STAGES.forEach(function (s) { $("#node-" + s.id).classList.toggle("dim", m === "notion" && s.id !== "draft"); });
+    CHIPS.forEach(function (c) { $("#chip-" + c.id).classList.toggle("dim", m === "notion"); });
+    gW.style.opacity = m === "notion" ? 0.25 : 1;
+    $("#chip-notion").classList.toggle("dim", m !== "notion");
+    $("#w-notion").style.opacity = m === "notion" ? 1 : 0.2;
+    $("#lbl-dn").textContent = m === "notion" ? "draft-notion" : "";
+  }
+  function ease(t) { return t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
+  function runStep() {
+    if (busy || idx >= steps.length) return Promise.resolve(false);
+    busy = true;
+    var my = token, s = steps[idx++];
+    var total = steps.length;
+    function arrive() {
+      if (my !== token) return;
+      STAGES.forEach(function (st) { var n = $("#node-" + st.id); if (n.classList.contains("active")) { n.classList.remove("active"); n.classList.add("done"); } });
+      if (s.node) {
+        var n = $("#node-" + s.node);
+        n.classList.remove("done");
+        n.classList.add(s.fail ? "warn" : "active");
+      }
+      if (s.fail) pk.classList.add("bad");
+      caption.classList.toggle("warn", !!s.warn);
+      caption.innerHTML = '<span class="step">Step ' + idx + ' of ' + total + '</span>' + s.cap;
+      busy = false;
+    }
+    if (s.reset) {
+      clearNodes(); pk.classList.remove("bad"); pk.setAttribute("opacity", 1);
+      setPos(s.reset); pkl.textContent = s.label || "";
+      arrive();
+      return Promise.resolve(true);
+    }
+    return new Promise(function (resolve) {
+      var from = pos.slice(), to = s.to, dur = reduce ? 0 : 750 / parseFloat($("#speed").value), t0 = null;
+      function frame(ts) {
+        if (my !== token) { resolve(false); return; }
+        if (t0 === null) t0 = ts;
+        var k = dur === 0 ? 1 : Math.min(1, (ts - t0) / dur), e = ease(k);
+        setPos([from[0] + (to[0] - from[0]) * e, from[1] + (to[1] - from[1]) * e]);
+        if (k < 1) requestAnimationFrame(frame); else { arrive(); resolve(true); }
+      }
+      requestAnimationFrame(frame);
+    });
+  }
+  function loop() {
+    clearTimeout(timer);
+    if (!playing) return;
+    runStep().then(function (ok) {
+      if (!playing) return;
+      if (idx >= steps.length) { playing = false; syncButtons(); return; }
+      timer = setTimeout(loop, 900 / parseFloat($("#speed").value));
+    });
+  }
+  function syncButtons() {
+    $("#play").textContent = playing ? "Pause" : (idx >= steps.length ? "Replay" : "Play");
+  }
+  function restart(autoplay) {
+    token++; busy = false; clearTimeout(timer);
+    idx = 0; clearNodes(); pk.classList.remove("bad"); pk.setAttribute("opacity", 0);
+    caption.classList.remove("warn");
+    caption.innerHTML = '<span class="step">Ready</span>Press Play or Step. Click any stage to read its command and options.';
+    dimFor();
+    playing = autoplay;
+    syncButtons();
+    if (autoplay) timer = setTimeout(loop, 300);
+  }
+  $("#play").addEventListener("click", function () {
+    if (idx >= steps.length) { restart(true); return; }
+    playing = !playing; syncButtons(); if (playing) loop();
+  });
+  $("#step").addEventListener("click", function () {
+    playing = false; syncButtons(); clearTimeout(timer);
+    if (idx >= steps.length) { restart(false); }
+    runStep().then(function () { syncButtons(); });
+  });
+  $("#restart").addEventListener("click", function () { restart(true); });
+
+  /* ---------- modes ---------- */
+  var mBox = $("#modes");
+  MODES.forEach(function (m) {
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "mode"; b.setAttribute("role", "radio");
+    b.setAttribute("aria-checked", m.id === mode.id ? "true" : "false");
+    b.innerHTML = esc(m.name) + "<small>" + esc(m.hint) + "</small>";
+    b.addEventListener("click", function () {
+      mode = m; steps = SCEN[m.id];
+      Array.prototype.forEach.call(mBox.children, function (c) { c.setAttribute("aria-checked", c === b ? "true" : "false"); });
+      renderModePanel();
+      restart(!reduce);
+      if (m.id === "notion") selectStage("draft");
+    });
+    mBox.appendChild(b);
+  });
+  renderModePanel(); selectStage("collect"); restart(!reduce);
+
+  /* ---------- channel picker (mirror of pipeline/drafting/channel.py rules) ---------- */
+  var PRIO = [["Instagram", "Instagram link"], ["Facebook", "Facebook link"], ["Viber/Whatsapp", "Serbian mobile, and no Instagram or Facebook"], ["Email", "a usable email"], ["Call", "landline only"]];
+  var prioEl = $("#prio");
+  PRIO.forEach(function (p, i) {
+    var li = document.createElement("li"); li.id = "pr" + i;
+    li.innerHTML = "<span>" + (i + 1) + ". " + p[0] + "</span><small>" + p[1] + "</small>";
+    prioEl.appendChild(li);
+  });
+  function pick() {
+    var ig = $("#c-ig").checked, fb = $("#c-fb").checked, mob = $("#c-mob").checked, mail = $("#c-mail").checked, land = $("#c-land").checked;
+    if (ig) return 0;
+    if (fb) return 1;
+    if (mob) return 2;
+    if (mail) return 3;
+    if (land) return 4;
+    return -1;
+  }
+  function renderChannel() {
+    var w = pick();
+    PRIO.forEach(function (p, i) { var li = $("#pr" + i); li.classList.toggle("win", i === w); li.classList.toggle("off", w !== -1 && i !== w); });
+    $("#chres").innerHTML = w === -1
+      ? 'No usable contact: <b>no draft</b>, counted as <b>no_contact_data</b> in the manifest. No error is recorded.'
+      : 'Suggested Channel: <b>' + PRIO[w][0] + '</b>. The message is written for this channel' + (w === 3 ? ', with a Subject line and an opt-out.' : w === 1 ? ', with a line asking to pass it to the owner.' : '.');
+    var vc = $("#vchan"); if (w !== -1 && document.activeElement !== vc) { vc.value = PRIO[w][0]; renderRules(); }
+  }
+  ["c-ig", "c-fb", "c-mob", "c-mail", "c-land"].forEach(function (id) { $("#" + id).addEventListener("change", renderChannel); });
+
+  /* ---------- validator (mirror of validate_message in drafter.py) ---------- */
+  var BANNED = ["bez obaveze", "besplatno", "ove nedelje", "lighthouse", "seo ", "nisam uspeo", "nemate sajt", "unapređujem", "zvezdic", "recenzij"];
+  var RULES = [
+    ["filled", "Not empty"],
+    ["length", "Under 2000 characters"],
+    ["latin", "Latin script, no Cyrillic"],
+    ["bang", "No exclamation mark"],
+    ["banned", "No banned phrases (besplatno, nisam uspeo, nemate sajt…)"],
+    ["rating", "No Google rating or reviews"],
+    ["emoji", "No emoji"],
+    ["greet", "Right greeting for the channel"],
+    ["q", "Contains the question"],
+    ["subj", "Subject line only on email"]
+  ];
+  function check(text, ch) {
+    var bad = {}, why = {};
+    function no(k, m) { bad[k] = true; why[k] = m; }
+    var t = text.trim();
+    if (!t) { no("filled", "empty"); return { bad: bad, why: why }; }
+    if (t.length >= 2000) no("length", t.length + " chars");
+    if (/[Ѐ-ӿ]/.test(t)) no("latin", "Cyrillic found");
+    if (t.indexOf("!") >= 0) no("bang", "exclamation mark");
+    var low = t.toLowerCase();
+    BANNED.forEach(function (p) { if (low.indexOf(p) >= 0 && !bad.banned) no("banned", '"' + p.trim() + '"'); });
+    if (/(^|[^\p{L}])ocen\p{L}*/iu.test(t)) no("rating", "mentions a rating");
+    if (/[\u{1F000}-\u{1FAFF}☀-➿]/u.test(t)) no("emoji", "emoji");
+    var body = low;
+    if (ch === "Email" && low.indexOf("subject:") === 0) body = low.split("\n").slice(1).join("\n").trim();
+    var want = (ch === "Email" || ch === "Call") ? "dobar dan" : "pozdrav";
+    if (body.indexOf(want) !== 0) no("greet", 'must start with "' + want.charAt(0).toUpperCase() + want.slice(1) + '"');
+    if (ch !== "Call" && t.indexOf("?") < 0) no("q", "no question mark");
+    if (ch === "Email" && low.indexOf("subject:") !== 0) no("subj", "email needs a Subject: line");
+    if (ch !== "Email" && ch !== "Call" && low.indexOf("subject:") >= 0) no("subj", "chat has a subject line");
+    return { bad: bad, why: why };
+  }
+  var rulesEl = $("#rules");
+  function renderRules() {
+    var r = check($("#vtext").value, $("#vchan").value), n = 0;
+    rulesEl.innerHTML = RULES.map(function (x) {
+      var b = r.bad[x[0]]; if (b) n++;
+      return '<div class="rule ' + (b ? "no" : "ok") + '"><i>' + (b ? "✕" : "✓") + '</i><span>' + esc(x[1]) + (b ? ' <b>(' + esc(r.why[x[0]]) + ')</b>' : "") + '</span></div>';
+    }).join("");
+    var v = $("#verdict");
+    v.className = "verdict " + (n ? "no" : "ok");
+    v.textContent = n ? n + (n === 1 ? " rule broken: the model gets one retry with this named." : " rules broken: the model gets one retry with these named.") : "Passes: saved as the Draft Message.";
+  }
+  var GOOD = $("#vtext").value;
+  $("#vtext").addEventListener("input", renderRules);
+  $("#vchan").addEventListener("change", renderRules);
+  $("#bad1").addEventListener("click", function () { $("#vchan").value = "Instagram"; $("#vtext").value = "Pozdrav, vidim da imate 5 zvezdica na Google-u. Nisam uspeo da pronađem Vaš sajt, pa me zanima kako Vam stižu upiti."; renderRules(); });
+  $("#bad2").addEventListener("click", function () { $("#vchan").value = "Instagram"; $("#vtext").value = "Dobar dan, naišao sam na Vaš profil i svidele su mi se slike radova. Ja sam Kristijan, pravim sajtove za lokalne firme, pa me zanima kako Vam novi klijenti stižu?"; renderRules(); });
+  $("#good").addEventListener("click", function () { $("#vchan").value = "Instagram"; $("#vtext").value = GOOD; renderRules(); });
+
+  /* ---------- anatomy ---------- */
+  var SEGS = [
+    ["1", "Pozdrav, ", "Greeting. “Pozdrav” for DMs; “Dobar dan, ovde Kristijan” for email, SMS and calls."],
+    ["2", "naišao sam na Vaš profil ", "Where you found them. Facebook says “stranicu” instead of “profil”. Vi form, always capitalized."],
+    ["3", "i svidele su mi se slike i snimci radova. ", "Praise comes only from your note or the bio, at the strength you wrote. No note and nothing concrete: the plain “sviđa mi se kako radite”, and the verify note asks you to add a detail."],
+    ["4", "Ja sam Kristijan, pravim sajtove za lokalne firme, ", "Fixed descriptor. Only “pravim”, never “pravim i unapređujem”."],
+    ["5", "pa me zanima da li Vas klijenti pronalaze i preko Google-a, ili uglavnom stižu preko Instagrama i preporuke?", "One easy question, always last, chosen by business type: open, Google with a concrete service, price and term, has-a-site, or an angle from the bio. A shop asks about online orders; a self-service wash about prices and packages."]
+  ];
+  var msg = $("#msg");
+  SEGS.forEach(function (s, i) {
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "seg"; b.setAttribute("data-k", s[0]); b.setAttribute("aria-pressed", i === 2 ? "true" : "false");
+    b.textContent = s[1];
+    b.addEventListener("click", function () {
+      Array.prototype.forEach.call(msg.children, function (c) { c.setAttribute("aria-pressed", c === b ? "true" : "false"); });
+      $("#segnote").innerHTML = '<span class="step">Part ' + (i + 1) + ' of 5</span>' + esc(s[2]);
+    });
+    msg.appendChild(b);
+  });
+  $("#segnote").innerHTML = '<span class="step">Part 3 of 5</span>' + esc(SEGS[2][2]);
+
+  renderChannel(); renderRules();
+})();
+</script>

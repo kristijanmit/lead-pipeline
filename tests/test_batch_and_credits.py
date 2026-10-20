@@ -51,7 +51,7 @@ def test_draft_stops_on_credits_keeps_finished_and_untouched(tmp_path, monkeypat
         calls.append(prompt)
         if len(calls) == 2:
             raise DraftBudgetError("usage limit reached")
-        return {"message": "Dobar dan, kako Vam stižu upiti?", "verify_note": ""}
+        return {"message": "Pozdrav, kako Vam stižu upiti?", "verify_note": ""}
 
     monkeypatch.setattr(drafter, "_call_claude", fake)
     assert main(["draft", "--run", "r"]) == EXIT_OUT_OF_CREDITS
