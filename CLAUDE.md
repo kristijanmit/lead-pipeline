@@ -29,7 +29,7 @@ All stages run through one CLI entrypoint (`pipeline/runner.py`):
 - `python -m pipeline.runner enrich --run <run_id>` — contact enrichment, then website audit
 - `python -m pipeline.runner score --run <run_id>` — apply scoring weights from config.yaml
 - `python -m pipeline.runner draft --run <run_id>` — suggested channel + one Serbian first message per qualified lead via `claude -p` (rules in docs/OUTREACH.md); run before sync, since fields are written only when a Notion page is created
-- `python -m pipeline.runner draft-notion [--limit N] [--yes]` — draft for hand-made Notion pages (`Source = Manual`, notes in `SM Audit`); dry run unless `--yes`
+- `python -m pipeline.runner draft-notion [--limit N] [--yes] [--all] [--redraft]` — draft for Notion pages with an `SM Audit` note and no draft (normal flow: `run`/`batch` sync, you add notes, then this); `--all` also pages without a note, `--redraft` overwrites drafts; dry run unless `--yes`
 - `python -m pipeline.runner sync --run <run_id> --sink notion` — push to Notion (Phase 4)
 - `python -m pipeline.runner go [--source ...] [--limit N]` — interactive: pick maps/osm/Notion drafts, then prompts (location + comma-separated categories), then runs
 - Maps leads: depth >1 is broken, so a location in `maps.areas` (or `--bbox`) runs in grid mode automatically; `--no-grid` disables — see docs/COLLECTION.md §3

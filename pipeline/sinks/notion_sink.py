@@ -70,6 +70,15 @@ def social_links_rich_text(social_links: dict[str, str]) -> dict:
     return {"rich_text": items}
 
 
+def select_name(value: str, city_only: bool = False) -> str:
+    """Notion select names reject commas and cap at 100 chars. A location like
+    "Sabac, Serbia" keeps only the city (city_only); anything else just has
+    commas replaced so one odd value can't fail the whole page."""
+    if city_only:
+        value = value.split(",")[0]
+    return value.replace(",", " ").strip()[:100]
+
+
 def to_notion_properties(lead: Lead) -> dict:
     """The single §6.1 mapping point. None/empty fields are omitted rather
     than sent as blanks — a checkbox can't say "unknown", so HTTPS/Mobile
@@ -78,13 +87,14 @@ def to_notion_properties(lead: Lead) -> dict:
     synced: bookkeeping stays in the JSONL where it's queryable."""
     props: dict = {
         "Company": {"title": [{"text": {"content": lead.company}}]},
-        "Industry": {"select": {"name": lead.industry}},
-        "Source": {"select": {"name": _SOURCE_OPTIONS.get(lead.source, lead.source)}},
+        "Industry": {"select": {"name": select_name(lead.industry)}},
+        "Source": {"select": {"name": select_name(_SOURCE_OPTIONS.get(lead.source, lead.source))}},
         "Status": {"select": {"name": "Queued" if lead.qualified and lead.draft_message else "Not started"}},
         "Qualified": {"checkbox": lead.qualified},
     }
-    if lead.location:
-        props["Location"] = {"select": {"name": lead.location}}
+    location = select_name(lead.location, city_only=True)
+    if location:
+        props["Location"] = {"select": {"name": location}}
     if lead.domain:
         props["Domain"] = {"url": lead.domain}
     if lead.contact_emails:
@@ -249,15 +259,16 @@ def _select_name(prop: dict | None) -> str:
 
 
 def lead_from_page(page: dict, country: str = "") -> Lead:
-    """Hand-made Notion page -> Lead, for `draft-notion`. Reverse of
+    """Notion page (hand-made or synced) -> Lead, for `draft-notion`. Reverse of
     to_notion_properties() for the fields drafting needs. qualified is True:
-    the operator chose to put the lead there."""
+    the operator chose to draft it."""
     props = page.get("properties", {})
     snap = _snapshot_from_properties(props)
+    source_name = _select_name(props.get("Source"))
     return Lead(
         company=snap["company"],
         domain=snap["domain"],
-        source="manual",
+        source=next((k for k, v in _SOURCE_OPTIONS.items() if v == source_name), "manual"),
         industry=_select_name(props.get("Industry")) or "other",
         location=_select_name(props.get("Location")),
         country=country,
@@ -266,6 +277,9 @@ def lead_from_page(page: dict, country: str = "") -> Lead:
         social_links=snap["socials"],
         lead_type=_select_name(props.get("Lead Type")) or ("new_build" if not snap["domain"] else None),
         qualified=True,
+        address=_rich_text(props.get("Address")),
+        cms=_select_name(props.get("CMS")) or None,
+        audit_notes=_rich_text(props.get("Audit Notes")),
         sm_audit=_rich_text(props.get("SM Audit")),
         suggested_channel=_select_name(props.get("Suggested Channel")),
         status="scored",
@@ -411,12 +425,22 @@ class NotionSink:
         save_seen(self.cache_path, seen)
         return len(seen)
 
-    def query_undrafted_manual(self, limit: int | None = None) -> list[dict]:
-        """Pages with Source = Manual and an empty Draft Message, oldest first."""
-        flt = {"and": [
-            {"property": "Source", "select": {"equals": "Manual"}},
-            {"property": "Draft Message", "rich_text": {"is_empty": True}},
-        ]}
+    def query_draftable(
+        self, limit: int | None = None, redraft: bool = False, need_note: bool = True
+    ) -> list[dict]:
+        """Pages still to be worked (Status Not started / Queued), oldest first.
+        Default: an empty Draft Message and a filled SM Audit — the operator's note
+        is the gate. redraft also returns pages that already have a draft;
+        need_note=False also returns pages without a note."""
+        conditions: list[dict] = [{"or": [
+            {"property": "Status", "select": {"equals": "Not started"}},
+            {"property": "Status", "select": {"equals": "Queued"}},
+        ]}]
+        if not redraft:
+            conditions.append({"property": "Draft Message", "rich_text": {"is_empty": True}})
+        if need_note:
+            conditions.append({"property": "SM Audit", "rich_text": {"is_not_empty": True}})
+        flt = {"and": conditions}
         pages: list[dict] = []
         cursor = None
         while True:

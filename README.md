@@ -57,8 +57,8 @@ All stages run through `pipeline.runner`:
 | `score --run <run_id>` | Apply scoring weights from `config.yaml` |
 | `draft --run <run_id>` | Suggest a channel and draft one Serbian first message per qualified lead via the `claude` CLI (your Claude login, drafts only, never sends) — see [`docs/OUTREACH.md`](docs/OUTREACH.md) |
 | `sync --run <run_id> --sink notion` | Push scored leads to Notion (Status Queued, Suggested Channel, Draft Message) |
-| `draft-notion [--limit N] [--yes]` | Draft for hand-made Notion pages (`Source = Manual`, notes in `SM Audit`); dry run unless `--yes` |
-| `run` | Chains collect, enrich, score, draft and sync |
+| `draft-notion [--limit N] [--yes] [--all] [--redraft]` | Draft for Notion pages that have an `SM Audit` note and no draft; dry run unless `--yes`. `--all` also pages without a note, `--redraft` rewrites existing drafts |
+| `run [--draft]` | Chains collect, enrich, score and sync (`--draft` adds the draft stage before sync) |
 | `go [--source ...] [--limit N]` | Interactive: pick maps / osm / Notion drafts, answer the prompts, run |
 | `batch --file batches/<name>.yaml [--dry-run] [--pause-s N]` | Runs the listed `run` entries one after another (see below) |
 
@@ -96,8 +96,8 @@ Two ways in:
 ```
 
 CSV columns are in [`docs/COLLECTION.md`](docs/COLLECTION.md). `draft-notion`
-never overwrites an existing draft and only moves Status from "Not started"
-to "Queued".
+only moves Status from "Not started" to "Queued" and overwrites an existing
+draft only with `--redraft`.
 
 ### Interactive run
 
@@ -109,7 +109,7 @@ First prompt picks what to run (skip it with `--source`):
 
 - `maps` / `osm`: asks for the scrape location and category/categories
   (comma-separated, e.g. `detailing, poliranje`), then runs the whole chain
-- `notion`: dry-runs `draft-notion` for hand-made Notion pages, then asks
+- `notion`: dry-runs `draft-notion` for Notion pages with an `SM Audit` note, then asks
   before writing the drafts
 
 Defaults come from `config.yaml`; every run asks "Start? (y/n)" first.
@@ -118,7 +118,7 @@ Defaults come from `config.yaml`; every run asks "Start? (y/n)" first.
 
 List runs in `batches/<name>.yaml` (see `batches/example.yaml`; keys mirror
 `run`: `source`, `location`, `country`, `input`, `categories`, `limit`, `sink`,
-`include_seen`, `bbox`, `grid`, plus `no_draft: true` to stop after score):
+`include_seen`, `bbox`, `grid`, plus `draft: true` to draft before sync and `no_draft: true` to stop after score):
 
 ```yaml
 runs:

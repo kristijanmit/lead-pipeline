@@ -22,6 +22,8 @@ properly" means in practice.
   "no site" remarks, question by business type, friendly-warning exception (docs/OUTREACH.md).
 - Hand-made leads: `draft-notion` drafts for Notion pages with `Source = Manual` using the `SM Audit` column
   (docs/OUTREACH.md).
+- Notion-first drafting: `run` / `batch` stop at sync; add `SM Audit` notes in Notion, then `draft-notion` drafts
+  any page with a note (`--all`, `--redraft`). Examples file is split by channel and niche and filtered per lead.
 - 77 existing Notion pages backfilled with drafts (`scripts/backfill_drafts.py`); 36 Social Links fixed
   (`scripts/fix_social_links.py`).
 - Notion schema cleanup: `Testville` location removed, `Communication` / `Notes` / `Draft Message` /

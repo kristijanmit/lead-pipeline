@@ -165,3 +165,37 @@ def test_prompt_includes_operator_sm_audit():
     p = drafter.build_prompt(lead, "Instagram", dict(DEFAULTS["outreach"]), 0, "")
     assert "no booking link in bio" in p and "first-hand and trusted" in p
     assert "first-hand" not in drafter.build_prompt(_lead("B", ""), "Instagram", dict(DEFAULTS["outreach"]), 0, "")
+
+
+_EXAMPLES = """# Intro
+
+## Instagram (DM)
+### detailing | car detailing
+DETAIL-IG
+### generic
+GENERIC-IG
+
+## Facebook
+### generic
+GENERIC-FB
+
+## SMS / call
+CALL-EX
+
+## Questions by business type
+QUESTIONS
+"""
+
+
+def test_select_examples_filters_by_channel_and_niche():
+    sel = drafter.select_examples
+    ig = sel(_EXAMPLES, "Instagram", "car detailing")
+    assert "DETAIL-IG" in ig and "GENERIC-IG" not in ig and "GENERIC-FB" not in ig
+    assert "QUESTIONS" in ig and "# Intro" in ig
+    other = sel(_EXAMPLES, "Instagram", "hairdresser")  # no niche hit -> generic only
+    assert "GENERIC-IG" in other and "DETAIL-IG" not in other
+    assert "GENERIC-IG" in sel(_EXAMPLES, "Viber/Whatsapp", "x")  # reads the DM section
+    call = sel(_EXAMPLES, "Call", "x")
+    assert "CALL-EX" in call and "IG" not in call
+    assert sel("plain text, no headings", "Instagram", "x") == "plain text, no headings"
+    assert sel(_EXAMPLES, "Email", "x") == _EXAMPLES  # no Email section -> everything

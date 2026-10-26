@@ -1,8 +1,10 @@
 """Out-of-credits handling in draft, and the batch command's pause/resume —
 stages and the claude CLI are faked; control flow and state files are under test."""
 
+import argparse
 import json
 import subprocess
+from dataclasses import replace
 
 import pytest
 
@@ -67,7 +69,7 @@ def _batch(tmp_path, monkeypatch, entries):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.yaml").write_text("")
     (tmp_path / "b.yaml").write_text(
-        "runs:\n" + "".join(f"  - source: maps\n    location: {e}\n" for e in entries)
+        "runs:\n" + "".join(f"  - source: maps\n    location: {e}\n    draft: true\n" for e in entries)
     )
 
 
@@ -176,3 +178,59 @@ def test_batch_entry_maps_bbox_and_grid_flags():
     )
     assert (ns.bbox, ns.no_grid) == ("1,2,3,4", True)
     assert runner._run_args(argparse_ns, {"source": "maps"}).no_grid is False
+
+
+def test_batch_skips_draft_unless_entry_asks(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.yaml").write_text("")
+    (tmp_path / "b.yaml").write_text("runs:\n  - source: maps\n    location: A\n")
+    log = _stub_stages(monkeypatch, {})
+    assert main(["batch", "--file", "b.yaml", "--pause-s", "0"]) == 0
+    assert [x[0] for x in log] == ["collect", "enrich", "score", "sync"]
+
+
+def test_run_drafts_only_with_flag(monkeypatch):
+    log = _stub_stages(monkeypatch, {})
+    monkeypatch.setattr(runner, "get_sink", lambda *a: None)
+    monkeypatch.setattr(runner, "load_config", lambda c: {})
+    base = ["run", "--source", "maps", "--location", "A"]
+    assert main(base) == 0
+    assert "draft" not in [x[0] for x in log]
+    log.clear()
+    assert main(base + ["--draft"]) == 0
+    assert [x[0] for x in log] == ["collect", "enrich", "score", "draft", "sync"]
+
+
+def test_draft_notion_overwrite_needs_redraft_flag(monkeypatch, capsys):
+    page = {"id": "p1", "properties": {
+        "Company": {"title": [{"plain_text": "Salon Mira"}]},
+        "Industry": {"select": {"name": "hairdresser"}},
+        "Social Links": {"rich_text": [{"plain_text": "Instagram", "href": "https://instagram.com/mira"}]},
+        "SM Audit": {"rich_text": [{"plain_text": "nice photos"}]},
+        "Draft Message": {"rich_text": [{"plain_text": "old draft"}]},
+        "Status": {"select": {"name": "Queued"}},
+    }}
+    queries, updates = [], []
+
+    class FakeSink:
+        def query_draftable(self, limit, redraft, need_note):
+            queries.append((redraft, need_note))
+            return [page] if redraft else []
+
+        def update_page(self, page_id, props):
+            updates.append(props)
+
+    monkeypatch.setattr(runner, "get_sink", lambda *a: FakeSink())
+    monkeypatch.setattr(runner, "draft_lead", lambda lead, *a, **k: replace(
+        lead, suggested_channel="Instagram", draft_message="Pozdrav, nova poruka?"))
+    def base(**extra):
+        return argparse.Namespace(**{
+            "config": "config.yaml", "limit": None, "yes": True, "redraft": False, "all": False, **extra})
+
+    assert runner.cmd_draft_notion(base()) == 0 and updates == []
+    assert "nothing to draft" in capsys.readouterr().out
+    assert runner.cmd_draft_notion(base(redraft=True)) == 0
+    assert queries == [(False, True), (True, True)]
+    assert updates[0]["Draft Message"]["rich_text"][0]["text"]["content"] == "Pozdrav, nova poruka?"
+    assert "Status" not in updates[0]  # already Queued
+    assert "overwrite" in capsys.readouterr().out

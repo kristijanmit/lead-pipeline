@@ -27,7 +27,7 @@ from pipeline.schema import read_jsonl, write_jsonl
 from pipeline.scoring import score
 from pipeline.sinks import get_sink
 from pipeline.sinks.csv_sink import CsvSink
-from pipeline.sinks.notion_sink import _select_name, _text, cache_key, lead_from_page, load_seen
+from pipeline.sinks.notion_sink import _rich_text, _select_name, _text, cache_key, lead_from_page, load_seen
 
 # find a missing website first, then contact data, then the website audit
 _ENRICH_STEPS = ("discovery", "contact", "audit")
@@ -473,16 +473,24 @@ def cmd_draft(args: argparse.Namespace) -> int:
 
 
 def cmd_draft_notion(args: argparse.Namespace) -> int:
-    """Draft for hand-made Notion pages (Source = Manual, empty Draft Message):
-    the page is the input, so no run dir. Dry run unless --yes; never overwrites
-    a draft; Status -> Queued only from "Not started"."""
+    """Draft for Notion pages (hand-made or synced) that have an SM Audit note and
+    no draft yet: the page is the input, so no run dir. Dry run unless --yes.
+    --redraft also rewrites existing drafts, --all also drafts pages without a
+    note. Status -> Queued only from "Not started"."""
     config = load_config(args.config)
     sink = get_sink("notion", config)
     outreach, draft_cfg = config["outreach"], config["draft"]
     examples = load_examples(outreach["examples_path"])
     country = config["collect"].get("country", "")
 
-    pages = sink.query_undrafted_manual(args.limit)
+    redraft = getattr(args, "redraft", False)
+    pages = sink.query_draftable(
+        args.limit, redraft=redraft, need_note=not getattr(args, "all", False)
+    )
+    if not pages:
+        print("nothing to draft: add an SM Audit note to a page with Status Not started / Queued "
+              "(--all drafts pages without a note, --redraft rewrites existing drafts)")
+        return 0
     drafted = failed = no_contact = 0
     for page in pages:
         lead = lead_from_page(page, country=country)
@@ -496,7 +504,9 @@ def cmd_draft_notion(args: argparse.Namespace) -> int:
                 print(f"  no contact data (add an Instagram link, phone or email): {lead.company}")
             continue
         drafted += 1
-        print(f"  {'write' if args.yes else 'would write'}: {lead.company} -> {out.suggested_channel}")
+        had_draft = bool(_rich_text(page["properties"].get("Draft Message")))
+        verb = "overwrite" if had_draft else "write"
+        print(f"  {verb if args.yes else 'would ' + verb}: {lead.company} -> {out.suggested_channel}")
         print(f"    {out.draft_message}")
         if out.draft_notes:
             print(f"    verify before sending: {out.draft_notes}")
@@ -591,10 +601,18 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    """collect -> enrich -> score -> draft -> sync, chained via the shared args
-    namespace (collect stamps args.run for the later stages to read)."""
+    """collect -> enrich -> score -> sync, chained via the shared args namespace
+    (collect stamps args.run for the later stages to read). Drafting is opt-in
+    (--draft): the usual flow syncs first, you add SM Audit notes in Notion, then
+    `draft-notion` writes the drafts."""
     args.include_synced = False
-    for stage in (cmd_collect, cmd_enrich, cmd_score, cmd_draft, cmd_sync):
+    # build the sink first: a missing NOTION_TOKEN/database id should fail now,
+    # not after collect/enrich/draft have spent time and AI credits
+    get_sink(args.sink, load_config(args.config))
+    stages = (cmd_collect, cmd_enrich, cmd_score) + (
+        (cmd_draft,) if getattr(args, "draft", False) else ()
+    ) + (cmd_sync,)
+    for stage in stages:
         code = stage(args)
         if code != 0:
             return code
@@ -602,7 +620,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
-_BATCH_KEYS = {"source", "location", "country", "input", "categories", "limit", "sink", "include_seen", "no_draft", "bbox", "grid"}
+_BATCH_KEYS = {"source", "location", "country", "input", "categories", "limit", "sink", "include_seen", "no_draft", "draft", "bbox", "grid"}
 
 
 def _load_batch(path: Path) -> list[dict]:
@@ -631,6 +649,7 @@ def _run_args(base: argparse.Namespace, entry: dict) -> argparse.Namespace:
         limit=entry.get("limit"),
         sink=entry.get("sink", "notion"),
         include_seen=bool(entry.get("include_seen", False)),
+        draft=bool(entry.get("draft", False)),
         bbox=entry.get("bbox"),
         no_grid=entry.get("grid") is False,
         refresh_cache=False,
@@ -684,7 +703,8 @@ def cmd_batch(args: argparse.Namespace) -> int:
                 stages = (cmd_draft, cmd_sync)
             else:
                 stages = (cmd_collect, cmd_enrich, cmd_score) + (
-                    () if entry.get("no_draft") else (cmd_draft, cmd_sync)
+                    () if entry.get("no_draft")
+                    else (cmd_draft, cmd_sync) if entry.get("draft") else (cmd_sync,)
                 )
             code = 0
             for stage in stages:
@@ -740,12 +760,12 @@ def cmd_go(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     collect_cfg = config["collect"]
     source = args.source or _ask(
-        "What to run? maps / osm / notion (draft hand-made Notion pages)", "maps"
+        "What to run? maps / osm / notion (draft Notion pages that have an SM Audit note)", "maps"
     ).lower()
 
     if source == "notion":
         # dry run first; writing needs an explicit yes, same as `draft-notion`
-        base = dict(config=args.config, limit=args.limit, yes=False)
+        base = dict(config=args.config, limit=args.limit, yes=False, redraft=False, all=False)
         code = cmd_draft_notion(argparse.Namespace(**base))
         if code != 0 or _ask("Write these drafts to Notion? (y/n)", "n").lower() not in ("y", "yes"):
             return code
@@ -777,6 +797,7 @@ def cmd_go(args: argparse.Namespace) -> int:
             limit=args.limit,
             sink="notion",
             include_seen=False,
+            draft=False,
             bbox=None,
             no_grid=False,
             refresh_cache=False,
@@ -857,7 +878,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     dn_cmd = sub.add_parser(
         "draft-notion",
-        help="draft for hand-made Notion pages (Source = Manual, empty Draft Message)",
+        help="draft for Notion pages with an SM Audit note and no draft yet",
+    )
+    dn_cmd.add_argument(
+        "--redraft", action="store_true", help="also rewrite pages that already have a draft"
+    )
+    dn_cmd.add_argument(
+        "--all", action="store_true", help="also draft pages without an SM Audit note"
     )
     dn_cmd.add_argument("--limit", type=int, help="draft at most N pages")
     dn_cmd.add_argument("--yes", action="store_true", help="write to Notion (default: dry run)")
@@ -909,6 +936,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--include-seen",
         action="store_true",
         help="keep leads already in the Notion cache (default: skip them after collect)",
+    )
+    run_cmd.add_argument(
+        "--draft",
+        action="store_true",
+        help="also draft messages before sync (default: sync only, draft later with draft-notion)",
     )
     run_cmd.add_argument(
         "--bbox",

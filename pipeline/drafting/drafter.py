@@ -88,6 +88,52 @@ def load_examples(path: str) -> str:
     return p.read_text(encoding="utf-8") if p.exists() else ""
 
 
+_DM_CHANNELS = ("Instagram", "Facebook", "Viber/Whatsapp")
+
+
+def _split(text: str, marker: str) -> tuple[str, list[tuple[str, str]]]:
+    """Text before the first `marker` heading, then (heading, body) pairs."""
+    parts = re.split(rf"(?m)^{marker} +(.+)$", text)
+    return parts[0], list(zip(parts[1::2], parts[2::2]))
+
+
+def select_examples(text: str, channel: str, niche: str) -> str:
+    """Narrow the examples file to what fits this lead. `## <channel>` sections
+    are picked by the lead's channel (Viber/Whatsapp reads the Instagram DM
+    section); sections whose heading starts with "Questions" or "Friendly warning"
+    ride along. Inside a section, `### a | b` subsections are kept when one alias
+    matches the lead's industry, else only `### generic` ones. A file without
+    these headings is returned unchanged."""
+    preamble, sections = _split(text, "##")
+    if not sections:
+        return text
+    wanted = {
+        "Viber/Whatsapp": ("instagram",), "Call": ("sms", "call"),
+    }.get(channel, (channel.lower(),))
+    own = [(h, b) for h, b in sections if h.lower().startswith(wanted)]
+    if not own:
+        return text
+    shared = [
+        (h, b) for h, b in sections
+        if h.lower().startswith(("questions", "friendly warning")) or " with a friendly warning" in h.lower()
+    ]
+    if channel not in _DM_CHANNELS:
+        shared = [(h, b) for h, b in shared if h.lower().startswith("questions")]
+    out = [preamble.strip()]
+    for heading, body in own + [x for x in shared if x not in own]:
+        intro, subs = _split(body, "###")
+        if subs:
+            keys = niche.lower().strip()
+            hit = [
+                (h, b) for h, b in subs
+                if any(a.strip() and (a.strip() in keys or keys in a.strip()) for a in h.lower().split("|"))
+            ] if keys else []
+            generic = [(h, b) for h, b in subs if h.strip().lower() == "generic"]
+            body = intro + "".join(b for _, b in (hit or generic or subs))
+        out.append(f"## {heading}{body}".rstrip())
+    return "\n\n".join(x for x in out if x) + "\n"
+
+
 def build_prompt(lead: Lead, channel: str, outreach: dict, variant: int, examples: str) -> str:
     # `variant` is unused now (one fixed descriptor and a question chosen by business type);
     # kept so the runner call sites and signature stay stable.
@@ -233,7 +279,9 @@ def draft_lead(
     channel = lead.suggested_channel or suggest_channel(lead)
     if not channel:
         return lead  # nothing to send to; the runner counts these, no error recorded
-    prompt = build_prompt(lead, channel, outreach, variant, examples)
+    prompt = build_prompt(
+        lead, channel, outreach, variant, select_examples(examples, channel, lead.industry)
+    )
     try:
         raw = _call_claude(prompt, draft_cfg["model"], draft_cfg["timeout_s"])
         problems = validate_message(str(raw.get("message", "")), channel)

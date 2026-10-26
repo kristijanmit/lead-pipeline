@@ -517,3 +517,62 @@ def test_lead_from_manual_page_and_sm_audit_roundtrip():
     assert lead.sm_audit == "posts daily, no booking link" and lead.lead_type == "new_build" and lead.qualified
     props = to_notion_properties(lead)
     assert props["SM Audit"]["rich_text"][0]["text"]["content"] == "posts daily, no booking link"
+
+
+@pytest.mark.parametrize(
+    "location, expected",
+    [
+        ("Sabac, Serbia", "Sabac"),
+        ("Šabac", "Šabac"),
+        ("  Novi Sad , Serbia ", "Novi Sad"),
+    ],
+)
+def test_location_select_has_city_only(location, expected):
+    props = to_notion_properties(_lead(location=location))
+    assert props["Location"] == {"select": {"name": expected}}
+
+
+def test_select_values_never_contain_commas():
+    props = to_notion_properties(_lead(industry="auto, elektrika"))
+    assert "," not in props["Industry"]["select"]["name"]
+
+
+def test_empty_location_is_omitted():
+    assert "Location" not in to_notion_properties(_lead(location=", Serbia"))
+
+
+def test_lead_from_synced_page_reads_audit_fields():
+    from pipeline.sinks.notion_sink import lead_from_page
+
+    page = _manual_page()
+    page["properties"].update({
+        "Source": {"select": {"name": "OSM/Maps"}},
+        "Audit Notes": {"rich_text": [{"plain_text": "no HTTPS"}]},
+        "CMS": {"select": {"name": "wordpress"}},
+        "Lead Type": {"select": {"name": "redesign"}},
+    })
+    lead = lead_from_page(page)
+    assert (lead.source, lead.audit_notes, lead.cms, lead.lead_type) == ("osm", "no HTTPS", "wordpress", "redesign")
+
+
+def _draftable_sink(monkeypatch):
+    from pipeline.sinks.notion_sink import NotionSink
+    sink = NotionSink.__new__(NotionSink)
+    sink.database_id = "db"
+    sent = []
+    monkeypatch.setattr(sink, "_post", lambda url, payload: sent.append(payload) or {"results": []}, raising=False)
+    return sink, sent
+
+
+def test_query_draftable_filters(monkeypatch):
+    sink, sent = _draftable_sink(monkeypatch)
+
+    def props(payload):
+        return [c.get("property") for c in payload["filter"]["and"]]
+
+    sink.query_draftable()
+    assert props(sent[-1]) == [None, "Draft Message", "SM Audit"]  # first is the Status "or"
+    sink.query_draftable(redraft=True)
+    assert props(sent[-1]) == [None, "SM Audit"]
+    sink.query_draftable(need_note=False)
+    assert props(sent[-1]) == [None, "Draft Message"]
