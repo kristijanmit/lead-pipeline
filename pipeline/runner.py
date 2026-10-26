@@ -485,7 +485,8 @@ def cmd_draft_notion(args: argparse.Namespace) -> int:
 
     redraft = getattr(args, "redraft", False)
     pages = sink.query_draftable(
-        args.limit, redraft=redraft, need_note=not getattr(args, "all", False)
+        args.limit, redraft=redraft, need_note=not getattr(args, "all", False),
+        company=getattr(args, "company", "") or "",
     )
     if not pages:
         print("nothing to draft: add an SM Audit note to a page with Status Not started / Queued "
@@ -515,7 +516,7 @@ def cmd_draft_notion(args: argparse.Namespace) -> int:
                 "Suggested Channel": {"select": {"name": out.suggested_channel}},
                 "Draft Message": _text(out.draft_message[:2000]),
             }
-            if _select_name(page["properties"].get("Status")) == "Not started":
+            if _select_name(page["properties"].get("Status")) in ("Not started", ""):
                 update["Status"] = {"select": {"name": "Queued"}}
             sink.update_page(page["id"], update)
     print(f"{drafted} drafted, {failed} failed, {no_contact} without contact data")
@@ -754,29 +755,78 @@ def _ask(question: str, default: str = "") -> str:
         print("  required — please enter a value")
 
 
+_GO_MODES = ("Lead Gen", "Draft Outreach", "Both")
+_DRAFT_SCOPES = (
+    "Only pages with an SM Audit note",
+    "Also pages without a note (generic praise)",
+    "Redraft pages that already have a draft",
+)
+
+
+def _ask_choice(question: str, options: tuple[str, ...], default: str) -> str:
+    """Numbered menu; accepts the number or the (prefix of the) option name."""
+    print(f"{question}:")
+    for i, option in enumerate(options, 1):
+        print(f"  {i}. {option}")
+    answer = _ask("Choose", default).strip().lower()
+    if answer.isdigit() and 1 <= int(answer) <= len(options):
+        return options[int(answer) - 1]
+    matches = [o for o in options if o.lower().startswith(answer)]
+    if len(matches) == 1:
+        return matches[0]
+    raise ValueError(f"unknown choice {answer!r} — pick one of: {', '.join(options)}")
+
+
+def _go_draft_outreach(args: argparse.Namespace) -> int:
+    scope = _ask_choice("Which Notion pages?", _DRAFT_SCOPES, "1")
+    raw = _ask("How many at most (a number, or 'all')", str(args.limit) if args.limit else "5")
+    limit = None if raw.lower() == "all" else int(raw)
+    company = ""
+    if limit == 1:
+        company = _ask("Which lead (company name, or auto for the next one)", "auto")
+        company = "" if company.lower() == "auto" else company
+    # dry run first; writing needs an explicit yes, same as `draft-notion`
+    base = dict(
+        config=args.config, limit=limit, yes=False, company=company,
+        all=scope == _DRAFT_SCOPES[1], redraft=scope == _DRAFT_SCOPES[2],
+    )
+    code = cmd_draft_notion(argparse.Namespace(**base))
+    if code != 0 or _ask("Write these drafts to Notion? (y/n)", "n").lower() not in ("y", "yes"):
+        return code
+    return cmd_draft_notion(argparse.Namespace(**{**base, "yes": True}))
+
+
 def cmd_go(args: argparse.Namespace) -> int:
     """Interactive entry point: pick what to run, answer the prompts, run it.
-    Defaults come from config.yaml."""
+    Lead Gen = collect -> enrich -> score -> sync; Draft Outreach = draft-notion;
+    Both = Lead Gen with the draft stage before sync (no notes, no pauses).
+    Defaults come from config.yaml. --source maps/osm/notion skips the menu."""
     config = load_config(args.config)
     collect_cfg = config["collect"]
-    source = args.source or _ask(
-        "What to run? maps / osm / notion (draft Notion pages that have an SM Audit note)", "maps"
-    ).lower()
-
+    source = (args.source or "").lower()
     if source == "notion":
-        # dry run first; writing needs an explicit yes, same as `draft-notion`
-        base = dict(config=args.config, limit=args.limit, yes=False, redraft=False, all=False)
-        code = cmd_draft_notion(argparse.Namespace(**base))
-        if code != 0 or _ask("Write these drafts to Notion? (y/n)", "n").lower() not in ("y", "yes"):
-            return code
-        return cmd_draft_notion(argparse.Namespace(**{**base, "yes": True}))
-
-    if source not in ("maps", "osm"):
+        mode = "Draft Outreach"
+    elif source in ("maps", "osm"):
+        mode = "Lead Gen"
+    elif source:
         raise ValueError(f"unknown source {source!r} — choose maps, osm or notion")
+    else:
+        mode = _ask_choice("What to run?", _GO_MODES, "Lead Gen")
+
+    if mode == "Draft Outreach":
+        return _go_draft_outreach(args)
+
+    if not source:
+        source = _ask("Source (maps / osm)", "maps").lower()
+    if source not in ("maps", "osm"):
+        raise ValueError(f"unknown source {source!r} — choose maps or osm")
     location = _ask("Scrape location", collect_cfg["location"])
     raw = _ask("Category/categories (comma-separated)", ",".join(collect_cfg["categories"]))
     categories = ",".join(c.strip() for c in raw.split(",") if c.strip())
-    print(f"\n  source: {source}\n  location: {location}\n  categories: {categories}")
+    print(f"\n  mode: {mode}\n  source: {source}\n  location: {location}\n  categories: {categories}")
+    if mode == "Both":
+        print("  drafts are made right away, without SM Audit notes (generic praise);"
+              " add notes later and redraft with Draft Outreach")
     bbox = resolve_bbox({"location": location}, config["maps"]["areas"]) if source == "maps" else None
     if bbox:
         cells = grid_cell_count(parse_bbox(bbox), config["maps"]["grid_cell_km"])
@@ -797,7 +847,7 @@ def cmd_go(args: argparse.Namespace) -> int:
             limit=args.limit,
             sink="notion",
             include_seen=False,
-            draft=False,
+            draft=mode == "Both",
             bbox=None,
             no_grid=False,
             refresh_cache=False,
@@ -881,6 +931,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="draft for Notion pages with an SM Audit note and no draft yet",
     )
     dn_cmd.add_argument(
+        "--company", help="draft only pages whose Company contains this text"
+    )
+    dn_cmd.add_argument(
         "--redraft", action="store_true", help="also rewrite pages that already have a draft"
     )
     dn_cmd.add_argument(
@@ -954,7 +1007,7 @@ def build_parser() -> argparse.ArgumentParser:
     go_cmd = sub.add_parser(
         "go", help="interactive run: prompts for location and categories"
     )
-    go_cmd.add_argument("--source", help="skip the first prompt: maps, osm or notion")
+    go_cmd.add_argument("--source", help="skip the menu: maps / osm (Lead Gen) or notion (Draft Outreach)")
     go_cmd.add_argument("--limit", type=int, help="dry-run: cap leads at N")
     go_cmd.set_defaults(func=cmd_go)
 

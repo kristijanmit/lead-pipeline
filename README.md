@@ -57,7 +57,7 @@ All stages run through `pipeline.runner`:
 | `score --run <run_id>` | Apply scoring weights from `config.yaml` |
 | `draft --run <run_id>` | Suggest a channel and draft one Serbian first message per qualified lead via the `claude` CLI (your Claude login, drafts only, never sends) — see [`docs/OUTREACH.md`](docs/OUTREACH.md) |
 | `sync --run <run_id> --sink notion` | Push scored leads to Notion (Status Queued, Suggested Channel, Draft Message) |
-| `draft-notion [--limit N] [--yes] [--all] [--redraft]` | Draft for Notion pages that have an `SM Audit` note and no draft; dry run unless `--yes`. `--all` also pages without a note, `--redraft` rewrites existing drafts |
+| `draft-notion [--limit N] [--company NAME] [--yes] [--all] [--redraft]` | Draft for Notion pages that have an `SM Audit` note and no draft; dry run unless `--yes`. `--all` also pages without a note, `--redraft` rewrites existing drafts |
 | `run [--draft]` | Chains collect, enrich, score and sync (`--draft` adds the draft stage before sync) |
 | `go [--source ...] [--limit N]` | Interactive: pick maps / osm / Notion drafts, answer the prompts, run |
 | `batch --file batches/<name>.yaml [--dry-run] [--pause-s N]` | Runs the listed `run` entries one after another (see below) |
@@ -105,12 +105,14 @@ draft only with `--redraft`.
 .venv/bin/python -m pipeline.runner go
 ```
 
-First prompt picks what to run (skip it with `--source`):
+First prompt picks what to run (skip it with `--source maps|osm|notion`):
 
-- `maps` / `osm`: asks for the scrape location and category/categories
-  (comma-separated, e.g. `detailing, poliranje`), then runs the whole chain
-- `notion`: dry-runs `draft-notion` for Notion pages with an `SM Audit` note, then asks
-  before writing the drafts
+- **Lead Gen**: asks source (maps / osm), scrape location and category/categories
+  (comma-separated, e.g. `detailing, poliranje`), then collect, enrich, score, sync
+- **Draft Outreach**: asks which Notion pages (only with an `SM Audit` note / also without a
+  note / redraft existing) and how many (answer 1 to pick one lead by name, default auto), dry-runs `draft-notion`, then asks before writing
+- **Both**: Lead Gen plus the draft stage before sync, no pauses and no notes (generic praise
+  where there is no bio); add notes later and redraft with Draft Outreach
 
 Defaults come from `config.yaml`; every run asks "Start? (y/n)" first.
 

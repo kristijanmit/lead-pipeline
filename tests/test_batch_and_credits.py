@@ -136,18 +136,30 @@ def test_batch_rejects_unknown_keys(tmp_path, monkeypatch):
 def test_go_prompts_for_location_and_categories(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.yaml").write_text("")
-    answers = iter(["maps", "Novi Sad", "detailing, poliranje ,", "y"])
+    answers = iter(["lead gen", "maps", "Novi Sad", "detailing, poliranje ,", "y"])
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
     seen = {}
     monkeypatch.setattr(runner, "cmd_run", lambda a: seen.update(vars(a)) or 0)
     assert main(["go"]) == 0
     assert (seen["location"], seen["categories"], seen["source"]) == ("Novi Sad", "detailing,poliranje", "maps")
+    assert seen["draft"] is False
+
+
+def test_go_both_runs_the_chain_with_drafts(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.yaml").write_text("")
+    answers = iter(["3", "osm", "Novi Sad", "detailing", "y"])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    seen = {}
+    monkeypatch.setattr(runner, "cmd_run", lambda a: seen.update(vars(a)) or 0)
+    assert main(["go"]) == 0
+    assert (seen["source"], seen["draft"]) == ("osm", True)
 
 
 def test_go_cancel_runs_nothing(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.yaml").write_text("")
-    answers = iter(["maps", "Beograd", "detailing", "n"])
+    answers = iter(["Lead Gen", "maps", "Beograd", "detailing", "n"])
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
     monkeypatch.setattr(runner, "cmd_run", lambda a: pytest.fail("should not run"))
     assert main(["go"]) == 0
@@ -160,15 +172,40 @@ def test_go_rejects_unknown_source(tmp_path, monkeypatch):
     assert main(["go"]) == 1
 
 
-def test_go_notion_dry_run_then_write_on_yes(tmp_path, monkeypatch):
+def test_go_draft_outreach_asks_scope_and_limit(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.yaml").write_text("")
-    answers = iter(["notion", "y"])
+    answers = iter(["draft", "3", "all", "y"])  # prefix match, redraft, no limit, write
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
     calls = []
-    monkeypatch.setattr(runner, "cmd_draft_notion", lambda a: calls.append(a.yes) or 0)
+    monkeypatch.setattr(runner, "cmd_draft_notion", lambda a: calls.append((a.yes, a.limit, a.all, a.redraft)) or 0)
     assert main(["go"]) == 0
-    assert calls == [False, True]
+    assert calls == [(False, None, False, True), (True, None, False, True)]
+
+
+def test_go_single_lead_asks_which_one(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.yaml").write_text("")
+    answers = iter(["2", "1", "Salon Mira", "n"])  # scope, limit 1, company, decline write
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    calls = []
+    monkeypatch.setattr(runner, "cmd_draft_notion", lambda a: calls.append((a.limit, a.company, a.all)) or 0)
+    assert main(["go", "--source", "notion"]) == 0
+    assert calls == [(1, "Salon Mira", True)]
+    answers = iter(["1", "1", "auto", "n"])
+    assert main(["go", "--source", "notion"]) == 0
+    assert calls[-1] == (1, "", False)
+
+
+def test_go_source_flag_skips_the_menu(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.yaml").write_text("")
+    answers = iter(["1", "5", "n"])  # scope, limit, decline the write
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    calls = []
+    monkeypatch.setattr(runner, "cmd_draft_notion", lambda a: calls.append((a.yes, a.limit, a.all)) or 0)
+    assert main(["go", "--source", "notion"]) == 0
+    assert calls == [(False, 5, False)]
 
 
 def test_batch_entry_maps_bbox_and_grid_flags():
@@ -213,7 +250,7 @@ def test_draft_notion_overwrite_needs_redraft_flag(monkeypatch, capsys):
     queries, updates = [], []
 
     class FakeSink:
-        def query_draftable(self, limit, redraft, need_note):
+        def query_draftable(self, limit, redraft, need_note, company=""):
             queries.append((redraft, need_note))
             return [page] if redraft else []
 
@@ -233,4 +270,7 @@ def test_draft_notion_overwrite_needs_redraft_flag(monkeypatch, capsys):
     assert queries == [(False, True), (True, True)]
     assert updates[0]["Draft Message"]["rich_text"][0]["text"]["content"] == "Pozdrav, nova poruka?"
     assert "Status" not in updates[0]  # already Queued
+    del page["properties"]["Status"]  # blank status counts as Not started
+    assert runner.cmd_draft_notion(base(redraft=True)) == 0
+    assert updates[1]["Status"] == {"select": {"name": "Queued"}}
     assert "overwrite" in capsys.readouterr().out

@@ -576,3 +576,5 @@ def test_query_draftable_filters(monkeypatch):
     assert props(sent[-1]) == [None, "SM Audit"]
     sink.query_draftable(need_note=False)
     assert props(sent[-1]) == [None, "Draft Message"]
+    sink.query_draftable(company="Mira")
+    assert props(sent[-1]) == [None, "Draft Message", "SM Audit", "Company"]

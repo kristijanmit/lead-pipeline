@@ -426,20 +426,25 @@ class NotionSink:
         return len(seen)
 
     def query_draftable(
-        self, limit: int | None = None, redraft: bool = False, need_note: bool = True
+        self, limit: int | None = None, redraft: bool = False, need_note: bool = True,
+        company: str = "",
     ) -> list[dict]:
-        """Pages still to be worked (Status Not started / Queued), oldest first.
+        """Pages still to be worked (Status Not started / blank / Queued), oldest first.
         Default: an empty Draft Message and a filled SM Audit — the operator's note
         is the gate. redraft also returns pages that already have a draft;
-        need_note=False also returns pages without a note."""
+        need_note=False also returns pages without a note; company keeps only pages
+        whose Company contains that text (case-insensitive)."""
         conditions: list[dict] = [{"or": [
             {"property": "Status", "select": {"equals": "Not started"}},
             {"property": "Status", "select": {"equals": "Queued"}},
+            {"property": "Status", "select": {"is_empty": True}},
         ]}]
         if not redraft:
             conditions.append({"property": "Draft Message", "rich_text": {"is_empty": True}})
         if need_note:
             conditions.append({"property": "SM Audit", "rich_text": {"is_not_empty": True}})
+        if company:
+            conditions.append({"property": "Company", "title": {"contains": company}})
         flt = {"and": conditions}
         pages: list[dict] = []
         cursor = None
