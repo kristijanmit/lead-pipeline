@@ -21,6 +21,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from pipeline.drafting.channel import suggest_channel
+from pipeline.market import Market
 from pipeline.schema import Lead
 
 MAX_CHARS = 2000
@@ -344,14 +345,33 @@ def _call_claude(prompt: str, model: str, timeout_s: int) -> dict:
     return out
 
 
+# Only the Serbian rule set exists until v2 step 7 (rules_sr / rules_en).
+DRAFT_LANGUAGES = ("sr",)
+
+
+def language_skip_reason(market: Market) -> str:
+    """Why leads in this market can't be drafted yet ("" = they can). Callers skip
+    and count such leads; a Serbian draft for an English market is never written."""
+    if market.language in DRAFT_LANGUAGES:
+        return ""
+    if market.language == "en":
+        return "English drafting arrives in step 7"
+    return f"no drafting rules for language {market.language!r}"
+
+
 def draft_lead(
-    lead: Lead, outreach: dict, draft_cfg: dict, variant: int = 0, examples: str = ""
+    lead: Lead, outreach: dict, draft_cfg: dict, market: Market, variant: int = 0, examples: str = ""
 ) -> Lead:
     """Return a new Lead with suggested_channel/draft_message/draft_notes filled.
     No usable contact data -> returned unchanged. A failure lands in Lead.errors instead
     of raising, so one bad call doesn't halt the batch — except DraftBudgetError
-    (out of credits), which propagates."""
-    channel = lead.suggested_channel or suggest_channel(lead)
+    (out of credits), which propagates. The channel follows `market`'s rules. A market
+    whose language has no rule set yet raises ValueError: callers check
+    language_skip_reason() first and skip those leads."""
+    reason = language_skip_reason(market)
+    if reason:
+        raise ValueError(f"cannot draft for market {market.id!r}: {reason}")
+    channel = lead.suggested_channel or suggest_channel(lead, market)
     if not channel:
         return lead  # nothing to send to; the runner counts these, no error recorded
     prompt = build_prompt(

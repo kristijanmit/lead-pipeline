@@ -183,6 +183,10 @@ pipeline/
   schema.py          # Lead dataclass + validation
   config.py           # load + validate config.yaml, fail fast on bad config
   dedupe.py           # domain normalization + seen-domain tracking
+  market.py           # Market presets (config.yaml markets:) + "new market" prompts
+  niche.py            # Niche definition (created in go / --niche-file, never config)
+  channels.py         # per-market channel rules: usable_channels / best_channel — pure,
+                      # shared by drafting (and the v4 scorer's reach)
 
   collectors/
     base.py           # Collector protocol: collect(params) -> Iterable[Lead]
@@ -197,6 +201,10 @@ pipeline/
 
   scoring/
     scorer.py          # score(lead: Lead, weights: dict, qualification: dict) -> Lead — pure function
+
+  drafting/
+    channel.py         # re-exports pipeline/channels.py (suggest_channel = best_channel)
+    drafter.py         # one first message per lead via `claude -p`, under the lead's market
 
   sinks/
     base.py           # Sink protocol: write(leads: list[Lead]) -> None

@@ -18,7 +18,12 @@ properly" means in practice.
   Lead schema v10 (`market`, `language`, `niche`, `niche_label`), manifest carries both blocks, the scoring
   country gate comes from the run's market. Removed `collect.categories`, `collect.country`, `qualification:`,
   `outreach.industry_labels`, `--categories`, `--country`.
-- Next: step 2, shared `pipeline/channels.py` with market rules.
+- Step 2 done: shared `pipeline/channels.py` with market rules: channel order, mobile prefixes (local
+  numbers normalized with the dialing code), first-touch exclusions (UAE WhatsApp), labels per market, and
+  LinkedIn as a channel. `drafting/channel.py` re-exports it. Drafting takes the lead's market. Until step 6
+  there's a counted Serbia fallback for leads/pages without a market. `en`-market leads are skipped until
+  step 7.
+- Next: step 3, audit split + signals (shared audit core).
 
 **Done**
 - Phases 1-4: collect (OSM, Google Maps, manual CSV), enrich (contacts + Lighthouse), score, Notion sync with

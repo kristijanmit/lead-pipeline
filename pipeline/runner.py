@@ -21,7 +21,7 @@ from pipeline.collectors import get_collector
 from pipeline.collectors.maps import grid_cell_count, parse_bbox, resolve_bbox
 from pipeline.config import ConfigError, load_config
 from pipeline.dedupe import dedupe_leads, lead_key
-from pipeline.drafting import DraftBudgetError, draft_lead, load_examples
+from pipeline.drafting import DraftBudgetError, draft_lead, language_skip_reason, load_examples
 from pipeline.enrichers import apply_enrichers, get_enricher
 from pipeline.market import Market, load_market, market_from_prompts, market_yaml
 from pipeline.niche import Niche, check_sources, load_niche_file
@@ -52,6 +52,50 @@ def _out_of_credits_message(detail: str) -> str:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+# TODO(step 6): drop this fallback. Notion pages get a Market property then, and
+# draft-notion skips pages without one; until then pages and pre-v2 runs carry no
+# market, and they were all collected in Serbia. Every use is counted and printed.
+_DRAFT_FALLBACK_MARKET = "serbia"
+
+
+class _DraftMarkets:
+    """The market each lead is drafted under (channel rules, language), loaded once
+    per id. A lead without a market uses the Serbia fallback above."""
+
+    def __init__(self, config: dict):
+        self.config = config
+        self.loaded: dict[str, Market | str] = {}
+        self.fallbacks = 0
+
+    def resolve(self, lead) -> tuple[Market | None, str]:
+        """(market, skip reason). A reason means: don't draft this lead now."""
+        market_id = lead.market
+        if not market_id:
+            market_id = _DRAFT_FALLBACK_MARKET
+            self.fallbacks += 1
+        if market_id not in self.loaded:
+            try:
+                self.loaded[market_id] = load_market(self.config, market_id)
+            except ValueError as e:
+                self.loaded[market_id] = str(e)
+        market = self.loaded[market_id]
+        if isinstance(market, str):
+            return None, market
+        return market, language_skip_reason(market)
+
+    def print_fallbacks(self) -> None:
+        if self.fallbacks:
+            print(
+                f"  {self.fallbacks} lead(s) had no market and used the "
+                f"{_DRAFT_FALLBACK_MARKET!r} market rules (fallback until step 6)"
+            )
+
+
+def _print_market_skips(skips: dict[str, int]) -> None:
+    for reason, count in skips.items():
+        print(f"  {count} skipped, not drafted: {reason}")
 
 
 def _has_no_contact_info(lead) -> bool:
@@ -454,6 +498,8 @@ def cmd_draft(args: argparse.Namespace) -> int:
     outreach, draft_cfg = config["outreach"], config["draft"]
     examples = load_examples(outreach["examples_path"])
     drafted = failed = skipped = no_contact = 0
+    markets = _DraftMarkets(config)
+    market_skips: dict[str, int] = {}
     results = []
     out_of_credits = ""
     for lead in leads:
@@ -463,8 +509,13 @@ def cmd_draft(args: argparse.Namespace) -> int:
             skipped += 1
             results.append(lead)
             continue
+        market, reason = markets.resolve(lead)
+        if reason:
+            market_skips[reason] = market_skips.get(reason, 0) + 1
+            results.append(lead)
+            continue
         try:
-            out = draft_lead(lead, outreach, draft_cfg, variant=drafted + failed, examples=examples)
+            out = draft_lead(lead, outreach, draft_cfg, market, variant=drafted + failed, examples=examples)
         except DraftBudgetError as e:
             out_of_credits = str(e)
             break
@@ -489,7 +540,9 @@ def cmd_draft(args: argparse.Namespace) -> int:
         "counts": {
             "input": len(leads), "drafted": drafted, "failed": failed,
             "no_contact_data": no_contact, "skipped": skipped,
+            "skipped_market": sum(market_skips.values()), "market_fallback": markets.fallbacks,
         },
+        "market_skip_reasons": market_skips,
         "stopped_out_of_credits": bool(out_of_credits),
         "started_at": started_at,
         "finished_at": _now_iso(),
@@ -502,6 +555,8 @@ def cmd_draft(args: argparse.Namespace) -> int:
         f"run {args.run}: {drafted} drafted, {failed} failed, "
         f"{no_contact} without contact data, {skipped} skipped"
     )
+    _print_market_skips(market_skips)
+    markets.print_fallbacks()
     for lead in results:
         if lead.errors and lead.errors[-1].startswith("draft:") and not lead.draft_message:
             print(f"  failed: {lead.company}: {lead.errors[-1]}")
@@ -534,9 +589,16 @@ def cmd_draft_notion(args: argparse.Namespace) -> int:
               "(--all drafts pages without a note, --redraft rewrites existing drafts)")
         return 0
     drafted = failed = no_contact = 0
+    markets = _DraftMarkets(config)
+    market_skips: dict[str, int] = {}
     for page in pages:
         lead = lead_from_page(page)
-        out = draft_lead(lead, outreach, draft_cfg, variant=drafted + failed, examples=examples)
+        market, reason = markets.resolve(lead)
+        if reason:
+            market_skips[reason] = market_skips.get(reason, 0) + 1
+            print(f"  skipped: {lead.company}: {reason}")
+            continue
+        out = draft_lead(lead, outreach, draft_cfg, market, variant=drafted + failed, examples=examples)
         if not out.draft_message:
             if out.errors != lead.errors:
                 failed += 1
@@ -561,6 +623,8 @@ def cmd_draft_notion(args: argparse.Namespace) -> int:
                 update["Status"] = {"select": {"name": "Queued"}}
             sink.update_page(page["id"], update)
     print(f"{drafted} drafted, {failed} failed, {no_contact} without contact data")
+    _print_market_skips(market_skips)
+    markets.print_fallbacks()
     if drafted and not args.yes:
         print("dry run — pass --yes to write to Notion")
     return 0

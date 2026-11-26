@@ -6,6 +6,7 @@ import json
 from pipeline.drafting import drafter
 from pipeline.runner import main
 from pipeline.schema import Lead, read_jsonl, write_jsonl
+from support import MARKETS_YAML
 
 
 def _lead(company, domain, **kw):
@@ -17,7 +18,7 @@ def _lead(company, domain, **kw):
 
 def _make_run(tmp_path, monkeypatch, leads):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "config.yaml").write_text("")
+    (tmp_path / "config.yaml").write_text(MARKETS_YAML)
     run_dir = tmp_path / "data" / "runs" / "r"
     run_dir.mkdir(parents=True)
     write_jsonl(run_dir / "scored.jsonl", leads)
@@ -53,7 +54,62 @@ def test_only_qualified_scored_undrafted_leads_are_drafted(tmp_path, monkeypatch
     assert by["B"].draft_message == "" and by["C"].draft_message == ""
     assert by["D"].draft_message == "kept"
     counts = json.loads((run_dir / "manifest.json").read_text())["draft"]["counts"]
-    assert counts == {"input": 4, "drafted": 1, "failed": 0, "no_contact_data": 0, "skipped": 3}
+    assert counts == {
+        "input": 4, "drafted": 1, "failed": 0, "no_contact_data": 0, "skipped": 3,
+        "skipped_market": 0, "market_fallback": 1,
+    }
+
+
+def test_lead_without_market_uses_serbia_fallback_and_is_counted(tmp_path, monkeypatch, capsys):
+    run_dir = _make_run(tmp_path, monkeypatch, [
+        _lead("Old", "old.rs", social_links={}, contact_phones=["069 111 2233"]),
+        _lead("New", "new.rs", market="serbia", language="sr"),
+    ])
+    _fake(monkeypatch)
+    assert main(["draft", "--run", "r"]) == 0
+    by = {l.company: l for l in read_jsonl(run_dir / "scored.jsonl")}
+    assert by["Old"].suggested_channel == "Viber/Whatsapp"  # Serbian mobile rules applied
+    assert json.loads((run_dir / "manifest.json").read_text())["draft"]["counts"]["market_fallback"] == 1
+    assert "1 lead(s) had no market and used the 'serbia' market rules" in capsys.readouterr().out
+
+
+def test_english_market_lead_is_skipped_never_drafted_in_serbian(tmp_path, monkeypatch, capsys):
+    run_dir = _make_run(tmp_path, monkeypatch, [
+        _lead("Dubai Smile", "smile.ae", market="uae", language="en"),
+        _lead("Beograd", "bg.rs", market="serbia", language="sr"),
+    ])
+    calls = _fake(monkeypatch)
+    assert main(["draft", "--run", "r", "--limit", "1"]) == 0
+    by = {l.company: l for l in read_jsonl(run_dir / "scored.jsonl")}
+    assert len(calls) == 1 and "Dubai Smile" not in calls[0]  # skip doesn't use up --limit
+    assert by["Dubai Smile"].draft_message == "" and by["Dubai Smile"].errors == []
+    assert by["Dubai Smile"].suggested_channel == ""
+    assert by["Beograd"].draft_message
+    draft = json.loads((run_dir / "manifest.json").read_text())["draft"]
+    assert draft["counts"]["skipped_market"] == 1 and draft["counts"]["market_fallback"] == 0
+    assert draft["market_skip_reasons"] == {"English drafting arrives in step 7": 1}
+    assert "1 skipped, not drafted: English drafting arrives in step 7" in capsys.readouterr().out
+
+
+def test_draft_lead_refuses_a_language_without_rules():
+    import pytest
+    import yaml
+
+    from pipeline.market import Market
+
+    uae = Market.from_dict("uae", yaml.safe_load(MARKETS_YAML)["markets"]["uae"])
+    assert drafter.language_skip_reason(uae) == "English drafting arrives in step 7"
+    with pytest.raises(ValueError, match="step 7"):
+        drafter.draft_lead(_lead("A", "a.ae"), {}, {}, uae)
+
+
+def test_unknown_market_is_skipped_with_its_reason(tmp_path, monkeypatch, capsys):
+    run_dir = _make_run(tmp_path, monkeypatch, [_lead("Zagreb", "z.hr", market="croatia")])
+    calls = _fake(monkeypatch)
+    assert main(["draft", "--run", "r"]) == 0
+    assert calls == []
+    assert "unknown market 'croatia'" in capsys.readouterr().out
+    assert json.loads((run_dir / "manifest.json").read_text())["draft"]["counts"]["skipped_market"] == 1
 
 
 def test_lead_without_contact_data_is_counted_not_errored(tmp_path, monkeypatch):

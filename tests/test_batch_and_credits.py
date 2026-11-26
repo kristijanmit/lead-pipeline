@@ -24,7 +24,7 @@ def _lead(company, domain, **kw):
 
 def _setup(tmp_path, monkeypatch, leads):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "config.yaml").write_text("")
+    (tmp_path / "config.yaml").write_text(MARKETS_YAML)
     run_dir = tmp_path / "data" / "runs" / "r"
     run_dir.mkdir(parents=True)
     write_jsonl(run_dir / "scored.jsonl", leads)
@@ -370,4 +370,7 @@ def test_draft_notion_overwrite_needs_redraft_flag(monkeypatch, capsys):
     del page["properties"]["Status"]  # blank status counts as Not started
     assert runner.cmd_draft_notion(base(redraft=True)) == 0
     assert updates[1]["Status"] == {"select": {"name": "Queued"}}
-    assert "overwrite" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "overwrite" in out
+    # pages carry no Market until step 6: drafted under the Serbia fallback, and counted
+    assert "1 lead(s) had no market and used the 'serbia' market rules" in out

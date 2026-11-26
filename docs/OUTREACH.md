@@ -39,10 +39,28 @@ It drafts every eligible page (see Workflow), writes `Suggested Channel` + `Draf
 `Status` = Queued only from `Not started`. It overwrites a draft only with `--redraft`. The `SM Audit` text is
 passed to the prompt as first-hand context, plus `Audit Notes`, `CMS`, `Lead Type`, `Industry` and contacts. It does not touch `seen_domains.json` or the run dirs.
 
-## Channel (`pipeline/drafting/channel.py`, pure)
-Instagram link > Facebook link > Viber/Whatsapp (Serbian mobile, no Instagram/Facebook) > Email > Call
-(landline only). Placeholder phones/emails are ignored. No usable contact data: no draft, counted as
-`no_contact_data` in the manifest.
+## Channel (`pipeline/channels.py`, pure; re-exported by `pipeline/drafting/channel.py`)
+The lead's market (config.yaml `markets:`) decides the order, what counts as a mobile number and which
+channels are never a first touch. `best_channel(lead, market)` returns the first usable channel in
+`market.channels` that isn't in `first_touch_excluded`; `usable_channels` lists them all, excluded ones too.
+
+- Serbia: Instagram > Facebook > Viber/Whatsapp (mobile `+3816…`) > Email > Call.
+- UAE: Instagram > Facebook > LinkedIn > Email > Call. WhatsApp (mobile `+9715…`) is listed but never
+  suggested for a first touch.
+
+Phones are normalized with the market's dialing code first (`050…` in the UAE → `+97150…`, `00…` →
+`+…`). The mobile channel's label is the market's own (`Viber/Whatsapp` / `WhatsApp`). LinkedIn comes from
+the `linkedin` social link. Placeholder phones/emails are ignored. No usable contact data: no draft,
+counted as `no_contact_data` in the manifest.
+
+Until v2 step 6/7:
+- A lead or Notion page without a market is drafted under the `serbia` preset. `draft` and `draft-notion`
+  print how many did, and `draft` records it as `market_fallback` in the manifest. Removed in step 6, when
+  pages get a `Market` property.
+- Leads in an `en` market (UAE) are skipped, not drafted: "English drafting arrives in step 7". They are
+  counted (`skipped_market`, `market_skip_reasons` in the manifest) and printed. A lead with a market that
+  isn't in config is skipped the same way. LinkedIn is in the ranking, but its two outputs (connection note,
+  after-accept message) arrive in step 7.
 
 ## Message rules (`pipeline/drafting/drafter.py`)
 Serbian, Latin script, capitalized "Vi" form. DM shape: "Pozdrav, naišao sam na Vaš profil (Facebook: stranicu) i
