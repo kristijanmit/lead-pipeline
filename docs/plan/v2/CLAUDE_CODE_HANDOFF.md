@@ -89,6 +89,16 @@ If the plan conflicts with the code, stop and tell me.
 
 You do by hand: Pick the run; judge the top 20
 
+### Step 5b (right after step 5, same branch)
+
+```
+Read CLAUDE.md and docs/plan/v2/*. We're on step 5b (after step 5) of strategy_gaps.md §E. Follow the rules in the kickoff prompt in docs/plan/v2/CLAUDE_CODE_HANDOFF.md §2.
+Update docs/SCORING.md to describe scorer v4 (L0 gates, niche-match check, Need / Viability / Reach, priority, tiers, score_reasons, confidence, per-market values) and add a v4 entry to its changelog. Record D2 there: the "no website always outranks a bad audited site" rule (audited_score_cap < no_website_score) is dropped, because with Instagram-only salons "no site" isn't automatically the hotter lead; new_build and redesign now compete on Need. Also note that industry Fit is removed (no default niches). Docs only, no code changes.
+If the plan conflicts with the code, stop and tell me.
+```
+
+You do by hand: Read the new SCORING.md changelog entry
+
 ### Step 6
 
 ```
@@ -146,5 +156,4 @@ Not code: no sends until website P0 (demo, sample audit, About, review pages) is
 ## 4. Tips
 
 - Keep each step in its own session; paste the step block fresh. Long sessions drift. The kickoff prompt (§2) is only needed once; each step block points back to its rules.
-- After step 5, ask it to update `docs/SCORING.md` and the changelog with the D2 reason.
 - Cleanup (remove `total_score` etc., schema 11) one version after step 6 is stable.
