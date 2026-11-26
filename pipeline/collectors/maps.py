@@ -163,7 +163,7 @@ class MapsCollector:
         if not location or not categories:
             raise ValueError(
                 "maps collector needs a location and at least one category "
-                "(--location / --categories, or collect.* in config.yaml)"
+                "(--location, and the niche's search_terms / osm_tags)"
             )
         binary = shutil.which(self.binary)
         if not binary:

@@ -176,6 +176,9 @@ The edits below assume the recommendations. Change them if you decide otherwise.
 - **ADD** `score_properties(lead) -> dict`, the *only* properties `--rescore` may write. Test that it contains no human field.
 - **CHANGE** `lead_from_page`: also read `Verdict` (only `Skip` matters) and `Score Reasons` (not passed to the prompt).
 - **CHANGE** `query_draftable`: superseded by section 11 (no Verdict = Go, no SM Audit requirement).
+- **ADD** (decided 2026-11-26) Notion text property `Niche Label`: written from `lead.niche_label` by `to_notion_properties`,
+  read back by `lead_from_page` → `lead.niche_label`, so `draft-notion` catch-up gets the draft phrase. `Industry` still
+  holds the niche name. Until this lands (step 1–5), drafting from a Notion page falls back to `Industry`.
 
 ### `pipeline/runner.py` — sync
 - **CHANGE** `cmd_sync` (lines 543-562): `to_sync` = `scored` leads with `qualified` and tier ≥ `--min-tier` (default C) (G6).
@@ -269,7 +272,7 @@ Phase B follow-ups with the `Outcome` field, reply drafts.
 | `pipeline/config.py` | **DELETE** `outreach.industry_labels` from `DEFAULTS` (8 niches hard-coded) and `collect.country: "Serbia"` / `qualification.target_countries`. **CHANGE** `_validate`: drop the "collect.country must be non-empty" check (`config.py:164`) and the industry_labels check (line ~213). **ADD** market preset validation (required keys, `language ∈ {sr, en}`, `channels` known, `first_touch_excluded ⊆ channels`). |
 | `pipeline/runner.py` collect | **DELETE** the `industry_labels` warning (`runner.py:78-86`). `categories` no longer falls back to config (`runner.py:68-71`). It comes from the niche's `search_terms`. |
 | `pipeline/schema.py` | **ADD** `market: str`, `language: str`, `niche: str` (name), `niche_label: str` (draft phrase), `niche_match: str | None`. **Keep `industry`** and set it to the niche name, so the Notion `Industry` select keeps working (decided 2026-11-26). `niche` is the same value; no separate Notion column. |
-| **ADD** `pipeline/niche.py` | `@dataclass Niche(name, search_terms, phrase, accepted_categories=[], question="", landing_url="", need_overrides={})` + `from_dict` / `to_dict` + validation (name, search_terms and phrase required). |
+| **ADD** `pipeline/niche.py` | `@dataclass Niche(name, search_terms, phrase, accepted_categories=[], question="", landing_url="", need_overrides={})` + `from_dict` / `to_dict` + validation (name, search_terms and phrase required). **Decided 2026-11-26:** also `osm_tags: list[str]` (optional; raw `key=value` tags or `osm.resolve_category` keys). `search_terms` go to Maps only; OSM uses `osm_tags`. `go` asks for `osm_tags` only when the source includes osm and validates them up front; a run with source osm and no `osm_tags` fails with a clear message. |
 | **ADD** `pipeline/market.py` | `@dataclass Market(id, country, dial_code, mobile_prefixes, language, channels, first_touch_excluded, review_strong, currency, maps_language, exclude_name_patterns)` + `load_market(config, id)` + `Market.from_prompts()` for "new market". |
 | `cmd_go` (`runner.py:799-855`) | **CHANGE** Lead Gen prompts: market (numbered list of presets + "new market") → niche (name, search terms, draft phrase, accepted categories, question, landing URL; required ones re-asked if empty) → source → location. Optional "copy niche from run X" (lists earlier manifests, nothing preselected). Prints a summary, then confirms. A new market is printed as YAML to paste into config. It is never written to config automatically. |
 | `cmd_collect` / `cmd_run` | **ADD** `--market <id>` and `--niche-file <yaml>` (scripted runs). Without a niche the command fails: `"no niche: run go, or pass --niche-file"`. Stamp `market`, `language`, `niche`, `niche_label`, `country` on every lead. Write `market` and `niche` blocks into `manifest.json`. |
@@ -432,6 +435,7 @@ L2 moves from "Verdict before drafting" to **what you do at send time**:
 | File | Edit |
 |---|---|
 | `runner.py` `cmd_run`, `cmd_batch`, `cmd_go` | **ADD** auto draft step after sync (scoped to this run's synced pages); remove draft-before-sync paths, `input()` confirmations in run/batch, resume-at-draft state; `go --yes`. |
+| `runner.py` auto draft step | **Decided 2026-11-26:** drafts from the run's JSONL lead (it carries `niche_label`, `profile_facts`), joined to the Notion page by `page_id` from the sync cache — not rebuilt from the page. Writes go to that page with `update_page`. |
 | `runner.py` `cmd_draft_notion` | write by default when `auto_draft`; `--dry-run`; per-page failures never raise; summary: drafted / failed / skipped (reason) / undrafted (credits). |
 | `notion_sink.py` `query_draftable` | filter from 11.2; optional `run_id` / page-id list to scope to one run. |
 | `drafter.py` | praise order from 11.3; `profile_facts` in the prompt; return a failure result instead of raising. |

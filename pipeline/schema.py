@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Iterable
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 SCORING_VERSION = 3
 
 
@@ -28,6 +28,14 @@ class Lead:
     # (the manual CSV's optional "location" column). v4 JSONL loads as "".
     country: str = ""  # v6 — stamped by cmd_collect the same way as location; the
     # qualification filter's location gate checks this, not the free-text city
+
+    # v10 — the run's market and niche (docs/plan/v2), stamped by cmd_collect on every
+    # lead. industry holds the niche name too (the Notion Industry select); niche_label
+    # is the plural draft phrase in the market language. v9 JSONL loads them as "".
+    market: str = ""  # preset id, e.g. "serbia" / "uae"
+    language: str = ""  # drafting language: "sr" | "en"
+    niche: str = ""
+    niche_label: str = ""
 
     schema_version: int = SCHEMA_VERSION
 

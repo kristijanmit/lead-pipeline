@@ -207,7 +207,9 @@ def build_prompt(lead: Lead, channel: str, outreach: dict, variant: int, example
     # `variant` is unused now (one fixed descriptor and a question chosen by business type);
     # kept so the runner call sites and signature stay stable.
     socials = lead.social_links
-    niche = outreach["industry_labels"].get(lead.industry, lead.industry)
+    # the run's draft phrase; pages from Notion don't carry it yet (Niche Label lands
+    # in v2 step 6), so they fall back to the niche name in Industry
+    niche = lead.niche_label or lead.industry
     is_dm = channel not in ("Email", "Call")
     greeting = "Pozdrav" if is_dm else "Dobar dan, ovde Kristijan"
     place = "stranicu" if channel == "Facebook" else "profil"

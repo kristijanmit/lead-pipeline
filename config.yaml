@@ -2,12 +2,40 @@
 # Safe to commit: secrets (Notion token, future API keys) live in the
 # gitignored .env, never here.
 
+# No niches here, ever: every run's niche is created in `go` (or given in full with
+# --niche-file / a batch entry's `niche:` block) and stored in the run manifest.
 collect:
-  location: ""     # OSM area name, e.g. "Berlin" — usually given per run via --location
-  country: Serbia  # stamped on every lead the same way as location; the qualification
-                   # filter's location gate checks this, not the free-text city
-  categories: []   # e.g. [restaurant, hairdresser] or raw OSM tags like "craft=roofer"
+  location: ""     # city or area, e.g. "Novi Sad" — usually given per run via --location / go
   manual_csv: leads_manual.csv   # hand-gathered leads; see leads_manual.csv.example
+
+# Market presets: facts about a country (phone rules, drafting language, channel order).
+# A run picks one (go / --market <id>); its country is stamped on every lead and is the
+# scoring country gate. `go` can create a new market and prints it as YAML to paste here.
+# channels: first-touch order, best first. first_touch_excluded: shown, never used first.
+# review_strong / exclude_name_patterns / currency are used by later v2 steps.
+markets:
+  serbia:
+    country: Serbia
+    dial_code: "+381"
+    mobile_prefixes: ["+3816"]
+    language: sr              # drafting rules + examples (config/outreach.md for now)
+    channels: [Instagram, Facebook, Viber/Whatsapp, Email, Call]
+    first_touch_excluded: []
+    review_strong: 50
+    currency: EUR
+    maps_language: sr
+    exclude_name_patterns: ["dom zdravlja", "zavod", "opšta bolnica", "KBC", "institut"]
+  uae:
+    country: United Arab Emirates
+    dial_code: "+971"
+    mobile_prefixes: ["+9715"]
+    language: en              # English drafting lands in v2 step 7
+    channels: [Instagram, Facebook, LinkedIn, Email, Call, WhatsApp]
+    first_touch_excluded: [WhatsApp]   # only after a reply
+    review_strong: 100
+    currency: AED
+    maps_language: en
+    exclude_name_patterns: []
 
 overpass:
   endpoint: https://overpass-api.de/api/interpreter
@@ -92,12 +120,3 @@ scoring:
       best_practices: 0.25   # structural/security issues perf misses
       accessibility: 0.20    # real gap, rarely why a cold lead replies
       seo: 0.15              # most sites already score 75-100 — least signal
-
-# Phase 3 — qualification filters, run before scoring, not part of the
-# score itself (docs/SCORING.md §2). A lead only gets scored/marked Qualified if
-# it is in a target country. Industry is deliberately neither filtered nor
-# weighted: it's too early to know which vertical converts best — revisit once
-# there's real close-rate data across verticals.
-qualification:
-  target_countries: [Serbia]
-

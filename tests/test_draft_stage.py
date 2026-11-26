@@ -140,7 +140,8 @@ def test_prompt_respects_outreach_settings():
     from pipeline.config import DEFAULTS
 
     outreach = dict(DEFAULTS["outreach"])
-    lead = _lead("Salon Mira", "", industry="hairdresser", lead_type="new_build", site_text="Mira frizer")
+    lead = _lead("Salon Mira", "", industry="hairdresser", niche_label="frizerske salone",
+                 lead_type="new_build", site_text="Mira frizer")
     p = drafter.build_prompt(lead, "Instagram", outreach, 0, "EXAMPLES")
     assert "frizerske salone" in p and "rating" in p.lower()
     assert "Do NOT include any link" in p and "Do NOT name any past client" in p
@@ -148,6 +149,14 @@ def test_prompt_respects_outreach_settings():
     on = {**outreach, "link_in_first_message": True, "named_references": ["Acme"]}
     p2 = drafter.build_prompt(lead, "Instagram", on, 0, "")
     assert "onixweblab.com" in p2 and "Acme" in p2
+
+
+def test_prompt_niche_phrase_falls_back_to_industry():
+    # Notion pages carry no niche_label until v2 step 6: the niche name is used
+    from pipeline.config import DEFAULTS
+
+    lead = _lead("Salon Mira", "", industry="hair salon", lead_type="new_build")
+    assert "Niche: hair salon" in drafter.build_prompt(lead, "Instagram", dict(DEFAULTS["outreach"]), 0, "")
 
 
 def test_email_prompt_allows_only_the_signature_domain():

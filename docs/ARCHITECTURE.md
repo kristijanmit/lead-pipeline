@@ -106,15 +106,19 @@ A single canonical record flows through every stage. Defined once in
 ```python
 @dataclass
 class Lead:
-    schema_version: int = 7        # bump whenever fields are added/changed
+    schema_version: int = 10       # bump whenever fields are added/changed (pipeline/schema.py is authoritative)
 
     # identity — set at collection, never changes after
     company: str
     domain: str                    # normalized: no scheme, no "www.", lowercase
     source: str                    # "osm" | "maps" | "manual"
-    industry: str = "other"
-    location: str = ""             # the market the lead was collected in, e.g. "Novi Sad" (v5)
-    country: str = ""              # v6 — the qualification filter's location gate checks this
+    industry: str = "other"        # v10: the run's niche name (Notion Industry select)
+    location: str = ""             # the city/area the lead was collected in, e.g. "Novi Sad" (v5)
+    country: str = ""              # v6 — the run's market country; the scoring country gate checks this
+    market: str = ""               # v10 — market preset id, e.g. "serbia" / "uae"
+    language: str = ""             # v10 — drafting language, "sr" | "en"
+    niche: str = ""                # v10 — same as industry
+    niche_label: str = ""          # v10 — plural draft phrase in the market language
 
     # contact enrichment (Phase 2, step 1)
     contact_emails: list[str] = field(default_factory=list)   # info@, sales@, etc — don't collapse to one
@@ -271,7 +275,7 @@ behavior, rate limits, parsing rules, and how to add a new one — see
 
 ## 8. Run lifecycle
 
-1. `runner.py collect --source osm --location "..." --categories "..."`
+1. `runner.py collect --source osm --market <id> --niche-file <yaml> --location "..."` (or `go`)
    writes `data/runs/<run_id>/collected.jsonl` and a `manifest.json` with the
    params used, source, and raw count.
 2. `runner.py enrich --run <run_id>` reads `collected.jsonl`, runs each

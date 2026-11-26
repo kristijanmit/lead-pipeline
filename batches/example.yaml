@@ -1,11 +1,25 @@
 # python -m pipeline.runner batch --file batches/example.yaml [--dry-run] [--pause-s 30]
-# Entry keys mirror `run`: source (required), location, country, input, categories,
-# limit, sink, include_seen. draft: true drafts before sync; no_draft: true stops after score (sync later).
+# Entry keys mirror `run`: source (required), market (required), niche (required), location,
+# input, limit, sink, include_seen, bbox, grid. draft: true drafts before sync;
+# no_draft: true stops after score (sync later).
+# market: a preset id from config.yaml `markets:` or a full block with an `id`.
+# niche: always spelled out in full — there are no default niches. name, search_terms (Maps)
+# and phrase (plural, in the market language) are required; osm_tags is required for
+# source osm; accepted_categories, question and landing_url are optional.
+# Every entry is validated before the first one runs.
 runs:
   - source: maps
+    market: serbia
     location: Beograd
-    categories: detailing
+    niche:
+      name: auto detailing
+      search_terms: [detailing]
+      phrase: auto-detailing studije
   - source: maps
+    market: serbia
     location: Novi Sad
-    categories: "detailing"
     limit: 20
+    niche:
+      name: auto detailing
+      search_terms: [detailing]
+      phrase: auto-detailing studije

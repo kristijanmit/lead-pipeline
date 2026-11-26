@@ -13,6 +13,7 @@ from pathlib import Path
 import yaml
 
 from pipeline.collectors.maps import parse_bbox
+from pipeline.market import Market
 
 
 class ConfigError(Exception):
@@ -20,12 +21,15 @@ class ConfigError(Exception):
 
 
 DEFAULTS: dict = {
+    # No niches and no default country here (docs/plan/v2 K1/K2): every run picks a
+    # market preset and creates its niche in `go` (or --market / --niche-file).
     "collect": {
         "location": "",
-        "country": "Serbia",
-        "categories": [],
         "manual_csv": "leads_manual.csv",
     },
+    # Market presets — facts about a country, not business choices. Validated
+    # below; config.yaml normally defines them (serbia, uae).
+    "markets": {},
     "overpass": {
         "endpoint": "https://overpass-api.de/api/interpreter",
         "timeout_s": 60,
@@ -61,17 +65,6 @@ DEFAULTS: dict = {
         "price_from": "",
         "signature": "Kristijan, ONIX Web Lab, onixweblab.com",
         "examples_path": "config/outreach.md",
-        # industry key (the --categories value) -> Serbian niche phrase for prompts
-        "industry_labels": {
-            "dentist": "stomatološke ordinacije",
-            "clinic": "privatne klinike",
-            "hairdresser": "frizerske salone",
-            "beauty": "salone lepote",
-            "restaurant": "restorane",
-            "stamparija": "štamparije",
-            "detailing": "auto-detailing studije",
-            "car detailing": "auto-detailing studije",
-        },
     },
     "notion": {
         "database_id": "",
@@ -99,9 +92,6 @@ DEFAULTS: dict = {
                 "seo": 0.15,
             },
         },
-    },
-    "qualification": {
-        "target_countries": ["Serbia"],
     },
 }
 
@@ -158,10 +148,26 @@ def _validate(config: dict, path: Path) -> None:
     if not isinstance(overpass.get("timeout_s"), int) or overpass["timeout_s"] <= 0:
         raise ConfigError(f"{path}: overpass.timeout_s must be a positive integer")
     collect = config["collect"]
-    if not isinstance(collect.get("categories"), list):
-        raise ConfigError(f"{path}: collect.categories must be a list")
-    if not isinstance(collect.get("country"), str) or not collect["country"]:
-        raise ConfigError(f"{path}: collect.country must be a non-empty string")
+    for removed in ("categories", "country"):
+        if removed in collect:
+            raise ConfigError(
+                f"{path}: collect.{removed} was removed — the niche is created in `go` "
+                "(or --niche-file) and the country comes from the market (markets:)"
+            )
+    if "qualification" in config:
+        raise ConfigError(
+            f"{path}: qualification: was removed — the target country is the run's market (markets:)"
+        )
+    markets = config["markets"]
+    if not isinstance(markets, dict):
+        raise ConfigError(f"{path}: markets must be a mapping of id -> market preset")
+    for market_id, preset in markets.items():
+        if not isinstance(market_id, str) or market_id != market_id.strip().lower():
+            raise ConfigError(f"{path}: markets: id {market_id!r} must be lowercase")
+        try:
+            Market.from_dict(market_id, preset)
+        except (TypeError, ValueError) as e:
+            raise ConfigError(f"{path}: markets.{market_id}: {e}") from None
     maps = config["maps"]
     for key in ("depth", "timeout_s"):
         if not isinstance(maps.get(key), int) or maps[key] <= 0:
@@ -206,11 +212,11 @@ def _validate(config: dict, path: Path) -> None:
         isinstance(r, str) for r in outreach["named_references"]
     ):
         raise ConfigError(f"{path}: outreach.named_references must be a list of strings")
-    labels = outreach.get("industry_labels")
-    if not isinstance(labels, dict) or not all(
-        isinstance(k, str) and isinstance(v, str) for k, v in labels.items()
-    ):
-        raise ConfigError(f"{path}: outreach.industry_labels must map strings to strings")
+    if "industry_labels" in outreach:
+        raise ConfigError(
+            f"{path}: outreach.industry_labels was removed — the draft phrase is the niche's "
+            "`phrase`, created in `go`"
+        )
 
     notion = config["notion"]
     # database_id may legitimately be empty until Phase 4 setup — the sink
@@ -262,8 +268,3 @@ def _validate(config: dict, path: Path) -> None:
             )
     if abs(sum(lighthouse_weights.values()) - 1.0) > 0.001:
         raise ConfigError(f"{path}: scoring.opportunity.lighthouse_weights must sum to 1.0")
-
-    qualification = config["qualification"]
-    countries = qualification.get("target_countries")
-    if not isinstance(countries, list) or not countries or not all(isinstance(c, str) and c for c in countries):
-        raise ConfigError(f"{path}: qualification.target_countries must be a non-empty list of strings")

@@ -12,6 +12,7 @@ from pipeline import runner
 from pipeline.drafting import DraftBudgetError, drafter
 from pipeline.runner import EXIT_OUT_OF_CREDITS, main
 from pipeline.schema import Lead, read_jsonl, write_jsonl
+from support import MARKETS_YAML
 
 
 def _lead(company, domain, **kw):
@@ -65,11 +66,14 @@ def test_draft_stops_on_credits_keeps_finished_and_untouched(tmp_path, monkeypat
     assert "no credits" in capsys.readouterr().err
 
 
+_ENTRY_NICHE = "    market: serbia\n    niche: {name: dental clinic, search_terms: [dentist], phrase: stomatološke ordinacije}\n"
+
+
 def _batch(tmp_path, monkeypatch, entries):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "config.yaml").write_text("")
+    (tmp_path / "config.yaml").write_text(MARKETS_YAML)
     (tmp_path / "b.yaml").write_text(
-        "runs:\n" + "".join(f"  - source: maps\n    location: {e}\n    draft: true\n" for e in entries)
+        "runs:\n" + "".join(f"  - source: maps\n    location: {e}\n    draft: true\n" + _ENTRY_NICHE for e in entries)
     )
 
 
@@ -133,34 +137,84 @@ def test_batch_rejects_unknown_keys(tmp_path, monkeypatch):
     assert main(["batch", "--file", "b.yaml"]) == 1
 
 
-def test_go_prompts_for_location_and_categories(tmp_path, monkeypatch):
+def _go(tmp_path, monkeypatch, answers):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "config.yaml").write_text("")
-    answers = iter(["lead gen", "maps", "Novi Sad", "detailing, poliranje ,", "y"])
-    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    (tmp_path / "config.yaml").write_text(MARKETS_YAML)
+    it = iter(answers)
+    monkeypatch.setattr("builtins.input", lambda prompt: next(it))
     seen = {}
     monkeypatch.setattr(runner, "cmd_run", lambda a: seen.update(vars(a)) or 0)
+    return seen
+
+
+# mode, market, niche name, search terms, phrase, accepted categories, question, landing URL
+_LEAD_GEN = ["lead gen", "1", "detailing studio", "detailing, poliranje ,", "auto-detailing studije", "", "", ""]
+
+
+def test_go_lead_gen_asks_market_niche_source_location(tmp_path, monkeypatch):
+    seen = _go(tmp_path, monkeypatch, _LEAD_GEN + ["maps", "Novi Sad", "y"])
     assert main(["go"]) == 0
-    assert (seen["location"], seen["categories"], seen["source"]) == ("Novi Sad", "detailing,poliranje", "maps")
-    assert seen["draft"] is False
+    assert (seen["location"], seen["source"], seen["draft"]) == ("Novi Sad", "maps", False)
+    assert seen["market_def"].id == "serbia" and seen["market_def"].language == "sr"
+    niche = seen["niche_def"]
+    assert (niche.name, niche.search_terms, niche.phrase) == (
+        "detailing studio", ["detailing", "poliranje"], "auto-detailing studije")
+    assert niche.osm_tags == []  # only asked for osm
 
 
-def test_go_both_runs_the_chain_with_drafts(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "config.yaml").write_text("")
-    answers = iter(["3", "osm", "Novi Sad", "detailing", "y"])
-    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
-    seen = {}
-    monkeypatch.setattr(runner, "cmd_run", lambda a: seen.update(vars(a)) or 0)
+def test_go_search_terms_default_to_the_niche_name(tmp_path, monkeypatch):
+    answers = ["lead gen", "2", "dental clinic", "", "dental clinics", "Dentist", "", "", "maps", "Dubai", "y"]
+    seen = _go(tmp_path, monkeypatch, answers)
+    assert main(["go"]) == 0
+    assert seen["market_def"].id == "uae"
+    assert seen["niche_def"].search_terms == ["dental clinic"]
+    assert seen["niche_def"].accepted_categories == ["Dentist"]
+
+
+def test_go_osm_asks_for_tags_and_revalidates(tmp_path, monkeypatch, capsys):
+    answers = ["3"] + _LEAD_GEN[1:] + ["osm", "car wash", "amenity=car_wash", "Novi Sad", "y"]
+    seen = _go(tmp_path, monkeypatch, answers)
     assert main(["go"]) == 0
     assert (seen["source"], seen["draft"]) == ("osm", True)
+    assert seen["niche_def"].osm_tags == ["amenity=car_wash"]
+    assert "unknown category 'car wash'" in capsys.readouterr().out
+
+
+def test_go_new_market_prints_yaml_and_is_not_saved(tmp_path, monkeypatch, capsys):
+    new_market = ["3", "croatia", "Croatia", "+385", "+3859", "en", "Instagram,Email", "-", "EUR", "hr"]
+    seen = _go(tmp_path, monkeypatch, ["lead gen"] + new_market + _LEAD_GEN[2:] + ["maps", "Zagreb", "y"])
+    assert main(["go"]) == 0
+    market = seen["market_def"]
+    assert (market.id, market.country, market.channels) == ("croatia", "Croatia", ["Instagram", "Email"])
+    out = capsys.readouterr().out
+    assert "paste this into config.yaml" in out and "croatia:" in out
+    assert "croatia" not in (tmp_path / "config.yaml").read_text()
+
+
+def test_go_can_copy_a_niche_from_an_earlier_run(tmp_path, monkeypatch):
+    run_dir = tmp_path / "data" / "runs" / "2026-11-01T10-00-00"
+    run_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(json.dumps({"niche": {
+        "name": "dental clinic", "search_terms": ["dentist"], "phrase": "stomatološke ordinacije"}}))
+    seen = _go(tmp_path, monkeypatch, ["lead gen", "1", "2", "maps", "Niš", "y"])
+    assert main(["go"]) == 0
+    assert seen["niche_def"].name == "dental clinic"
+
+
+def test_go_niche_is_never_preselected(tmp_path, monkeypatch, capsys):
+    # earlier niches are offered, but an empty answer is re-asked, not defaulted
+    run_dir = tmp_path / "data" / "runs" / "r1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(json.dumps({"niche": {
+        "name": "dental clinic", "search_terms": ["dentist"], "phrase": "x"}}))
+    seen = _go(tmp_path, monkeypatch, ["lead gen", "1", "", "1"] + _LEAD_GEN[2:] + ["maps", "Niš", "y"])
+    assert main(["go"]) == 0
+    assert "required" in capsys.readouterr().out
+    assert seen["niche_def"].name == "detailing studio"  # "1" = New niche, typed in
 
 
 def test_go_cancel_runs_nothing(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "config.yaml").write_text("")
-    answers = iter(["Lead Gen", "maps", "Beograd", "detailing", "n"])
-    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    _go(tmp_path, monkeypatch, _LEAD_GEN + ["maps", "Beograd", "n"])
     monkeypatch.setattr(runner, "cmd_run", lambda a: pytest.fail("should not run"))
     assert main(["go"]) == 0
 
@@ -208,6 +262,49 @@ def test_go_source_flag_skips_the_menu(tmp_path, monkeypatch):
     assert calls == [(False, 5, False)]
 
 
+def test_batch_entry_needs_market_and_niche(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.yaml").write_text(MARKETS_YAML)
+    (tmp_path / "b.yaml").write_text("runs:\n  - source: maps\n    location: A\n    market: serbia\n")
+    assert main(["batch", "--file", "b.yaml"]) == 1
+    assert "needs niche" in capsys.readouterr().err
+
+
+def test_batch_rejects_old_categories_key(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.yaml").write_text(MARKETS_YAML)
+    (tmp_path / "b.yaml").write_text("runs:\n  - source: maps\n    categories: dentist\n" + _ENTRY_NICHE)
+    assert main(["batch", "--file", "b.yaml"]) == 1
+
+
+def test_batch_validates_every_entry_before_running(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.yaml").write_text(MARKETS_YAML)
+    (tmp_path / "b.yaml").write_text(
+        "runs:\n  - source: maps\n    location: A\n" + _ENTRY_NICHE
+        + "  - source: osm\n    location: B\n" + _ENTRY_NICHE  # osm without osm_tags
+    )
+    log = _stub_stages(monkeypatch, {})
+    assert main(["batch", "--file", "b.yaml", "--pause-s", "0"]) == 1
+    assert log == []
+    assert "run #2" in capsys.readouterr().err
+
+
+def test_batch_accepts_a_full_market_block(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.yaml").write_text("")
+    (tmp_path / "b.yaml").write_text(
+        "runs:\n  - source: maps\n    location: Zagreb\n"
+        "    market: {id: croatia, country: Croatia, dial_code: '+385', mobile_prefixes: ['+3859'],"
+        " language: en, channels: [Instagram, Email]}\n"
+        "    niche: {name: dental clinic, search_terms: [dentist], phrase: dental clinics}\n"
+    )
+    seen = []
+    monkeypatch.setattr(runner, "cmd_collect", lambda a: seen.append(a) or 1)
+    main(["batch", "--file", "b.yaml", "--pause-s", "0"])
+    assert seen[0].market_def.country == "Croatia" and seen[0].niche_def.name == "dental clinic"
+
+
 def test_batch_entry_maps_bbox_and_grid_flags():
     ns = runner._run_args(
         argparse_ns := runner.build_parser().parse_args(["batch", "--file", "x"]),
@@ -219,8 +316,8 @@ def test_batch_entry_maps_bbox_and_grid_flags():
 
 def test_batch_skips_draft_unless_entry_asks(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "config.yaml").write_text("")
-    (tmp_path / "b.yaml").write_text("runs:\n  - source: maps\n    location: A\n")
+    (tmp_path / "config.yaml").write_text(MARKETS_YAML)
+    (tmp_path / "b.yaml").write_text("runs:\n  - source: maps\n    location: A\n" + _ENTRY_NICHE)
     log = _stub_stages(monkeypatch, {})
     assert main(["batch", "--file", "b.yaml", "--pause-s", "0"]) == 0
     assert [x[0] for x in log] == ["collect", "enrich", "score", "sync"]

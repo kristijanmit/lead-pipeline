@@ -291,7 +291,7 @@ def test_score_is_pure_and_marks_status_scored():
 
 
 def test_config_defaults_are_a_valid_weights_dict():
-    scored = score(_lead(domain=""), DEFAULTS["scoring"], DEFAULTS["qualification"])
+    scored = score(_lead(domain=""), DEFAULTS["scoring"], {"target_countries": ["Serbia"]})
     assert scored.opportunity_score == 90
     assert scored.scoring_version == DEFAULTS["scoring"]["version"]
 

@@ -23,6 +23,8 @@ from pipeline.config import ConfigError, load_config
 from pipeline.dedupe import dedupe_leads, lead_key
 from pipeline.drafting import DraftBudgetError, draft_lead, load_examples
 from pipeline.enrichers import apply_enrichers, get_enricher
+from pipeline.market import Market, load_market, market_from_prompts, market_yaml
+from pipeline.niche import Niche, check_sources, load_niche_file
 from pipeline.schema import read_jsonl, write_jsonl
 from pipeline.scoring import score
 from pipeline.sinks import get_sink
@@ -59,31 +61,43 @@ def _has_no_contact_info(lead) -> bool:
     )
 
 
+def _run_market(args: argparse.Namespace, config: dict) -> Market:
+    """The run's market: a Market object from `go` / batch, else the --market preset."""
+    market = getattr(args, "market_def", None)
+    if market is not None:
+        return market
+    if getattr(args, "market", None):
+        return load_market(config, args.market)
+    raise ValueError("no market: run go, or pass --market <id> (a preset under markets: in config.yaml)")
+
+
+def _run_niche(args: argparse.Namespace) -> Niche:
+    """The run's niche: a Niche object from `go` / batch, else --niche-file. No default."""
+    niche = getattr(args, "niche_def", None)
+    if niche is not None:
+        return niche
+    if getattr(args, "niche_file", None):
+        return load_niche_file(args.niche_file)
+    raise ValueError("no niche: run go, or pass --niche-file")
+
+
 def cmd_collect(args: argparse.Namespace) -> int:
     config = load_config(args.config)
+    market = _run_market(args, config)
+    niche = _run_niche(args)
+    sources = [s.strip() for s in args.source.split(",") if s.strip()]
+    check_sources(niche, sources)
     params = {
         "location": args.location or config["collect"]["location"],
-        "country": args.country or config["collect"]["country"],
-        "categories": (
-            [c.strip() for c in args.categories.split(",") if c.strip()]
-            if args.categories
-            else config["collect"]["categories"]
-        ),
         "input": args.input,
         "bbox": getattr(args, "bbox", None),
         "grid": not getattr(args, "no_grid", False),
     }
-    sources = [s.strip() for s in args.source.split(",") if s.strip()]
 
-    # industry becomes a Notion select option and picks the Serbian niche phrase
-    # in drafts — warn (not fail: raw OSM tags are legitimate) on unmapped ones
-    known = config["outreach"]["industry_labels"]
-    for category in params["categories"]:
-        if category not in known:
-            print(
-                f"warning: category {category!r} has no outreach.industry_labels entry — "
-                "drafts will use the raw key; add it to config.yaml"
-            )
+    def source_params(source: str) -> dict:
+        # Maps searches free text, OSM needs tags; the manual CSV ignores both
+        terms = niche.osm_tags if source == "osm" else niche.search_terms
+        return {**params, "categories": list(terms)}
 
     # instantiate all collectors up front so a typo'd source name or missing
     # binary fails before any collection effort is spent
@@ -101,7 +115,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
         # can and record the rest; ValueError (misconfiguration) still
         # propagates since no other source can compensate for that
         try:
-            collected = list(collector.collect(params))
+            collected = list(collector.collect(source_params(source)))
         except RuntimeError as e:
             errors_by_source[source] = str(e)
             raw_by_source[source] = 0
@@ -131,12 +145,15 @@ def cmd_collect(args: argparse.Namespace) -> int:
         new_by_category[lead.industry] = new_by_category.get(lead.industry, 0) + 1
     for lead in leads:
         lead.run_id = run_id
-        # stamp the market/country the run targeted; a collector that set
-        # its own (the manual CSV's optional "location" column) wins
+        # a collector that set its own location (the manual CSV's optional
+        # "location" column) wins; market and niche always come from the run
         if not lead.location:
             lead.location = params["location"]
-        if not lead.country:
-            lead.country = params["country"]
+        lead.country = market.country
+        lead.market = market.id
+        lead.language = market.language
+        lead.industry = lead.niche = niche.name
+        lead.niche_label = niche.phrase
 
     args.run = run_id  # lets `run` (collect+enrich+score+sync chained) find it
 
@@ -148,9 +165,11 @@ def cmd_collect(args: argparse.Namespace) -> int:
     manifest = {
         "run_id": run_id,
         "stage": "collect",
+        "market": market.to_dict(),
+        "niche": niche.to_dict(),
         "config_snapshot": {
             "sources": sources,
-            "params": params,
+            "params": {**params, "search_terms": niche.search_terms, "osm_tags": niche.osm_tags},
             "limit": args.limit,
             "overpass": config["overpass"],
         },
@@ -173,13 +192,14 @@ def cmd_collect(args: argparse.Namespace) -> int:
     with_domain = sum(1 for lead in leads if lead.domain)
     source_summary = ", ".join(f"{s}: {n}" for s, n in raw_by_source.items())
     print(f"run {run_id}: {len(raw_leads)} raw ({source_summary}) -> {len(leads)} written")
+    print(f"  market {market.id} ({market.country}, {market.language}), niche {niche.name!r}")
     if errors_by_source:
         print(f"  {len(errors_by_source)} source(s) failed: {', '.join(errors_by_source)} (see manifest.json)")
     if already_in_notion:
         print(f"  {already_in_notion} already in Notion (cache) — skipped")
     if len(new_by_category) > 1:
         breakdown = ", ".join(f"{c} {n}" for c, n in new_by_category.items())
-        print(f"  new per category: {breakdown}")
+        print(f"  new per search term: {breakdown}")
     print(f"  {with_domain} with a website, {len(leads) - with_domain} without")
     print(f"  {run_dir}/collected.jsonl (+ collected.csv, manifest.json)")
     return 0
@@ -306,6 +326,28 @@ def cmd_enrich(args: argparse.Namespace) -> int:
     return 0
 
 
+def _score_market(args: argparse.Namespace, config: dict, run_dir: Path) -> Market:
+    """The country gate is the run's market country, read from the manifest collect
+    wrote. --market is only for runs from before markets existed (no market block)."""
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+    block = manifest.get("market")
+    requested = getattr(args, "market", None)
+    if block:
+        market = Market.from_dict(block.get("id", ""), block)
+        if requested and requested.strip().lower() != market.id:
+            raise ValueError(
+                f"run {args.run} was collected for market {market.id!r}, not {requested!r}"
+            )
+        return market
+    if requested:
+        return load_market(config, requested)
+    raise ValueError(
+        f"run {args.run} has no market in manifest.json (collected before markets existed) — "
+        "pass --market <id>"
+    )
+
+
 def cmd_score(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     run_dir = RUNS_DIR / args.run
@@ -322,7 +364,7 @@ def cmd_score(args: argparse.Namespace) -> int:
         previous = {lead_key(lead): lead for lead in read_jsonl(scored_path)}
 
     weights = config["scoring"]
-    qualification = config["qualification"]
+    qualification = {"target_countries": [_score_market(args, config, run_dir).country]}
     started_at = _now_iso()
 
     results = []
@@ -481,7 +523,6 @@ def cmd_draft_notion(args: argparse.Namespace) -> int:
     sink = get_sink("notion", config)
     outreach, draft_cfg = config["outreach"], config["draft"]
     examples = load_examples(outreach["examples_path"])
-    country = config["collect"].get("country", "")
 
     redraft = getattr(args, "redraft", False)
     pages = sink.query_draftable(
@@ -494,7 +535,7 @@ def cmd_draft_notion(args: argparse.Namespace) -> int:
         return 0
     drafted = failed = no_contact = 0
     for page in pages:
-        lead = lead_from_page(page, country=country)
+        lead = lead_from_page(page)
         out = draft_lead(lead, outreach, draft_cfg, variant=drafted + failed, examples=examples)
         if not out.draft_message:
             if out.errors != lead.errors:
@@ -621,10 +662,22 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
-_BATCH_KEYS = {"source", "location", "country", "input", "categories", "limit", "sink", "include_seen", "no_draft", "draft", "bbox", "grid"}
+_BATCH_KEYS = {"source", "market", "niche", "location", "input", "limit", "sink", "include_seen", "no_draft", "draft", "bbox", "grid"}
 
 
-def _load_batch(path: Path) -> list[dict]:
+def _batch_market(entry: dict, config: dict) -> Market:
+    """`market:` is a preset id or a full block with an `id`."""
+    value = entry["market"]
+    if isinstance(value, str):
+        return load_market(config, value)
+    if isinstance(value, dict):
+        return Market.from_dict(str(value.get("id", "")).strip().lower(), value)
+    raise ValueError("market must be a preset id or a full market block")
+
+
+def _load_batch(path: Path, config: dict) -> list[dict]:
+    """Entries with their market and niche resolved and validated up front, so a
+    typo in entry 5 fails before entry 1 spends any scraping time."""
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     runs = data.get("runs")
     if not isinstance(runs, list) or not runs:
@@ -635,6 +688,19 @@ def _load_batch(path: Path) -> list[dict]:
         unknown = set(entry) - _BATCH_KEYS
         if unknown:
             raise ValueError(f"{path}: run #{i} has unknown keys {sorted(unknown)}")
+        missing = [k for k in ("market", "niche") if not entry.get(k)]
+        if missing:
+            raise ValueError(
+                f"{path}: run #{i} needs {' and '.join(missing)} — no defaults (market: preset id "
+                "or full block; niche: full block with name, search_terms, phrase)"
+            )
+        try:
+            market = _batch_market(entry, config)
+            niche = Niche.from_dict(entry["niche"])
+            check_sources(niche, [s.strip() for s in str(entry["source"]).split(",")])
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"{path}: run #{i}: {e}") from None
+        entry["_market"], entry["_niche"] = market, niche
     return runs
 
 
@@ -643,10 +709,12 @@ def _run_args(base: argparse.Namespace, entry: dict) -> argparse.Namespace:
     return argparse.Namespace(
         config=base.config,
         source=entry["source"],
+        market=None,
+        market_def=entry.get("_market"),
+        niche_file=None,
+        niche_def=entry.get("_niche"),
         location=entry.get("location"),
-        country=entry.get("country"),
         input=entry.get("input"),
-        categories=entry.get("categories"),
         limit=entry.get("limit"),
         sink=entry.get("sink", "notion"),
         include_seen=bool(entry.get("include_seen", False)),
@@ -659,8 +727,20 @@ def _run_args(base: argparse.Namespace, entry: dict) -> argparse.Namespace:
     )
 
 
+def _public(entry: dict) -> dict:
+    """The entry as written in the YAML (without the resolved _market/_niche)."""
+    return {k: v for k, v in entry.items() if not k.startswith("_")}
+
+
 def _describe(entry: dict) -> str:
-    return ", ".join(f"{k}={v}" for k, v in entry.items())
+    parts = []
+    for k, v in _public(entry).items():
+        if k == "niche" and isinstance(v, dict):
+            v = v.get("name")
+        elif k == "market" and isinstance(v, dict):
+            v = v.get("id")
+        parts.append(f"{k}={v}")
+    return ", ".join(parts)
 
 
 def cmd_batch(args: argparse.Namespace) -> int:
@@ -672,12 +752,12 @@ def cmd_batch(args: argparse.Namespace) -> int:
     are already done), then carries on. Finished entries are recorded in
     data/batches/<name>.json and skipped on re-runs."""
     batch_path = Path(args.file)
-    entries = _load_batch(batch_path)
+    entries = _load_batch(batch_path, load_config(args.config))
     state_path = BATCHES_DIR / f"{batch_path.stem}.json"
     state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
 
     def key(entry: dict) -> str:
-        return json.dumps(entry, sort_keys=True, ensure_ascii=False)
+        return json.dumps(_public(entry), sort_keys=True, ensure_ascii=False)
 
     def save() -> None:
         BATCHES_DIR.mkdir(parents=True, exist_ok=True)
@@ -796,13 +876,92 @@ def _go_draft_outreach(args: argparse.Namespace) -> int:
     return cmd_draft_notion(argparse.Namespace(**{**base, "yes": True}))
 
 
+def _ask_optional(question: str) -> str:
+    """Free answer, empty allowed."""
+    return input(f"{question} (optional, Enter to skip): ").strip()
+
+
+def _split_list(text: str) -> list[str]:
+    return [x.strip() for x in text.split(",") if x.strip()]
+
+
+_NEW_MARKET = "New market"
+_NEW_NICHE = "New niche"
+
+
+def _go_market(config: dict) -> Market:
+    presets = tuple(config["markets"])
+    options = tuple(f"{m} ({config['markets'][m]['country']})" for m in presets) + (_NEW_MARKET,)
+    choice = _ask_choice("Market", options, "1")
+    if choice != _NEW_MARKET:
+        return load_market(config, presets[options.index(choice)])
+    while True:
+        try:
+            market = market_from_prompts(_ask)
+            break
+        except ValueError as e:
+            print(f"  {e} — let's try again")
+    print("\n  new market, used for this run only. To keep it, paste this into config.yaml:\n")
+    print("    " + market_yaml(market).replace("\n", "\n    ").rstrip())
+    return market
+
+
+def _earlier_niches() -> list[tuple[str, Niche]]:
+    """Niches from earlier runs' manifests, newest first, one per name."""
+    found: dict[str, tuple[str, Niche]] = {}
+    for manifest_path in sorted(RUNS_DIR.glob("*/manifest.json"), reverse=True):
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8")).get("niche")
+            niche = Niche.from_dict(data) if data else None
+        except (ValueError, TypeError, json.JSONDecodeError):
+            continue
+        if niche and niche.name.lower() not in found:
+            found[niche.name.lower()] = (manifest_path.parent.name, niche)
+    return list(found.values())
+
+
+def _go_niche() -> Niche:
+    """Always typed or explicitly copied — nothing is preselected."""
+    earlier = _earlier_niches()[:9]
+    if earlier:
+        options = (_NEW_NICHE,) + tuple(f"Copy {n.name!r} from run {run_id}" for run_id, n in earlier)
+        choice = _ask_choice("Niche", options, "")
+        if choice != _NEW_NICHE:
+            return earlier[options.index(choice) - 1][1]
+    while True:
+        name = _ask("Niche name (e.g. dental clinic)")
+        terms = _split_list(_ask("Google Maps search terms, comma-separated", name))
+        phrase = _ask("Draft phrase, plural, in the market language (e.g. stomatološke ordinacije)")
+        accepted = _split_list(_ask_optional("Accepted Google categories, comma-separated"))
+        question = _ask_optional("Question for this niche")
+        landing = _ask_optional("Landing URL")
+        try:
+            return Niche(name=name, search_terms=terms, phrase=phrase, accepted_categories=accepted,
+                         question=question, landing_url=landing).validated()
+        except ValueError as e:
+            print(f"  {e} — let's try again")
+
+
+def _go_osm_tags(niche: Niche) -> Niche:
+    """OSM needs tags, asked only when the source includes osm and the niche has none."""
+    if niche.osm_tags:
+        return niche
+    while True:
+        tags = _split_list(_ask("OSM tags, comma-separated (raw key=value like amenity=dentist, or known keys)"))
+        try:
+            return Niche(**{**niche.to_dict(), "osm_tags": tags}).validated()
+        except ValueError as e:
+            print(f"  {e}")
+
+
 def cmd_go(args: argparse.Namespace) -> int:
     """Interactive entry point: pick what to run, answer the prompts, run it.
     Lead Gen = collect -> enrich -> score -> sync; Draft Outreach = draft-notion;
     Both = Lead Gen with the draft stage before sync (no notes, no pauses).
-    Defaults come from config.yaml. --source maps/osm/notion skips the menu."""
+    Lead Gen asks for the market (preset or new), creates the niche (or copies
+    one from an earlier run — never preselected), then source and location.
+    --source maps/osm/notion skips the menu."""
     config = load_config(args.config)
-    collect_cfg = config["collect"]
     source = (args.source or "").lower()
     if source == "notion":
         mode = "Draft Outreach"
@@ -816,22 +975,28 @@ def cmd_go(args: argparse.Namespace) -> int:
     if mode == "Draft Outreach":
         return _go_draft_outreach(args)
 
+    market = _go_market(config)
+    niche = _go_niche()
     if not source:
         source = _ask("Source (maps / osm)", "maps").lower()
     if source not in ("maps", "osm"):
         raise ValueError(f"unknown source {source!r} — choose maps or osm")
-    location = _ask("Scrape location", collect_cfg["location"])
-    raw = _ask("Category/categories (comma-separated)", ",".join(collect_cfg["categories"]))
-    categories = ",".join(c.strip() for c in raw.split(",") if c.strip())
-    print(f"\n  mode: {mode}\n  source: {source}\n  location: {location}\n  categories: {categories}")
+    if source == "osm":
+        niche = _go_osm_tags(niche)
+    location = _ask("Scrape location", config["collect"]["location"])
+    terms = niche.osm_tags if source == "osm" else niche.search_terms
+    print(
+        f"\n  mode: {mode}\n  market: {market.id} ({market.country}, drafts in {market.language})"
+        f"\n  niche: {niche.name} — \"{niche.phrase}\"\n  source: {source} ({', '.join(terms)})"
+        f"\n  location: {location}"
+    )
     if mode == "Both":
         print("  drafts are made right away, without SM Audit notes (generic praise);"
               " add notes later and redraft with Draft Outreach")
     bbox = resolve_bbox({"location": location}, config["maps"]["areas"]) if source == "maps" else None
     if bbox:
         cells = grid_cell_count(parse_bbox(bbox), config["maps"]["grid_cell_km"])
-        n = len([c for c in categories.split(",") if c])
-        print(f"  grid: ~{cells} cells x {n} categories (longer run, many more leads)")
+        print(f"  grid: ~{cells} cells x {len(terms)} search terms (longer run, many more leads)")
     if _ask("Start? (y/n)", "y").lower() not in ("y", "yes"):
         print("cancelled")
         return 0
@@ -840,10 +1005,12 @@ def cmd_go(args: argparse.Namespace) -> int:
         argparse.Namespace(
             config=args.config,
             source=source,
+            market=None,
+            market_def=market,
+            niche_file=None,
+            niche_def=niche,
             location=location,
-            country=None,
             input=None,
-            categories=categories,
             limit=args.limit,
             sink="notion",
             include_seen=False,
@@ -866,16 +1033,15 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help='comma-separated: "osm", "maps", "manual" — e.g. "osm,manual"',
     )
-    collect.add_argument("--location", help='OSM area name, e.g. "Berlin"')
     collect.add_argument(
-        "--country", help='qualification-filter country, e.g. "Serbia" (default from config.yaml)'
+        "--market", help="market preset id from config.yaml markets:, e.g. serbia / uae (required)"
     )
+    collect.add_argument(
+        "--niche-file", help="YAML niche definition: name, search_terms, phrase, optional osm_tags, ... (required)"
+    )
+    collect.add_argument("--location", help='city or area, e.g. "Novi Sad"')
     collect.add_argument(
         "--input", help="manual collector: path to the hand-gathered leads CSV"
-    )
-    collect.add_argument(
-        "--categories",
-        help='comma-separated, e.g. "restaurant,hairdresser" or raw "craft=roofer"',
     )
     collect.add_argument(
         "--limit", type=int, help="keep only the first N leads — dry-run a batch"
@@ -907,6 +1073,9 @@ def build_parser() -> argparse.ArgumentParser:
         "score", help="apply scoring weights from config.yaml to an enriched run"
     )
     score_cmd.add_argument("--run", required=True, help="run id under data/runs/")
+    score_cmd.add_argument(
+        "--market", help="only for runs collected before markets existed: preset id for the country gate"
+    )
     score_cmd.add_argument(
         "--limit", type=int, help="score only the first N leads — dry-run"
     )
@@ -966,16 +1135,15 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help='comma-separated: "osm", "maps", "manual" — e.g. "osm,manual"',
     )
-    run_cmd.add_argument("--location", help='OSM area name, e.g. "Berlin"')
     run_cmd.add_argument(
-        "--country", help='qualification-filter country, e.g. "Serbia" (default from config.yaml)'
+        "--market", help="market preset id from config.yaml markets:, e.g. serbia / uae (required)"
     )
+    run_cmd.add_argument(
+        "--niche-file", help="YAML niche definition: name, search_terms, phrase, optional osm_tags, ... (required)"
+    )
+    run_cmd.add_argument("--location", help='city or area, e.g. "Novi Sad"')
     run_cmd.add_argument(
         "--input", help="manual collector: path to the hand-gathered leads CSV"
-    )
-    run_cmd.add_argument(
-        "--categories",
-        help='comma-separated, e.g. "restaurant,hairdresser" or raw "craft=roofer"',
     )
     run_cmd.add_argument(
         "--limit",
@@ -1005,7 +1173,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_cmd.set_defaults(func=cmd_run, refresh_cache=False)
 
     go_cmd = sub.add_parser(
-        "go", help="interactive run: prompts for location and categories"
+        "go", help="interactive run: prompts for market, niche, source and location"
     )
     go_cmd.add_argument("--source", help="skip the menu: maps / osm (Lead Gen) or notion (Draft Outreach)")
     go_cmd.add_argument("--limit", type=int, help="dry-run: cap leads at N")

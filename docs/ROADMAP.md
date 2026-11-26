@@ -10,7 +10,15 @@ schema). Each phase below notes where it naturally lands in that structure —
 this isn't a separate refactor to schedule, it's what "doing the phase
 properly" means in practice.
 
-## Status at a glance (updated 2026-10-17)
+## Status at a glance (updated 2026-11-26)
+
+**v2 in progress** (plan in `docs/plan/v2/`, build order in `strategy_gaps.md` §E)
+- Step 1 done: market presets (`markets:` serbia, uae) and niche-on-go. Every run picks a market and creates its
+  niche (`go`, `--market` / `--niche-file`, batch `market:` / `niche:` blocks); no default niches or country.
+  Lead schema v10 (`market`, `language`, `niche`, `niche_label`), manifest carries both blocks, the scoring
+  country gate comes from the run's market. Removed `collect.categories`, `collect.country`, `qualification:`,
+  `outreach.industry_labels`, `--categories`, `--country`.
+- Next: step 2, shared `pipeline/channels.py` with market rules.
 
 **Done**
 - Phases 1-4: collect (OSM, Google Maps, manual CSV), enrich (contacts + Lighthouse), score, Notion sync with
@@ -54,8 +62,8 @@ properly" means in practice.
   `Communication` log. Needs approved price, reference and call slots in `config.yaml` `outreach`.
 - Turn on link / named reference / price in first messages once approved (all off now, in `config.yaml`).
 - Separate `Instagram` / `Facebook` URL columns in Notion for one-click DMs.
-- Industry cleanup in Notion: drop unused options, decide on merging `beauty` and `hairdresser`; keep
-  `outreach.industry_labels` in `config.yaml` as the one list of niches.
+- Industry cleanup in Notion: drop unused options, decide on merging `beauty` and `hairdresser` (since v2 the
+  `Industry` value is the niche name created in `go`).
 - Make `sync` update existing pages for cached leads, so `scripts/backfill_drafts.py` is not needed.
 - Parallel drafting (small thread pool) and an API-key fallback if volume outgrows the Claude plan limits.
 - Trim the Notion default view (about 34 columns shown) to the 10 used daily.

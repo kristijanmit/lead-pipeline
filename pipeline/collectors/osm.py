@@ -173,7 +173,7 @@ class OsmCollector:
         if not location or not categories:
             raise ValueError(
                 "osm collector needs a location and at least one category "
-                "(--location / --categories, or collect.* in config.yaml)"
+                "(--location, and the niche's search_terms / osm_tags)"
             )
         categories_by_tag = {resolve_category(c): c.strip() for c in categories}
         query = build_query(location, categories_by_tag.keys(), self.timeout_s)

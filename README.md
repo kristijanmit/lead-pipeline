@@ -52,7 +52,7 @@ All stages run through `pipeline.runner`:
 
 | Command | Does |
 | --- | --- |
-| `collect --source osm,maps,manual --location "..." --categories "..."` | Collect + merge + dedupe leads |
+| `collect --source osm,maps,manual --market <id> --niche-file <yaml> --location "..."` | Collect + merge + dedupe leads (market and niche required) |
 | `enrich --run <run_id>` | Find a website for leads listed without one (guessed from the name, verified on the page), then contact scrape, then Lighthouse audit |
 | `score --run <run_id>` | Apply scoring weights from `config.yaml` |
 | `draft --run <run_id>` | Suggest a channel and draft one Serbian first message per qualified lead via the `claude` CLI (your Claude login, drafts only, never sends) — see [`docs/OUTREACH.md`](docs/OUTREACH.md) |
@@ -76,8 +76,8 @@ The Maps scraper returns about 20 leads per query and can't scroll deeper (see
 each cell is searched, which gives several times more leads. It is automatic;
 `--bbox "minLat,minLon,maxLat,maxLon"` targets any other area, `--no-grid` turns it
 off. A grid run takes minutes (the cell count and timeout are printed), and collect
-prints `new per category`, so you can see which categories actually add leads. To
-spread a big scrape out, put one location or category per entry in a batch (entries
+prints `new per search term`, so you can see which search terms actually add leads. To
+spread a big scrape out, put one location per entry in a batch (entries
 also accept `bbox:` and `grid: false`).
 
 ### Manual leads
@@ -86,9 +86,10 @@ Two ways in:
 
 ```bash
 # 1. from a CSV: copy leads_manual.csv.example to leads_manual.csv (gitignored), fill it in
-.venv/bin/python -m pipeline.runner run --source manual --input leads_manual.csv
-.venv/bin/python -m pipeline.runner run --source maps,manual --location "Beograd" \
-  --categories "detailing" --input leads_manual.csv   # combine with a scraper
+.venv/bin/python -m pipeline.runner run --source manual --market serbia --niche-file niche.yaml \
+  --input leads_manual.csv
+.venv/bin/python -m pipeline.runner run --source maps,manual --market serbia --niche-file niche.yaml \
+  --location "Beograd" --input leads_manual.csv   # combine with a scraper
 
 # 2. pages you create by hand in Notion (Source = Manual, notes in SM Audit)
 .venv/bin/python -m pipeline.runner draft-notion --limit 5   # dry run, prints drafts
@@ -107,30 +108,44 @@ draft only with `--redraft`.
 
 First prompt picks what to run (skip it with `--source maps|osm|notion`):
 
-- **Lead Gen**: asks source (maps / osm), scrape location and category/categories
-  (comma-separated, e.g. `detailing, poliranje`), then collect, enrich, score, sync
+- **Lead Gen**: asks
+  1. the market: a preset (`serbia`, `uae`) or a new one, printed as YAML to paste into `config.yaml`
+  2. the niche: typed in (name, Maps search terms, plural draft phrase, optional accepted Google
+     categories / question / landing URL) or copied from an earlier run; nothing is preselected
+  3. the source (maps / osm), plus OSM tags when the source is osm
+  4. the location
+
+  then collect, enrich, score, sync
 - **Draft Outreach**: asks which Notion pages (only with an `SM Audit` note / also without a
   note / redraft existing) and how many (answer 1 to pick one lead by name, default auto), dry-runs `draft-notion`, then asks before writing
 - **Both**: Lead Gen plus the draft stage before sync, no pauses and no notes (generic praise
   where there is no bio); add notes later and redraft with Draft Outreach
 
-Defaults come from `config.yaml`; every run asks "Start? (y/n)" first.
+There are no default niches; the market presets come from `config.yaml`. Every run prints a summary and asks
+"Start? (y/n)" first.
 
 ### Batches
 
 List runs in `batches/<name>.yaml` (see `batches/example.yaml`; keys mirror
-`run`: `source`, `location`, `country`, `input`, `categories`, `limit`, `sink`,
-`include_seen`, `bbox`, `grid`, plus `draft: true` to draft before sync and `no_draft: true` to stop after score):
+`run`: `source`, `market`, `niche`, `location`, `input`, `limit`, `sink`,
+`include_seen`, `bbox`, `grid`, plus `draft: true` to draft before sync and `no_draft: true` to stop after score).
+`market` (a preset id or a full block with `id`) and a full `niche` block are required in every entry; every
+entry is validated before the first one runs:
 
 ```yaml
 runs:
   - source: maps
+    market: serbia
     location: Beograd
-    categories: detailing
-  - source: maps
+    niche:
+      name: auto detailing
+      search_terms: [detailing, poliranje]
+      phrase: auto-detailing studije
+  - source: osm
+    market: serbia
     location: Novi Sad
-    categories: "detailing,poliranje"
     limit: 20
+    niche: {name: dental clinic, search_terms: [dentist], phrase: stomatološke ordinacije, osm_tags: [dentist]}
 ```
 
 ```bash
@@ -149,8 +164,8 @@ runs:
 
 ```bash
 # collect, enrich, score, and sync in one pass, dry-run first
-.venv/bin/python -m pipeline.runner run --source osm \
-  --location "Novi Sad" --categories "dentist,hairdresser" --limit 15
+.venv/bin/python -m pipeline.runner run --source osm --market serbia --niche-file niche.yaml \
+  --location "Novi Sad" --limit 15
 
 # individual stages against an existing run
 .venv/bin/python -m pipeline.runner enrich --run <run_id>
@@ -164,7 +179,7 @@ runs:
 .venv/bin/python -m pytest
 ```
 
-- `--categories` takes friendly names (full list in `pipeline/collectors/osm.py`)
-  or raw OSM tags like `"craft=roofer"`
+- the niche's `osm_tags` take friendly names (full list in `pipeline/collectors/osm.py`)
+  or raw OSM tags like `"craft=roofer"`; Maps uses its `search_terms`
 - `--location` must match the OSM area name; local spelling and English both work
 - `--limit N` keeps only the first N leads

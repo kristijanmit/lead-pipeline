@@ -1,12 +1,13 @@
 """cmd_score file handling — the invariants the scorer itself can't
 enforce: leads enrichment never reached are passed through unscored, a
 --limit dry-run never truncates scored.jsonl, and qualification config from
-config.yaml actually reaches score()."""
+the country gate comes from the run's market."""
 
 import json
 
 from pipeline.runner import main
 from pipeline.schema import Lead, read_jsonl, write_jsonl
+from support import MARKETS_YAML, SERBIA_BLOCK
 
 
 def _lead(company, domain, status="enriched", **overrides):
@@ -20,12 +21,14 @@ def _lead(company, domain, status="enriched", **overrides):
     )
 
 
-def _make_run(tmp_path, monkeypatch, leads, config_extra=""):
+def _make_run(tmp_path, monkeypatch, leads, config_extra="", market=SERBIA_BLOCK):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "config.yaml").write_text(config_extra)  # empty -> config DEFAULTS
+    (tmp_path / "config.yaml").write_text(MARKETS_YAML + config_extra)
     run_dir = tmp_path / "data" / "runs" / "test-run"
     run_dir.mkdir(parents=True)
     write_jsonl(run_dir / "enriched.jsonl", leads)
+    if market:  # collect writes the run's market block into the manifest
+        (run_dir / "manifest.json").write_text(json.dumps({"run_id": "test-run", "market": market}))
     return run_dir
 
 
@@ -58,7 +61,7 @@ def test_enrich_failed_leads_are_scored():
     from pipeline.config import DEFAULTS
     from pipeline.scoring import score
 
-    scored = score(lead, DEFAULTS["scoring"], DEFAULTS["qualification"])
+    scored = score(lead, DEFAULTS["scoring"], {"target_countries": ["Serbia"]})
     assert scored.lead_type == "unclear"
 
 
@@ -96,7 +99,7 @@ def test_uncommon_industry_qualifies(tmp_path, monkeypatch):
     assert scored.industry == "plumbing_shop"
 
 
-def test_qualification_config_can_disqualify_leads(tmp_path, monkeypatch):
+def test_country_gate_is_the_run_market(tmp_path, monkeypatch):
     lead = _lead("Out of scope", "oos.rs", country="Croatia", contact_emails=["a@b.rs"])
     run_dir = _make_run(tmp_path, monkeypatch, [lead])
     assert main(["score", "--run", "test-run"]) == 0
@@ -106,3 +109,31 @@ def test_qualification_config_can_disqualify_leads(tmp_path, monkeypatch):
 
     manifest = json.loads((run_dir / "manifest.json").read_text())
     assert manifest["score"]["counts"]["qualified"] == 0
+
+
+def test_pre_v2_run_needs_market_flag(tmp_path, monkeypatch, capsys):
+    lead = _lead("Old", "old.rs", contact_emails=["a@b.rs"])
+    run_dir = _make_run(tmp_path, monkeypatch, [lead], market=None)
+    assert main(["score", "--run", "test-run"]) == 1
+    assert "pass --market" in capsys.readouterr().err
+    assert main(["score", "--run", "test-run", "--market", "serbia"]) == 0
+    assert read_jsonl(run_dir / "scored.jsonl")[0].qualified is True
+
+
+def test_market_flag_cannot_contradict_the_manifest(tmp_path, monkeypatch, capsys):
+    _make_run(tmp_path, monkeypatch, [_lead("A", "a.rs", contact_emails=["a@b.rs"])])
+    assert main(["score", "--run", "test-run", "--market", "uae"]) == 1
+    assert "collected for market 'serbia'" in capsys.readouterr().err
+
+
+def test_uae_run_gates_on_uae(tmp_path, monkeypatch):
+    uae = {"id": "uae", "country": "United Arab Emirates", "dial_code": "+971",
+           "mobile_prefixes": ["+9715"], "language": "en", "channels": ["Instagram", "Email"]}
+    leads = [
+        _lead("Dubai Dental", "dd.ae", country="United Arab Emirates", contact_emails=["a@dd.ae"]),
+        _lead("Beograd Dent", "bd.rs", contact_emails=["a@bd.rs"]),
+    ]
+    run_dir = _make_run(tmp_path, monkeypatch, leads, market=uae)
+    assert main(["score", "--run", "test-run"]) == 0
+    by = {l.company: l.qualified for l in read_jsonl(run_dir / "scored.jsonl")}
+    assert by == {"Dubai Dental": True, "Beograd Dent": False}

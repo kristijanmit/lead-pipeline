@@ -2,8 +2,8 @@
 
 ## 1. Overview
 
-Three collectors, one protocol, one job: turn a location + a set of
-categories into a list of `Lead` records. `pipeline/collectors/base.py`
+Three collectors, one protocol, one job: turn a location + the run's niche
+into a list of `Lead` records. `pipeline/collectors/base.py`
 defines the contract (see ARCHITECTURE.md §7 for the abstract shape;
 this doc is the concrete "how each one actually works" reference):
 
@@ -12,8 +12,8 @@ class Collector(Protocol):
     def collect(self, params: dict) -> Iterable[Lead]: ...
 ```
 
-`runner.py collect --source osm,maps,manual --location "..." --categories "..."`
-resolves each requested source through the registry (`get_collector`),
+`runner.py collect --source osm,maps,manual --market <id> --niche-file <yaml> --location "..."`
+(or `go`, which asks for all of it) resolves each requested source through the registry (`get_collector`),
 calls `collect()` on it, then merges and dedupes the combined output by
 domain (ARCHITECTURE.md §9) before writing `collected.jsonl`.
 
@@ -23,18 +23,46 @@ domain (ARCHITECTURE.md §9) before writing `collected.jsonl`.
 | `maps` | Supplement, used sparingly | `pipeline/collectors/maps.py` |
 | `manual` | Hand-gathered leads | `pipeline/collectors/manual.py` |
 
+### 1.1 Markets and niches (v2)
+
+Every run has a **market** and a **niche**; neither has a default.
+
+- **Market** (`pipeline/market.py`): a preset from `config.yaml` `markets:` (`serbia`, `uae`), picked in `go` or
+  with `--market <id>`. `go` can also create a new market; it is used for that run and printed as YAML to paste
+  into config, never written there automatically. Fields: `country`, `dial_code`, `mobile_prefixes`, `language`
+  (`sr` / `en`), `channels` (first-touch order), `first_touch_excluded`, `review_strong`, `currency`,
+  `maps_language`, `exclude_name_patterns`. Config validation rejects an incomplete preset.
+- **Niche** (`pipeline/niche.py`): created in `go` (or copied from an earlier run's manifest, never preselected),
+  or given in full with `--niche-file` / a batch entry's `niche:` block. Nothing in config or code names a niche.
+
+  ```yaml
+  name: dental clinic                      # -> Lead.industry / niche, the Notion Industry select
+  search_terms: [dentist, dental clinic]   # Google Maps queries
+  phrase: stomatološke ordinacije          # plural draft phrase in the market language -> Lead.niche_label
+  osm_tags: [amenity=dentist]              # required for source osm: raw key=value or CATEGORY_TAGS keys
+  accepted_categories: [Dentist]           # optional, for the niche-match check (v2 step 5)
+  question: ""                             # optional niche question for drafts
+  landing_url: ""                          # optional, used only if links are turned on
+  ```
+
+  Maps gets `search_terms`, OSM gets `osm_tags` (validated up front; a run with source osm and no `osm_tags`
+  fails before anything is collected). The manual CSV ignores both.
+
+`collect` stamps `market`, `language`, `country` (the market's), `industry` = `niche` (the niche name) and
+`niche_label` (the phrase) on every lead, and writes the full `market` and `niche` blocks into `manifest.json`.
+`score` takes the country gate from that market block (`score --market <id>` only for runs collected before
+markets existed).
+
 ## 2. OSM collector (primary)
 
 Wraps the Overpass API — free, no key, no quota, but shared public
 infrastructure with a shared rate limit.
 
-**Category resolution** (`resolve_category`): friendly names like
-`"dentist"` or `"hairdresser"` map to an OSM `key=value` tag pair via the
+**Category resolution** (`resolve_category`): the niche's `osm_tags` are friendly
+names like `"dentist"` or `"hairdresser"`, mapped to an OSM `key=value` tag pair via the
 `CATEGORY_TAGS` table (~30 entries covering food/drink, health, retail,
-trades, and professional services). Anything not in that table can be
-passed straight through as a raw tag on the CLI, e.g. `--categories
-"craft=roofer"` — `resolve_category` treats any string containing `=` as
-already-resolved.
+trades, and professional services), or raw tags like `"craft=roofer"` —
+`resolve_category` treats any string containing `=` as already-resolved.
 
 **Query building** (`build_query`): the Overpass QL query matches the
 location against three area-name tags (`name`, `name:en`, `int_name`) so

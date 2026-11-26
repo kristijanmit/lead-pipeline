@@ -6,6 +6,7 @@ import json
 
 from pipeline.runner import main
 from pipeline.schema import Lead, read_jsonl
+from support import MARKETS_YAML, NICHE_YAML
 
 
 class FakeCollector:
@@ -21,7 +22,8 @@ class FakeCollector:
 
 def _setup(tmp_path, monkeypatch, collectors: dict):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "config.yaml").write_text("")  # empty file -> config DEFAULTS
+    (tmp_path / "config.yaml").write_text(MARKETS_YAML)
+    (tmp_path / "niche.yaml").write_text(NICHE_YAML)
     monkeypatch.setattr(
         "pipeline.runner.get_collector", lambda name, config: collectors[name]
     )
@@ -42,8 +44,10 @@ def test_one_source_failing_does_not_sink_the_others(tmp_path, monkeypatch, caps
                 "osm,maps",
                 "--location",
                 "Novi Sad",
-                "--categories",
-                "dentist",
+                "--market",
+                "serbia",
+                "--niche-file",
+                "niche.yaml",
             ]
         )
         == 0
@@ -80,8 +84,10 @@ def test_all_sources_failing_is_still_a_hard_error(tmp_path, monkeypatch, capsys
                 "osm,maps",
                 "--location",
                 "Novi Sad",
-                "--categories",
-                "dentist",
+                "--market",
+                "serbia",
+                "--niche-file",
+                "niche.yaml",
             ]
         )
         == 1
@@ -103,7 +109,53 @@ def test_misconfiguration_still_aborts_immediately(tmp_path, monkeypatch, capsys
     }
     _setup(tmp_path, monkeypatch, collectors)
     assert (
-        main(["collect", "--source", "osm,maps", "--categories", "dentist"]) == 1
+        main(["collect", "--source", "osm,maps", "--market", "serbia", "--niche-file", "niche.yaml"]) == 1
     )
     err = capsys.readouterr().err
     assert "osm collector needs a location" in err
+
+
+def test_collect_stamps_market_and_niche_and_writes_manifest_blocks(tmp_path, monkeypatch):
+    captured = {}
+
+    class Recording(FakeCollector):
+        def collect(self, params):
+            captured[self.name] = params["categories"]
+            return self.leads
+
+    osm, maps = Recording(), Recording(leads=[
+        Lead(company="A", domain="a.rs", source="maps", industry="dentist"),
+        Lead(company="B", domain="", source="maps", industry="other", country="Croatia"),
+    ])
+    osm.name, maps.name = "osm", "maps"
+    _setup(tmp_path, monkeypatch, {"osm": osm, "maps": maps})
+    args = ["collect", "--source", "osm,maps", "--market", "serbia", "--niche-file", "niche.yaml",
+            "--location", "Novi Sad"]
+    assert main(args) == 0
+    # Maps gets the free-text search terms, OSM the tags
+    assert captured == {"osm": ["dentist"], "maps": ["dentist", "dental clinic"]}
+
+    run_dir = next((tmp_path / "data" / "runs").iterdir())
+    for lead in read_jsonl(run_dir / "collected.jsonl"):
+        assert (lead.market, lead.language, lead.country) == ("serbia", "sr", "Serbia")
+        assert (lead.industry, lead.niche, lead.niche_label) == (
+            "dental clinic", "dental clinic", "stomatološke ordinacije")
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    assert manifest["market"]["id"] == "serbia" and manifest["market"]["country"] == "Serbia"
+    assert manifest["niche"]["phrase"] == "stomatološke ordinacije"
+    assert manifest["counts"]["new_by_category"] == {"dentist": 1, "other": 1}
+
+
+def test_collect_without_niche_or_market_fails(tmp_path, monkeypatch, capsys):
+    _setup(tmp_path, monkeypatch, {"maps": FakeCollector()})
+    assert main(["collect", "--source", "maps", "--market", "serbia", "--location", "X"]) == 1
+    assert "no niche: run go, or pass --niche-file" in capsys.readouterr().err
+    assert main(["collect", "--source", "maps", "--niche-file", "niche.yaml", "--location", "X"]) == 1
+    assert "no market" in capsys.readouterr().err
+
+
+def test_osm_without_osm_tags_fails_before_collecting(tmp_path, monkeypatch, capsys):
+    _setup(tmp_path, monkeypatch, {"osm": FakeCollector(error=AssertionError("must not run"))})
+    (tmp_path / "niche.yaml").write_text("name: x\nsearch_terms: [x]\nphrase: y\n")
+    assert main(["collect", "--source", "osm", "--market", "serbia", "--niche-file", "niche.yaml"]) == 1
+    assert "no osm_tags" in capsys.readouterr().err

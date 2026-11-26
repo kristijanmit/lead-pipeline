@@ -41,8 +41,8 @@ Nothing is ever sent by the pipeline. Every outward message is a human action.
 
 | Command | What it chains | Use when |
 | --- | --- | --- |
-| `go` | interactive menu: **Lead Gen** (1→4), **Draft Outreach** (5), **Both** (1→3, draft, 4 — no notes) | day-to-day |
-| `run --source … --location … --categories …` | 1 → 2 → 3 → 4 (`--draft` adds the old draft-before-sync step) | one scripted run |
+| `go` | interactive menu: **Lead Gen** (1→4; asks market, niche, source, location), **Draft Outreach** (5), **Both** (1→3, draft, 4 — no notes) | day-to-day |
+| `run --source … --market … --niche-file … --location …` | 1 → 2 → 3 → 4 (`--draft` adds the old draft-before-sync step) | one scripted run |
 | `batch --file batches/<name>.yaml` | `run` per entry, sequential, `--pause-s` between | several cities / niches |
 | individual stages (`collect`, `enrich`, `score`, `sync`, `draft`, `draft-notion`) | one stage | debugging, re-running a step |
 
@@ -53,7 +53,11 @@ Nothing is ever sent by the pipeline. Every outward message is a human action.
 
 ## 1. Collect **[built]** — docs/COLLECTION.md
 
-`collect --source osm,maps,manual --location "Novi Sad" --categories "dentist,detailing"`
+`collect --source osm,maps,manual --market serbia --niche-file niche.yaml --location "Novi Sad"` (or `go`)
+
+Every run has a **market** (preset in `config.yaml` `markets:`, or created in `go`) and a **niche** (created in
+`go` or given in full; no defaults). Maps searches the niche's `search_terms`, OSM its `osm_tags`. See
+docs/COLLECTION.md §1.1.
 
 | Source | Module | Notes |
 | --- | --- | --- |
@@ -62,7 +66,8 @@ Nothing is ever sent by the pipeline. Every outward message is a human action.
 | Manual CSV | `collectors/manual.py` | `leads_manual.csv`, hand-gathered |
 
 Then, in order:
-1. Stamp `location` / `country` from the CLI (unless the collector set them).
+1. Stamp `location` (unless the collector set it), and `country`, `market`, `language`, `industry` = `niche`,
+   `niche_label` from the run's market and niche; both blocks go into `manifest.json`.
 2. **Dedupe** by normalized domain (`pipeline/dedupe.py` — no scheme, no `www.`, lowercase; the only place
    this key is computed).
 3. **Skip leads already in Notion** via `data/seen_domains.json` (`--include-seen` keeps them).
@@ -90,7 +95,7 @@ Output: `enriched.jsonl` (`enriched` or `enrich_failed`). Retry once, then fail 
 
 `score --run <run_id>` — `scoring/scorer.py`, a pure function (no I/O, no config loading inside).
 
-1. **Qualify** (filter, not score): `country` in `qualification.target_countries`. Industry is deliberately
+1. **Qualify** (filter, not score): `country` equals the run's market country (from the manifest). Industry is deliberately
    neither filtered nor weighted yet.
 2. **Reachability** (0–100): email 50 + phone 40 + social 10.
 3. **Opportunity** + `lead_type`, from one branch so they never disagree:

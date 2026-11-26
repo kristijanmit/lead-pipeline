@@ -63,7 +63,9 @@ Follow-ups and reply help are not part of the stage (Phase B).
 
 ## Settings (`config.yaml` -> `outreach`)
 `link_in_first_message`, `site_link`, `named_references`, `price_from`, `signature`, `examples_path`,
-`industry_labels` (industry key -> Serbian niche phrase). Link, references and price stay off until set.
+Link, references and price stay off until set. The niche phrase in the prompt is the run's `niche_label` (the
+`phrase` from the niche created in `go`); pages drafted from Notion don't carry it yet and use the `Industry`
+value (the niche name) until the `Niche Label` property lands (v2 step 6).
 Voice references live in `config/outreach.md` (your approved messages): edit that file to change the tone.
 Layout: `## <channel>` sections (Instagram (DM), Facebook, Viber/Whatsapp, SMS / call; Viber/Whatsapp falls back to the Instagram one when it has no section of its own, and has its own prompt rules: Google Maps opener, free-example offer, niche link),
 each with `### alias | alias` niche subsections matched against the lead's industry and a `### generic` fallback.

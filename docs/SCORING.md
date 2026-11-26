@@ -25,11 +25,14 @@ How to retune the formula once real reply data exists is covered in
 ## 2. Qualification filters — a gate, not a score
 
 Before anything is scored, a lead has to pass one hard filter
-(`qualification:` in `config.yaml`, resolved by `_qualifies()` in
-`scorer.py`):
+(resolved by `_qualifies()` in `scorer.py`):
 
-- **Country** — `lead.country` (stamped at collection time, the same way
-  `location` is) must be in `qualification.target_countries`.
+- **Country** — `lead.country` (stamped at collection time from the run's
+  market) must equal the run's market country. `cmd_score` reads the market
+  block from the run's `manifest.json` and passes `{"target_countries":
+  [market.country]}` to the scorer; `score --market <id>` is only for runs
+  collected before markets existed. (`qualification:` in `config.yaml` was
+  removed in v2 step 1.)
 
 If a lead fails the filter, `reachability_score`, `opportunity_score`,
 and `total_score` are all left `None`, `qualified` is `False`, and
@@ -37,8 +40,7 @@ and `total_score` are all left `None`, `qualified` is `False`, and
 Nothing downstream computes a score for a lead outside scope.
 
 There is deliberately no industry filter: the industries collected are
-whatever `--categories` asked for, and `lead.industry` is passed through
-as collected (this is what syncs to Notion's `Industry` column).
+the run's niche, and `lead.industry` holds the niche name (this is what syncs to Notion's `Industry` column).
 
 **Why filters and not weights:** it's too early to know which of these
 verticals actually converts — weighting them against each other now would

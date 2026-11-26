@@ -25,15 +25,15 @@ not as standalone scripts.
 
 All stages run through one CLI entrypoint (`pipeline/runner.py`):
 
-- `python -m pipeline.runner collect --source osm --location "..." --categories "..."` — collect leads
+- `python -m pipeline.runner collect --source maps --market serbia --niche-file <niche.yaml> --location "..."` — collect leads. Market (preset in `config.yaml` `markets:`) and niche (name, search_terms, phrase, osm_tags for osm…) are required; see docs/COLLECTION.md §1.1
 - `python -m pipeline.runner enrich --run <run_id>` — contact enrichment, then website audit
 - `python -m pipeline.runner score --run <run_id>` — apply scoring weights from config.yaml
 - `python -m pipeline.runner draft --run <run_id>` — suggested channel + one Serbian first message per qualified lead via `claude -p` (rules in docs/OUTREACH.md); run before sync, since fields are written only when a Notion page is created
 - `python -m pipeline.runner draft-notion [--limit N] [--yes] [--all] [--redraft]` — draft for Notion pages with an `SM Audit` note and no draft (normal flow: `run`/`batch` sync, you add notes, then this); `--all` also pages without a note, `--redraft` overwrites drafts; dry run unless `--yes`
 - `python -m pipeline.runner sync --run <run_id> --sink notion` — push to Notion (Phase 4)
-- `python -m pipeline.runner go [--source ...] [--limit N]` — interactive: pick Lead Gen / Draft Outreach / Both, then prompts (Lead Gen: source, location, categories; Draft Outreach: page scope, limit), then runs
+- `python -m pipeline.runner go [--source ...] [--limit N]` — interactive: pick Lead Gen / Draft Outreach / Both, then prompts (Lead Gen: market (preset or new), niche (created, or copied from an earlier run), source, OSM tags if osm, location; Draft Outreach: page scope, limit), then runs
 - Maps leads: depth >1 is broken, so a location in `maps.areas` (or `--bbox`) runs in grid mode automatically; `--no-grid` disables — see docs/COLLECTION.md §3
-- `python -m pipeline.runner batch --file batches/<name>.yaml [--dry-run] [--pause-s N]` — runs the listed `run` entries one after another; one failure doesn't stop the rest, but running out of AI credits pauses the batch (state in `data/batches/<name>.json`, re-run to resume at draft)
+- `python -m pipeline.runner batch --file batches/<name>.yaml [--dry-run] [--pause-s N]` — runs the listed `run` entries one after another (each entry needs `market` and a full `niche` block; all are validated before the first runs); one failure doesn't stop the rest, but running out of AI credits pauses the batch (state in `data/batches/<name>.json`, re-run to resume at draft)
 - Every command accepts `--limit N` — use it as a dry run before spending rate-limit budget on a full batch
 - `pytest` — run tests
 
@@ -91,4 +91,5 @@ For deeper context, consult these before guessing:
 - Do not collapse `contact_emails` to a single email — keep every address found.
 - Do not add I/O, network calls, or config loading inside `scorer.py`.
 - Do not commit anything under `data/` or any `.env`/secrets file.
+- Do not add default niches anywhere (config, code, batch fallbacks): a niche is always created in `go` or spelled out in full (`--niche-file`, batch `niche:`). Markets are presets in `config.yaml`; the country always comes from the run's market.
 - Do not build for hypothetical scale (job queues, databases, web UI, schedulers) — docs/ARCHITECTURE.md §14 lists the signals that would justify it; none are true yet.
