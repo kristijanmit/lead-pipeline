@@ -4,9 +4,11 @@ Reads leads_manual.csv (see leads_manual.csv.example for the header) so
 hand-found leads flow through the same dedupe/enrich/score path as the
 automated sources instead of living in a separate spreadsheet.
 
-Columns: company (required), website, industry, location, emails
-(";"-separated), phone (also ";"-separated — keep every number, same as
-emails). An empty location falls back to the run's --location in cmd_collect.
+Columns: company (required), website, location, emails (";"-separated),
+phone (also ";"-separated — keep every number, same as emails). An empty
+location falls back to the run's --location in cmd_collect. An `industry`
+column is still accepted (older files) but has no effect: cmd_collect sets
+industry to the run's niche name on every lead, like the other sources.
 """
 
 from __future__ import annotations

@@ -136,9 +136,11 @@ Mechanics:
 
 Reads `leads_manual.csv` (a gitignored working file — copy
 `leads_manual.csv.example` to create it, or pass `--input <path>`).
-Required column: `company`. Known columns: `website`, `industry`,
+Required column: `company`. Known columns: `website`,
 `location`, `emails` (`;`-separated), `phone` (also `;`-separated, same
-"keep every number" rule as the automated collectors). Blank/partial rows
+"keep every number" rule as the automated collectors). An `industry` column
+is still accepted but ignored: every lead gets the run's niche name, as with
+the other sources (one niche per run — put different niches in separate CSVs). Blank/partial rows
 are silently skipped — common in a hand-edited CSV. An empty `location`
 in the CSV is filled in from the run's `--location` by `cmd_collect`, not
 by the collector itself.
