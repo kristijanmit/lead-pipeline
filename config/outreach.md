@@ -62,6 +62,54 @@ Pozdrav, naišao sam na Vašu stranicu i imate zaista dobre slike i video snimke
 ### generic
 Pozdrav, naišao sam na Vašu stranicu i sviđa mi se kako radite. Ja sam Kristijan, pravim sajtove za lokalne firme, pa me zanima da li Vas klijenti pronalaze i preko Google-a, ili uglavnom stižu preko preporuke? Ako ovo čita neko iz tima, molim Vas da prosledite poruku vlasniku.
 
+## Viber/Whatsapp
+
+Own format, not the Instagram one: it opens with where you found them (Google Maps), names the benefit, offers a free
+example of their site and links the niche page. `[a | b]` means pick the option that fits the business. Use a link only
+when it is the one under the matching niche here, otherwise leave the link line out.
+
+### gradjevina | građevina | construction | stolar | molerski | zanat
+Pozdrav, naišao sam na [vašu firmu | vašu radionicu] na Google mapama. Ja sam Kristijan, pravim sajtove za lokalne biznise.
+
+Primetio sam da imate [dobre slike radova | dosta ocena], pa me zanima da li ste razmišljali o sajtu. Imali biste bolju poziciju na Google-u kao i više klijenata sa interneta, a vaši klijenti će moći da zakažu termin, pošalju poruku i zatraže ponudu dok vi radite svoj posao.
+
+Da li želite da vam pošaljem primer vašeg sajta besplatno?
+
+Ovde možete pogledati neke od primera iz oblasti građevine: https://onixweblab.com/solutions/construction
+
+### auto servis | servis | auto | vulkanizer | detailing | car detailing | auto detailing | pranje | autopraonica | studio | shop | prodavnica
+Pozdrav, naišao sam na [vaš servis | vašu vulkanizersku radnju | vaš studio | vašu prodavnicu] na Google mapama. Ja sam Kristijan, pravim sajtove i online zakazivanje za lokalne biznise.
+
+Primetio sam da imate [dobre slike radova | dosta ocena], pa me zanima da li ste razmišljali o sajtu. Imali biste bolju poziciju na Google-u kao i više klijenata sa interneta, a vaši klijenti će moći da zakažu termin i pošalju poruku dok vi radite svoj posao.
+
+Da li želite da vam pošaljem primer vašeg sajta besplatno?
+
+Ovde možete pogledati neke od primera za auto industriju: https://onixweblab.com/solutions/automotive
+
+## Viber/Whatsapp (redesign)
+
+For leads that already have a website (lead type redesign). Opens with finding their site while searching in their
+city, then pitches a new look and offers a free example. `[a | b]` means pick the option that fits; `[grad]` is the
+lead's city. Same link rule as above: only the URL under the matching niche, otherwise leave the link line out.
+
+### auto servis | servis | auto | vulkanizer | detailing | car detailing | auto detailing | pranje | autopraonica | studio | shop | prodavnica
+Pozdrav, naišao sam na vaš sajt dok sam tražio [servise | vulkanizere | studije | prodavnice] u [grad]. Ja sam Kristijan, pravim sajtove za lokalne biznise.
+
+Vidim da imate [dobre ocene | lepe slike radova | dosta ocena], pa me zanima da li ste razmišljali o novom izgledu sajta. Klijenti bi mogli da zakažu termin i pošalju poruku direktno sa sajta, dok vi radite svoj posao.
+
+Da li želite da vam pokažem besplatan primer kako bi izgledao novi sajt?
+
+Ovde možete pogledati neke od primera za auto industriju: onixweblab.com/solutions/automotive
+
+### gradjevina | građevina | construction | stolar | molerski | zanat
+Pozdrav, naišao sam na vaš sajt dok sam tražio [firme | radionice] u [grad]. Ja sam Kristijan, pravim sajtove za lokalne biznise.
+
+Vidim da imate [dobre ocene | lepe slike radova | dosta ocena], pa me zanima da li ste razmišljali o novom izgledu sajta. Klijenti bi mogli da zakažu termin, pošalju poruku i zatraže ponudu direktno sa sajta, dok vi radite svoj posao.
+
+Da li želite da vam pokažem besplatan primer kako bi izgledao novi sajt?
+
+Ovde možete pogledati neke od primera za građevinsku industriju: onixweblab.com/solutions/construction
+
 ## SMS / call
 Dobar dan, ovde Kristijan, pravim sajtove za lokalne firme. Video sam {biznis}, imate li minut za jedno kratko pitanje o tome kako Vam stižu novi klijenti?
 

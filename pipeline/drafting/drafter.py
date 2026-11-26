@@ -28,8 +28,9 @@ MAX_CHARS = 2000
 # phrases the operator never wants, checked case-insensitively
 _BANNED = (
     "bez obaveze", "besplatno", "ove nedelje", "lighthouse", "seo ",
-    "nisam uspeo", "nemate sajt", "unapređujem", "zvezdic", "recenzij",
+    "nisam uspeo", "nisam pronašao", "nemate sajt", "unapređujem", "zvezdic", "recenzij",
 )
+_VIBER_ALLOWED = ("besplatno", "recenzij")
 _RATING_RE = re.compile(r"\bocen\w*", re.IGNORECASE)  # "ocena", "ocene"; not "procena"
 _EMOJI_RE = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF]")
 
@@ -61,10 +62,11 @@ def validate_message(message: str, channel: str) -> list[str]:
     if "!" in text:
         problems.append("contains an exclamation mark")
     low = text.lower()
+    viber = channel == "Viber/Whatsapp"  # its format offers a free example and cites Google reviews
     for phrase in _BANNED:
-        if phrase in low:
+        if phrase in low and not (viber and phrase in _VIBER_ALLOWED):
             problems.append(f"contains banned phrase {phrase.strip()!r}")
-    if _RATING_RE.search(text):
+    if _RATING_RE.search(text) and not viber:
         problems.append("mentions a rating; never mention Google ratings or reviews")
     if _EMOJI_RE.search(text):
         problems.append("contains an emoji")
@@ -97,27 +99,36 @@ def _split(text: str, marker: str) -> tuple[str, list[tuple[str, str]]]:
     return parts[0], list(zip(parts[1::2], parts[2::2]))
 
 
-def select_examples(text: str, channel: str, niche: str) -> str:
+def select_examples(text: str, channel: str, niche: str, redesign: bool = False) -> str:
     """Narrow the examples file to what fits this lead. `## <channel>` sections
-    are picked by the lead's channel (Viber/Whatsapp reads the Instagram DM
-    section); sections whose heading starts with "Questions" or "Friendly warning"
+    are picked by the lead's channel (Viber/Whatsapp reads its own section, else
+    the Instagram DM one); sections whose heading starts with "Questions" or "Friendly warning"
     ride along. Inside a section, `### a | b` subsections are kept when one alias
-    matches the lead's industry, else only `### generic` ones. A file without
+    matches the lead's industry, else only `### generic` ones. For Viber/Whatsapp a
+    `## Viber/Whatsapp (redesign)` section serves leads that already have a site
+    (redesign=True), the plain one the rest; either falls back to the other. A file without
     these headings is returned unchanged."""
     preamble, sections = _split(text, "##")
     if not sections:
         return text
     wanted = {
-        "Viber/Whatsapp": ("instagram",), "Call": ("sms", "call"),
+        "Viber/Whatsapp": ("viber", "instagram"), "Call": ("sms", "call"),
     }.get(channel, (channel.lower(),))
-    own = [(h, b) for h, b in sections if h.lower().startswith(wanted)]
+    own = [(h, b) for h, b in sections if h.lower().startswith(wanted[0])]
+    if channel == "Viber/Whatsapp":
+        fits = [(h, b) for h, b in own if ("(redesign)" in h.lower()) == redesign]
+        own = fits or own
+    for prefix in wanted[1:]:  # fallback prefixes, only used when nothing matched yet
+        own = own or [(h, b) for h, b in sections if h.lower().startswith(prefix)]
     if not own:
         return text
     shared = [
         (h, b) for h, b in sections
         if h.lower().startswith(("questions", "friendly warning")) or " with a friendly warning" in h.lower()
     ]
-    if channel not in _DM_CHANNELS:
+    if own[0][0].lower().startswith("viber"):
+        shared = []  # its format has its own closing offer; no extra question/warning sections
+    elif channel not in _DM_CHANNELS:
         shared = [(h, b) for h, b in shared if h.lower().startswith("questions")]
     out = [preamble.strip()]
     for heading, body in own + [x for x in shared if x not in own]:
@@ -132,6 +143,64 @@ def select_examples(text: str, channel: str, niche: str) -> str:
             body = intro + "".join(b for _, b in (hit or generic or subs))
         out.append(f"## {heading}{body}".rstrip())
     return "\n\n".join(x for x in out if x) + "\n"
+
+
+def _viber_redesign_rules(lead: Lead, reviews: str) -> list[str]:
+    """Viber/WhatsApp for a lead that already has a site: found while searching
+    their city, pitches a new look instead of a first site."""
+    return [
+        f'Format (follow the VOICE REFERENCES closely): "Pozdrav, naišao sam na vaš sajt dok sam tražio '
+        f'[servise/radionice/studije...] u {lead.location or "[grad]"}. Ja sam Kristijan, pravim sajtove za '
+        'lokalne biznise." then a paragraph: "Vidim da imate [one true observation], pa me zanima da li ste '
+        'razmišljali o novom izgledu sajta." plus the benefit (clients can book / message / ask for an offer '
+        'straight from the site while they work), then the line "Da li želite da vam pokažem besplatan primer '
+        'kako bi izgledao novi sajt?", then the niche link line.',
+        'Greeting "Pozdrav". Casing and the polite form follow the references (lowercase "vaš", "vam"). '
+        "Latin script with diacritics. No emoji, no exclamation marks, no price, no superlatives.",
+        "The observation must be true: \'lepe slike radova\' or \'dobre ocene\' only if the operator's note, the "
+        "bio or the data below says so." + reviews,
+        'Decline the city into the locative case after "u" ("u Beogradu", "u Nišu", "u Zemunu"), never the '
+        "nominative. If unsure of the form, rephrase so the city is not needed.",
+        "Never criticize their existing site (design, speed, age) and never mention Lighthouse numbers; only "
+        "say a new look could help.",
+        "Link: end with the niche link line only if its URL appears verbatim under a matching niche in the "
+        "references; copy that URL exactly (no https). If no reference matches the trade, leave the link line "
+        "out. Never invent a URL.",
+        "Adapt the business noun and the benefit to the trade. Online booking only makes sense for trades that "
+        "take appointments.",
+    ]
+
+
+def _viber_rules(lead: Lead, niche: str) -> list[str]:
+    """Viber/WhatsApp is a different format from the Instagram DM: it says where
+    the number was found (Google Maps), names the benefit, offers a free example of
+    their site and links the niche page. The Instagram rules forbid exactly these."""
+    reviews = ""
+    if lead.rating is not None or lead.review_count:
+        reviews = (
+            f" Google data for this business: rating {lead.rating}, {lead.review_count} reviews. "
+            "Mention it only as \"dosta ocena\" and only if the count is high; never give numbers."
+        )
+    if lead.domain:
+        return _viber_redesign_rules(lead, reviews)
+    return [
+        'Format (follow the VOICE REFERENCES closely): "Pozdrav, naišao sam na [vašu firmu/radionicu/servis...] '
+        'na Google mapama. Ja sam Kristijan, pravim sajtove za lokalne biznise." then a paragraph with one '
+        "concrete observation, the question whether they have thought about a website and the benefit "
+        "(better Google position, more clients, clients can book / message / ask for an offer while they work), "
+        'then the line "Da li želite da vam pošaljem primer vašeg sajta besplatno?", then the niche link line.',
+        'Greeting "Pozdrav". Casing and the polite form follow the references (lowercase "vaš", "vam"). '
+        "Latin script with diacritics. No emoji, no exclamation marks, no price, no superlatives.",
+        "The observation must be true: use the operator's note or the bio for praise (\'dobre slike radova\'). "
+        "If there is nothing concrete, use the plain wording from the references." + reviews,
+        "Never write that you could not find their site or that they have none, and never criticize an "
+        "existing site; only ask whether they have thought about a website. Never mention Lighthouse numbers.",
+        "Adapt the business noun and the benefit to the trade (a workshop, a service, a studio, a shop). "
+        "Online booking only makes sense for trades that take appointments.",
+        "Link: end with the niche link line only if its URL appears verbatim under a matching niche in the "
+        "references; copy that URL exactly. If no reference matches the trade, leave the link line out. "
+        "Never invent a URL.",
+    ]
 
 
 def build_prompt(lead: Lead, channel: str, outreach: dict, variant: int, examples: str) -> str:
@@ -177,6 +246,8 @@ def build_prompt(lead: Lead, channel: str, outreach: dict, variant: int, example
         "online ordering, a self-service wash about prices, locations, packages and companies, a school about "
         "students. If the business is not detailing, do not copy the detailing template.",
     ]
+    if channel == "Viber/Whatsapp":
+        rules = _viber_rules(lead, niche)
     if lead.sm_audit:
         rules.append(
             "The operator's note is first-hand and trusted: base the praise on it, and do not mention "
@@ -197,7 +268,9 @@ def build_prompt(lead: Lead, channel: str, outreach: dict, variant: int, example
         )
     if channel == "Facebook":
         rules.append('Facebook posts reach a page admin: after the question add a short line asking to pass the message to the owner if someone else reads it.')
-    if outreach["link_in_first_message"]:
+    if channel == "Viber/Whatsapp":
+        pass  # the Viber rules already say which link, if any, to use
+    elif outreach["link_in_first_message"]:
         rules.append(f'Add one short optional closing line pointing to "{outreach["site_link"]}".')
     else:
         rules.append(
@@ -280,7 +353,7 @@ def draft_lead(
     if not channel:
         return lead  # nothing to send to; the runner counts these, no error recorded
     prompt = build_prompt(
-        lead, channel, outreach, variant, select_examples(examples, channel, lead.industry)
+        lead, channel, outreach, variant, select_examples(examples, channel, lead.industry, redesign=bool(lead.domain))
     )
     try:
         raw = _call_claude(prompt, draft_cfg["model"], draft_cfg["timeout_s"])

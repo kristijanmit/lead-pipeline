@@ -571,10 +571,10 @@ def test_query_draftable_filters(monkeypatch):
         return [c.get("property") for c in payload["filter"]["and"]]
 
     sink.query_draftable()
-    assert props(sent[-1]) == [None, "Draft Message", "SM Audit"]  # first is the Status "or"
+    assert props(sent[-1]) == [None, "Qualified", "Draft Message", "SM Audit"]  # first is the Status "or"
     sink.query_draftable(redraft=True)
-    assert props(sent[-1]) == [None, "SM Audit"]
+    assert props(sent[-1]) == [None, "Qualified", "SM Audit"]
     sink.query_draftable(need_note=False)
-    assert props(sent[-1]) == [None, "Draft Message"]
+    assert props(sent[-1]) == [None, "Qualified", "Draft Message"]
     sink.query_draftable(company="Mira")
-    assert props(sent[-1]) == [None, "Draft Message", "SM Audit", "Company"]
+    assert props(sent[-1]) == [None, "Qualified", "Draft Message", "SM Audit", "Company"]

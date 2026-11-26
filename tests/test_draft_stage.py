@@ -130,6 +130,9 @@ def test_validate_message_rules():
     assert any("banned" in p for p in v("Pozdrav, 5 zvezdica. Pitanje?", "Instagram"))
     assert any("emoji" in p for p in v("Pozdrav 🙂 Pitanje?", "Instagram"))
     assert any("subject" in p for p in v("Subject: x\n\nhej", "Viber/Whatsapp"))
+    offer = "Pozdrav, imate dosta ocena. Da li želite primer sajta besplatno?"
+    assert v(offer, "Viber/Whatsapp") == []  # the Viber format offers a free example and cites reviews
+    assert any("banned" in p for p in v(offer, "Instagram")) and any("rating" in p for p in v(offer, "Instagram"))
     assert any("limit" in p for p in v("a" * 2000, "Instagram"))
 
 
@@ -195,7 +198,38 @@ def test_select_examples_filters_by_channel_and_niche():
     other = sel(_EXAMPLES, "Instagram", "hairdresser")  # no niche hit -> generic only
     assert "GENERIC-IG" in other and "DETAIL-IG" not in other
     assert "GENERIC-IG" in sel(_EXAMPLES, "Viber/Whatsapp", "x")  # reads the DM section
+    viber = _EXAMPLES + "\n## Viber/Whatsapp\n### auto | servis\nVIBER-AUTO\n### generic\nVIBER-GEN\n"
+    vb = sel(viber, "Viber/Whatsapp", "auto servis")  # own section wins; no IG sections, no questions
+    assert "VIBER-AUTO" in vb and "VIBER-GEN" not in vb and "IG" not in vb and "QUESTIONS" not in vb
     call = sel(_EXAMPLES, "Call", "x")
     assert "CALL-EX" in call and "IG" not in call
     assert sel("plain text, no headings", "Instagram", "x") == "plain text, no headings"
     assert sel(_EXAMPLES, "Email", "x") == _EXAMPLES  # no Email section -> everything
+
+
+def test_viber_prompt_uses_its_own_rules():
+    from pipeline.config import DEFAULTS
+
+    outreach = dict(DEFAULTS["outreach"])
+    lead = _lead("Servis Pera", "", industry="auto", rating=4.8, review_count=120)
+    viber = drafter.build_prompt(lead, "Viber/Whatsapp", outreach, 0, "EX")
+    assert "na Google mapama" in viber and "besplatno" in viber and "Do NOT include any link" not in viber
+    insta = drafter.build_prompt(lead, "Instagram", outreach, 0, "EX")
+    assert "na Google mapama" not in insta and "Do NOT include any link" in insta
+
+
+def test_viber_redesign_picks_its_own_examples_and_rules():
+    from pipeline.config import DEFAULTS
+
+    text = "## Viber/Whatsapp\n### auto\nNEW-BUILD\n## Viber/Whatsapp (redesign)\n### auto\nREDESIGN\n"
+    sel = drafter.select_examples
+    assert "REDESIGN" in sel(text, "Viber/Whatsapp", "auto", redesign=True) and "NEW-BUILD" not in sel(text, "Viber/Whatsapp", "auto", redesign=True)
+    assert "NEW-BUILD" in sel(text, "Viber/Whatsapp", "auto") and "REDESIGN" not in sel(text, "Viber/Whatsapp", "auto")
+    only_new = "## Viber/Whatsapp\n### auto\nNEW-BUILD\n"
+    assert "NEW-BUILD" in sel(only_new, "Viber/Whatsapp", "auto", redesign=True)  # falls back
+
+    outreach = dict(DEFAULTS["outreach"])
+    with_site = drafter.build_prompt(_lead("Servis Pera", "pera.rs", industry="auto", location="Niš"), "Viber/Whatsapp", outreach, 0, "EX")
+    assert "naišao sam na vaš sajt" in with_site and "u Niš" in with_site and "novi sajt" in with_site
+    no_site = drafter.build_prompt(_lead("Servis Pera", "", industry="auto"), "Viber/Whatsapp", outreach, 0, "EX")
+    assert "na Google mapama" in no_site and "naišao sam na vaš sajt" not in no_site

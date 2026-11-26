@@ -429,7 +429,8 @@ class NotionSink:
         self, limit: int | None = None, redraft: bool = False, need_note: bool = True,
         company: str = "",
     ) -> list[dict]:
-        """Pages still to be worked (Status Not started / blank / Queued), oldest first.
+        """Pages still to be worked (Status Not started / blank / Queued) with the
+        Qualified box checked, oldest first.
         Default: an empty Draft Message and a filled SM Audit — the operator's note
         is the gate. redraft also returns pages that already have a draft;
         need_note=False also returns pages without a note; company keeps only pages
@@ -438,7 +439,7 @@ class NotionSink:
             {"property": "Status", "select": {"equals": "Not started"}},
             {"property": "Status", "select": {"equals": "Queued"}},
             {"property": "Status", "select": {"is_empty": True}},
-        ]}]
+        ]}, {"property": "Qualified", "checkbox": {"equals": True}}]
         if not redraft:
             conditions.append({"property": "Draft Message", "rich_text": {"is_empty": True}})
         if need_note:
