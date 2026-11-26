@@ -27,6 +27,7 @@ All stages run through one CLI entrypoint (`pipeline/runner.py`):
 
 - `python -m pipeline.runner collect --source maps --market serbia --niche-file <niche.yaml> --location "..."` — collect leads. Market (preset in `config.yaml` `markets:`) and niche (name, search_terms, phrase, osm_tags for osm…) are required; see docs/COLLECTION.md §1.1
 - `python -m pipeline.runner enrich --run <run_id>` — contact enrichment, then website audit
+- `python -m pipeline.runner enrich --run <run_id> --only audit --rescan [--limit N]` — re-run only the audit (probe signals + Lighthouse) on an enriched run, e.g. one enriched before schema v11; contact data kept, run `score` again after
 - `python -m pipeline.runner score --run <run_id>` — apply scoring weights from config.yaml
 - `python -m pipeline.runner draft --run <run_id>` — suggested channel + one Serbian first message per qualified lead via `claude -p` (rules in docs/OUTREACH.md); run before sync, since fields are written only when a Notion page is created
 - `python -m pipeline.runner draft-notion [--limit N] [--yes] [--all] [--redraft]` — draft for Notion pages with an `SM Audit` note and no draft (normal flow: `run`/`batch` sync, you add notes, then this); `--all` also pages without a note, `--redraft` overwrites drafts; dry run unless `--yes`

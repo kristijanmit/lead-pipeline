@@ -96,8 +96,7 @@ def test_social_domain_skips_audit(monkeypatch):
     def boom(*args, **kwargs):
         raise AssertionError("must not probe or run Lighthouse for a social page")
 
-    monkeypatch.setattr(enricher, "_probe", boom)
-    monkeypatch.setattr(enricher, "_run_lighthouse", boom)
+    monkeypatch.setattr(enricher, "audit", boom)
     lead = Lead(company="Shine On", domain="facebook.com", source="osm")
     result = enricher.enrich(lead)
     assert result.lighthouse is None

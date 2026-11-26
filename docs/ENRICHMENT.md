@@ -72,50 +72,74 @@ Whatever the collector already found (`lead.contact_emails`,
 collector-provided values winning ties (`_merge_unique`: first occurrence
 wins, by lowercased email / `phone_key` / dict key).
 
-## 3. Audit enricher
+## 3. Audit enricher and the shared audit core
 
-Runs second, and only after contact enrichment, so its `audit_notes`
-summary can report on both contact completeness and site quality
-together.
+The audit itself lives in **`pipeline/audit.py`**, the shared audit core (v2 step 3). It works on a domain and
+knows nothing about `Lead`, so the `audit` enricher, the `audit-report` command (step 8) and later the public
+scanner all use the same code. `pipeline/enrichers/audit.py` is a thin wrapper: it calls `audit_site()` and maps
+the `AuditResult` onto the lead (`apply_audit`).
 
-**Cheap probe first**: `_probe` does one plain `GET` (https tried before
-http) to confirm the site is reachable and capture the HTML — this costs
-one request, versus letting a dead or slow site burn a 60-second-plus
-Lighthouse attempt before failing. `https` on the `Lead` means "the
-`https://` URL itself resolved," not merely "the domain has a cert
-somewhere."
+It runs last, after contact enrichment, so its `audit_notes` summary can report on both.
 
-**CMS detection** (`detect_cms`) checks HTML markers *before* the
-`<meta name="generator">` tag, deliberately — page builders like Elementor
-overwrite the generator meta on a site that's still WordPress underneath,
-so the marker table (`wp-content`, `cdn.shopify.com`, `wixstatic.com`,
-`website-files.com`, etc.) is checked first and wins on a match. An
-unrecognized generator string is still returned as-is rather than
-discarded — partial data beats no data.
+**Probe and Lighthouse are separate.** A failure in one never costs the other:
 
-**Lighthouse**: invoked as a subprocess (`npm install -g lighthouse` —
-see `docs/RESOURCES.md`), headless, JSON output to stdout, restricted to
-the four categories the pipeline scores on
-(`--only-categories=performance,accessibility,best-practices,seo`).
-`parse_lighthouse_report` reads `report["categories"][key]["score"]`,
-which is nullable (a category can error out mid-run) — a null score is
-simply omitted from `lead.lighthouse` rather than coerced to 0, so
-scoring (`docs/SCORING.md`) can tell "measured and bad" apart from
-"couldn't be measured." `mobile_friendly` comes from Lighthouse's
-`viewport` audit — a page with no viewport meta tag renders desktop-sized
-under Lighthouse's default mobile emulation.
+1. **Probe** (`probe`): one plain `GET`, https tried before http. `https` on the `Lead` means "the `https://` URL
+   itself worked". A dead site costs one request, not a Lighthouse run.
+   - If both schemes fail: `site_reachable = False` and `probe_error` holds the failure kind: `dns`, `refused`,
+     `timeout`, `http_error`, `ssl` or `other`. Only `dns` / `refused` mean nothing is there. The others may be a
+     live site worth checking again (scorer v4 treats them that way). When https and http fail differently, the
+     more alive-looking kind wins (a cert error on https plus a refusal on http is `ssl`, not dead).
+   - From the probe HTML, with no extra request: `https`, `cms` and the **signals** below.
+2. **Lighthouse** (`run_lighthouse`), only for a site that answered. One attempt, no retry. A failure (timeout,
+   crash, binary missing) is recorded in `Lead.errors` as `audit: …` and the lead keeps everything the probe
+   found, with `site_reachable = True` and `lighthouse = None`.
 
-**`build_audit_notes`**: one human-readable line combining contact-data
-counts (`"1 emails, 2 phones, 3 socials"`), the Lighthouse breakdown
-(`"LH perf 47 / a11y 88 / bp 68 / seo 92"`), HTTPS/mobile flags, and CMS.
-Written at enrich time; scoring later *overwrites* this same field with a
-score-explainability string (`docs/SCORING.md` §7) — `audit_notes` means
-something different before and after the `score` stage runs.
+Neither case raises, so `apply_enrichers` never retries the audit and the lead ends up `enriched`, not
+`enrich_failed`. Re-runs therefore don't repeat Lighthouse on bad sites (this replaces the plan's G3 retry cap).
+The enrich manifest counts both: `site_unreachable`, `lighthouse_failed`.
 
-A lead with no `domain` skips the probe and Lighthouse entirely; the
-enricher still writes `audit_notes` (via the "no website" branch) so
-every lead gets a notes string regardless of whether it had a site to
-audit.
+**Signals** (`extract_signals(html, current_year)`, pure, fixture-tested):
+
+| Field | How |
+| --- | --- |
+| `copyright_year` | highest year (≤ current year) within 80 chars of `©`, "copyright", "all rights reserved" or "sva prava zadržana" / "zadrzana", in the visible text |
+| `has_viewport_meta` | `<meta name="viewport">` present |
+| `has_booking` | a known widget in the HTML (Calendly, Setmore, SimplyBook, Booksy, Fresha, Treatwell, Acuity, YouCanBookMe, Timify, Okadoc, Practo) or a date / datetime-local input |
+| `has_click_to_call` | a `tel:` link |
+| `has_messaging_link` | a `viber:` / `whatsapp:` link, or `wa.me` / `api.whatsapp.com` / `web.whatsapp.com` |
+| `ads_tags` | `meta_pixel` (`fbevents.js`, `fbq(`), `google_ads` (`AW-…`, googleadservices), `gtm` (`gtm.js`, `GTM-…`). GA4 alone is not an ads tag |
+
+All are `None` when not checked (no website, social page, or a run enriched before schema v11). The v3 scorer
+ignores them; scorer v4 (step 5) uses them for Need and Viability. They don't reach the draft prompt yet.
+
+**CMS detection** (`detect_cms`) checks HTML markers *before* the `<meta name="generator">` tag, deliberately:
+page builders like Elementor overwrite the generator meta on a site that's still WordPress underneath, so the
+marker table (`wp-content`, `cdn.shopify.com`, `wixstatic.com`, `website-files.com`, etc.) wins on a match. An
+unrecognized generator string is still returned as-is.
+
+**Lighthouse**: invoked as a subprocess (`npm install -g lighthouse`, see `docs/RESOURCES.md`), headless, JSON
+to stdout, restricted to the four scored categories. `parse_lighthouse_report` reads
+`report["categories"][key]["score"]`, which is nullable: a null score is omitted from `lead.lighthouse` rather
+than coerced to 0, so scoring can tell "measured and bad" from "couldn't be measured". `mobile_friendly` comes
+from Lighthouse's `viewport` audit.
+
+**`build_audit_notes`**: one human-readable line combining contact-data counts (`"1 emails, 2 phones, 3
+socials"`), the Lighthouse breakdown (`"LH perf 47 / a11y 88 / bp 68 / seo 92"`), HTTPS/mobile flags, and CMS.
+Written at enrich time; scoring later *overwrites* this field (`docs/SCORING.md` §7). Unchanged in step 3.
+
+A lead with no `domain`, or a Facebook/Instagram page as its domain, skips the audit; the enricher still writes
+`audit_notes`.
+
+### Re-auditing an enriched run: `enrich --only audit --rescan`
+
+    python -m pipeline.runner enrich --run <run_id> --only audit --rescan [--limit N]
+
+Runs only the audit again on the leads in `enriched.jsonl`, for runs enriched before schema v11 (no signals).
+Contact data and `status` are kept; the audit fields are replaced. If Lighthouse fails this time, the previous
+Lighthouse scores are kept (noted in `errors`). Leads without a site are left alone. `--limit N` re-audits the
+first N only. Writes `enriched.jsonl` / `enriched.csv` and an `enrich_rescan` block in `manifest.json`. It
+doesn't touch `scored.jsonl`, so run `score` again afterwards. `--only` and `--rescan` go together; `audit` is
+the only step that can be re-run.
 
 ## 4. Retry-once-then-fail, and degrade-don't-crash
 

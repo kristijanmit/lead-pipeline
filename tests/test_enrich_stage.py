@@ -113,3 +113,105 @@ def test_limit_truncated_lead_not_filtered(tmp_path, monkeypatch):
     enriched = read_jsonl(run_dir / "enriched.jsonl")
     assert enriched[0].status == "collected"  # still pending, never filtered
     assert read_jsonl(run_dir / "filtered.jsonl") == []
+
+
+# --- enrich --only audit --rescan ---------------------------------------------
+
+def _rescan_run(tmp_path, monkeypatch, leads):
+    run_dir = _make_run(tmp_path, monkeypatch, [])
+    write_jsonl(run_dir / "enriched.jsonl", leads)
+    return run_dir
+
+
+def _fake_audit(monkeypatch, results):
+    """results: domain -> AuditResult; records the domains audited."""
+    from pipeline.enrichers.audit import AuditEnricher
+
+    audited = []
+
+    def audit(self, domain):
+        audited.append(domain)
+        return results[domain]
+
+    monkeypatch.setattr(AuditEnricher, "audit", audit)
+    return audited
+
+
+def _old(company, domain, **kw):
+    """A v9-style enriched lead: contact data and Lighthouse, no signals."""
+    kw.setdefault("lighthouse", {"performance": 30})
+    return Lead(
+        company=company, domain=domain, source="osm", status="enriched",
+        contact_emails=[f"info@{domain}"] if domain else ["x@y.rs"], https=False, **kw,
+    )
+
+
+def test_rescan_refreshes_audit_and_keeps_contact_data(tmp_path, monkeypatch, capsys):
+    from pipeline.audit import AuditResult
+
+    run_dir = _rescan_run(tmp_path, monkeypatch, [
+        _old("Live", "live.rs"),
+        _old("Slow LH", "slow.rs"),
+        _old("Dead", "dead.rs"),
+        _old("No Site", ""),
+        _old("Insta", "instagram.com"),
+    ])
+    (run_dir / "scored.jsonl").write_text("")
+    signals = {"copyright_year": 2017, "has_viewport_meta": False, "has_booking": False,
+               "has_click_to_call": True, "has_messaging_link": False, "ads_tags": ["gtm"]}
+    audited = _fake_audit(monkeypatch, {
+        "live.rs": AuditResult(site_reachable=True, https=True, signals=signals, lighthouse={"performance": 55}),
+        "slow.rs": AuditResult(site_reachable=True, https=True, signals=signals, lighthouse_error="lighthouse timed out"),
+        "dead.rs": AuditResult(site_reachable=False, probe_error="dns", probe_detail="Failed to resolve"),
+    })
+    assert main(["enrich", "--run", "test-run", "--only", "audit", "--rescan"]) == 0
+    assert audited == ["live.rs", "slow.rs", "dead.rs"]  # no site / social page: not audited
+
+    by = {l.company: l for l in read_jsonl(run_dir / "enriched.jsonl")}
+    assert by["Live"].contact_emails == ["info@live.rs"] and by["Live"].status == "enriched"
+    assert by["Live"].https is True and by["Live"].lighthouse == {"performance": 55}
+    assert by["Live"].copyright_year == 2017 and by["Live"].ads_tags == ["gtm"]
+    assert by["Slow LH"].lighthouse == {"performance": 30}  # Lighthouse failed: old scores kept
+    assert by["Slow LH"].has_click_to_call is True
+    assert by["Slow LH"].errors == ["audit: lighthouse timed out (previous scores kept)"]
+    assert by["Dead"].site_reachable is False and by["Dead"].probe_error == "dns"
+    assert by["No Site"].site_reachable is None
+
+    rescan = json.loads((run_dir / "manifest.json").read_text())["enrich_rescan"]
+    assert rescan["step"] == "audit"
+    assert rescan["counts"] == {"input": 5, "rescanned": 3, "site_unreachable": 1,
+                                "lighthouse_failed": 1, "not_audited": 2, "pending": 0}
+    assert "run `score --run test-run` again" in capsys.readouterr().out
+
+
+def test_rescan_respects_limit(tmp_path, monkeypatch):
+    from pipeline.audit import AuditResult
+
+    run_dir = _rescan_run(tmp_path, monkeypatch, [_old("A", "a.rs"), _old("B", "b.rs")])
+    audited = _fake_audit(monkeypatch, {"a.rs": AuditResult(site_reachable=True, signals={})})
+    assert main(["enrich", "--run", "test-run", "--only", "audit", "--rescan", "--limit", "1"]) == 0
+    assert audited == ["a.rs"]
+    by = {l.company: l for l in read_jsonl(run_dir / "enriched.jsonl")}
+    assert by["A"].site_reachable is True and by["B"].site_reachable is None
+    assert json.loads((run_dir / "manifest.json").read_text())["enrich_rescan"]["counts"]["pending"] == 1
+
+
+def test_only_and_rescan_go_together(tmp_path, monkeypatch, capsys):
+    _rescan_run(tmp_path, monkeypatch, [_old("A", "a.rs")])
+    assert main(["enrich", "--run", "test-run", "--only", "audit"]) != 0
+    assert main(["enrich", "--run", "test-run", "--rescan"]) != 0
+    assert "--only and --rescan go together" in capsys.readouterr().err
+
+
+def test_enrich_manifest_counts_audit_outcomes(tmp_path, monkeypatch):
+    from pipeline.audit import AuditResult
+
+    leads = [Lead(company="Dead", domain="dead.rs", source="osm", contact_emails=["a@dead.rs"])]
+    run_dir = _make_run(tmp_path, monkeypatch, leads)
+    _fake_audit(monkeypatch, {"dead.rs": AuditResult(site_reachable=False, probe_error="refused")})
+    from pipeline.enrichers import contact, discovery
+    monkeypatch.setattr(contact.ContactEnricher, "enrich", lambda self, lead: lead)
+    monkeypatch.setattr(discovery.DiscoveryEnricher, "enrich", lambda self, lead: lead)
+    assert main(["enrich", "--run", "test-run"]) == 0
+    counts = json.loads((run_dir / "manifest.json").read_text())["enrich"]["counts"]
+    assert counts["site_unreachable"] == 1 and counts["lighthouse_failed"] == 0 and counts["failed"] == 0

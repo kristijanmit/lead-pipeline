@@ -106,6 +106,6 @@ def test_niche_file_accepts_plain_or_wrapped_block(tmp_path):
 
 
 def test_v9_jsonl_loads_with_empty_market_fields():
-    assert SCHEMA_VERSION == 10
+    assert SCHEMA_VERSION >= 10
     lead = Lead.from_dict({"company": "A", "domain": "a.rs", "source": "osm", "schema_version": 9})
     assert (lead.market, lead.language, lead.niche, lead.niche_label) == ("", "", "", "")

@@ -20,7 +20,7 @@ import yaml
 from pipeline.collectors import get_collector
 from pipeline.collectors.maps import grid_cell_count, parse_bbox, resolve_bbox
 from pipeline.config import ConfigError, load_config
-from pipeline.dedupe import dedupe_leads, lead_key
+from pipeline.dedupe import dedupe_leads, is_social_domain, lead_key
 from pipeline.drafting import DraftBudgetError, draft_lead, language_skip_reason, load_examples
 from pipeline.enrichers import apply_enrichers, get_enricher
 from pipeline.market import Market, load_market, market_from_prompts, market_yaml
@@ -256,8 +256,94 @@ def _stage_keys(lead) -> set[tuple[str, str]]:
     return {lead_key(lead), ("company", lead.company.strip().lower())}
 
 
+def _audit_outcome(before, after) -> str:
+    """"unreachable" | "lighthouse_failed" | "" for one audited lead."""
+    if after.site_reachable is False:
+        return "unreachable"
+    new_errors = after.errors[len(before.errors):]
+    if any(e.startswith("audit: ") for e in new_errors):
+        return "lighthouse_failed"
+    return ""
+
+
+# steps `enrich --only <step> --rescan` can re-run on an enriched run
+_RESCAN_STEPS = ("audit",)
+
+
+def _cmd_rescan(args: argparse.Namespace, config: dict) -> int:
+    """Re-run one enrich step (the audit) on leads already in enriched.jsonl —
+    contact data is kept, the audit fields are replaced. For runs enriched
+    before schema v11, which have no signals. Lighthouse scores are kept when
+    Lighthouse fails this time."""
+    run_dir = RUNS_DIR / args.run
+    enriched_path = run_dir / "enriched.jsonl"
+    if not enriched_path.exists():
+        raise ValueError(f"no enriched.jsonl in {run_dir} — run enrich first")
+    leads = read_jsonl(enriched_path)
+    enricher = get_enricher(args.only, config)
+    enricher.keep_lighthouse = True
+    delay_s = config["enrich"]["delay_s"]
+    started_at = _now_iso()
+
+    results = []
+    rescanned = unreachable = lighthouse_failed = not_audited = pending = 0
+    for lead in leads:
+        if not lead.domain or is_social_domain(lead.domain):
+            not_audited += 1
+            results.append(lead)
+            continue
+        if args.limit is not None and rescanned >= args.limit:
+            pending += 1
+            results.append(lead)
+            continue
+        if rescanned and delay_s:
+            time.sleep(delay_s)  # shared courtesy between sites (ARCHITECTURE §11)
+        out = enricher.enrich(lead)
+        rescanned += 1
+        outcome = _audit_outcome(lead, out)
+        unreachable += outcome == "unreachable"
+        lighthouse_failed += outcome == "lighthouse_failed"
+        print(f"  [{rescanned}] {lead.company} ({lead.domain}): {outcome or 'ok'}")
+        results.append(out)
+        write_jsonl(enriched_path, results + leads[len(results):])  # a crash keeps finished audits
+
+    write_jsonl(enriched_path, results)
+    CsvSink(run_dir / "enriched.csv").write(results)
+
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {"run_id": args.run}
+    manifest["enrich_rescan"] = {
+        "step": args.only,
+        "config_snapshot": {"enrich": config["enrich"], "limit": args.limit},
+        "counts": {
+            "input": len(leads), "rescanned": rescanned, "site_unreachable": unreachable,
+            "lighthouse_failed": lighthouse_failed, "not_audited": not_audited, "pending": pending,
+        },
+        "started_at": started_at,
+        "finished_at": _now_iso(),
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    print(
+        f"run {args.run}: {rescanned} re-audited ({unreachable} unreachable, "
+        f"{lighthouse_failed} Lighthouse failed), {not_audited} without a site, {pending} not reached (--limit)"
+    )
+    print(f"  {enriched_path} (+ enriched.csv, manifest.json)")
+    if (run_dir / "scored.jsonl").exists():
+        print(f"  scored.jsonl is now older than the audit: run `score --run {args.run}` again")
+    return 0
+
+
 def cmd_enrich(args: argparse.Namespace) -> int:
     config = load_config(args.config)
+    only, rescan = getattr(args, "only", None), getattr(args, "rescan", False)
+    if only or rescan:
+        if not (only and rescan):
+            raise ValueError("--only and --rescan go together: `enrich --run <id> --only audit --rescan`")
+        if only not in _RESCAN_STEPS:
+            raise ValueError(f"--only {only!r}: only {', '.join(_RESCAN_STEPS)} can be re-run")
+        return _cmd_rescan(args, config)
     run_dir = RUNS_DIR / args.run
     collected_path = run_dir / "collected.jsonl"
     if not collected_path.exists():
@@ -294,6 +380,7 @@ def cmd_enrich(args: argparse.Namespace) -> int:
     results = []
     newly_filtered = []
     processed = skipped = already_filtered = failed = filtered_count = 0
+    unreachable = lighthouse_failed = 0
     for lead in leads:
         key = lead_key(lead)
         company_key = ("company", lead.company.strip().lower())
@@ -314,6 +401,9 @@ def cmd_enrich(args: argparse.Namespace) -> int:
         processed += 1
         if enriched.status == "enrich_failed":
             failed += 1
+        outcome = _audit_outcome(lead, enriched)
+        unreachable += outcome == "unreachable"
+        lighthouse_failed += outcome == "lighthouse_failed"
         no_contact = _has_no_contact_info(enriched)
         site = lead.domain or "no website"
         if enriched.domain != lead.domain:
@@ -347,6 +437,8 @@ def cmd_enrich(args: argparse.Namespace) -> int:
             "processed": processed,
             "failed": failed,
             "filtered_no_contact": filtered_count,
+            "site_unreachable": unreachable,
+            "lighthouse_failed": lighthouse_failed,
             "pending": len(leads) - skipped - already_filtered - processed,
         },
         "started_at": started_at,
@@ -361,6 +453,8 @@ def cmd_enrich(args: argparse.Namespace) -> int:
         f"run {args.run}: {processed} enriched ({failed} failed, {filtered_count} filtered — no contact info), "
         f"{skipped} already done, {already_filtered} already filtered, {pending} pending"
     )
+    if unreachable or lighthouse_failed:
+        print(f"  audit: {unreachable} site(s) unreachable, {lighthouse_failed} Lighthouse failure(s) (see errors)")
     print(f"  {run_dir}/enriched.jsonl (+ enriched.csv, manifest.json)")
     if filtered_count or already_filtered:
         print(
@@ -1130,6 +1224,13 @@ def build_parser() -> argparse.ArgumentParser:
     enrich.add_argument("--run", required=True, help="run id under data/runs/")
     enrich.add_argument(
         "--limit", type=int, help="process only the first N pending leads — dry-run"
+    )
+    enrich.add_argument(
+        "--only", choices=_RESCAN_STEPS, help="with --rescan: the one step to re-run (audit)"
+    )
+    enrich.add_argument(
+        "--rescan", action="store_true",
+        help="with --only: re-run that step on already-enriched leads (e.g. old runs without audit signals)",
     )
     enrich.set_defaults(func=cmd_enrich)
 

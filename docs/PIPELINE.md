@@ -87,7 +87,7 @@ details (`address`, `rating`, `review_count`, `profile_url` — Maps gives all, 
 | --- | --- | --- |
 | `discovery` | `enrichers/discovery.py` | no website? guess `name.rs/.com/.co.rs` (hyphenated too); adopt only if the page shows a known phone or the full company name. The lead then continues as a normal site lead |
 | `contact` | `enrichers/contact.py` | homepage + at most one contact page, **robots.txt checked before every fetch**. `contact_emails` (all of them, never collapsed), `contact_phones`, `social_links`, `site_text` (short homepage summary for drafting) |
-| `audit` | `enrichers/audit.py` | HTTPS, CMS, Lighthouse CLI scores (perf / a11y / best practices / SEO), `mobile_friendly`, `audit_notes`. Timeout `enrich.lighthouse.timeout_s` |
+| `audit` | `enrichers/audit.py` over the shared core `pipeline/audit.py` | probe first: `site_reachable` / `probe_error`, HTTPS, CMS and signals from the homepage HTML (`copyright_year`, `has_viewport_meta`, `has_booking`, `has_click_to_call`, `has_messaging_link`, `ads_tags`); then Lighthouse CLI scores and `mobile_friendly`, one attempt, a failure keeps the probe fields. `audit_notes`. `enrich --only audit --rescan` re-audits an enriched run |
 
 Output: `enriched.jsonl` (`enriched` or `enrich_failed`). Retry once, then fail into data.
 
@@ -190,7 +190,7 @@ Notion `Status`: `Not started` → `Queued` → (sent by you) → `Follow-up due
 
 ## Principles that hold across every stage
 
-- One `Lead` dataclass (`pipeline/schema.py`, schema v9) flows everywhere; new fields bump `schema_version`.
+- One `Lead` dataclass (`pipeline/schema.py`, schema v11) flows everywhere; new fields bump `schema_version`.
 - Degrade, don't crash: missing data is a status + `Lead.errors`, not an exception.
 - Idempotent re-runs: enrich skips enriched, sync and collect skip cached, drafting skips drafted.
 - New sources / enrichers / sinks implement the protocol in their `base.py` and `@register` — `runner.py`

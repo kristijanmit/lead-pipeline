@@ -121,7 +121,7 @@ The edits below assume the recommendations. Change them if you decide otherwise.
   - Result: a Lighthouse failure costs 1 run, not 2, and loses nothing the probe found.
 - **ADD** `extract_signals(html) -> dict` (pure, fixture-tested): `copyright_year` (the highest year near ©/copyright, ≤ current year), `has_viewport_meta`, `has_booking` (known widgets plus forms with a date input), `has_click_to_call` (`tel:` href). Reuse `detect_cms` for the builder.
 - **CHANGE**: `build_audit_notes` stays the *enrich-time* note. The scorer still overwrites it (P5).
-- **FIX G3** (`enrichers/base.py` + `runner.py` enrich): skip leads that already have 2 audit failures recorded, unless `--retry-failed` is given.
+- ~~**FIX G3**~~ **Decided 2026-11-27: dropped.** With the split, a dead site and a Lighthouse failure are data (`site_reachable=False` + `probe_error`, or a line in `errors`), not an exception, so the audit never marks a lead `enrich_failed` and re-runs don't repeat Lighthouse. **Also decided:** the probe failure kind is stored as `probe_error` (`dns` / `refused` / `timeout` / `http_error` / `ssl` / `other`), so step 5 treats only `dns` / `refused` as a dead domain; `copyright_year` also looks next to "all rights reserved" and "sva prava zadržana/zadrzana"; ads and messaging links are `ads_tags` and `has_messaging_link`; the core lives in `pipeline/audit.py`; `--only` requires `--rescan`.
 
 ### `pipeline/channels.py` (new) + `pipeline/drafting/channel.py`
 - **ADD**: move `is_placeholder_phone`, `is_serbian_mobile`, `is_placeholder_email` and the ranking into `pipeline/channels.py`:
@@ -246,7 +246,7 @@ At this commit, `test_scoring.py` (78 test/assert lines), `test_notion_sink.py` 
 5. **Notion properties**, then `to_notion_properties`, `query_draftable`, `--min-tier`, `--rescore`.
 6. **Auto-drafting** (section 11).
 7. **`score-report`** after your first review session: Go-rate per market and per niche.
-8. **Cleanup** one version later: remove `reachability_score` / `opportunity_score` / `total_score` (schema 11) and their Notion columns.
+8. **Cleanup** one version later: remove `reachability_score` / `opportunity_score` / `total_score` (schema 12; v10 = step 1 market/niche, v11 = step 3 audit signals) and their Notion columns.
 
 Follow-ups after v2 (not in this change): Instagram bio and post enrichment for IG-only businesses (G15, ROADMAP to-do #2),
 Phase B follow-ups with the `Outcome` field, reply drafts.
@@ -396,7 +396,7 @@ A page is drafted when all hold: `Qualified` ✓, `Tier` ≥ `outreach.auto_draf
 
 ### 11.3 Praise without your note
 Without an SM Audit note, the drafter needs facts it can trust.
-- **ADD** `profile_facts: list[str]` on `Lead` (schema v10), built in enrich from data already fetched, no new
+- **ADD** `profile_facts: list[str]` on `Lead` (next schema bump; v10/v11 are taken by steps 1 and 3), built in enrich from data already fetched, no new
   requests: site title + meta description, services named on the site (`site_text`), Maps category and description,
   OSM tags (e.g. `healthcare:speciality`), photo count when Maps gives it.
 - **CHANGE** drafter prompt: praise source order = SM Audit → `profile_facts` → the plain line ("sviđa mi se kako

@@ -106,7 +106,7 @@ A single canonical record flows through every stage. Defined once in
 ```python
 @dataclass
 class Lead:
-    schema_version: int = 10       # bump whenever fields are added/changed (pipeline/schema.py is authoritative)
+    schema_version: int = 11       # bump whenever fields are added/changed (pipeline/schema.py is authoritative)
 
     # identity — set at collection, never changes after
     company: str
@@ -131,6 +131,15 @@ class Lead:
     cms: str | None = None
     lighthouse: dict[str, int] | None = None   # {"performance": 42, "accessibility": 88, ...}
     audit_notes: str = ""          # overwritten with the scoring explainability string once scored (SCORING.md §5)
+    # v11 — from the audit probe's homepage HTML (pipeline/audit.py); None = not checked
+    site_reachable: bool | None = None
+    probe_error: str | None = None   # dns | refused | timeout | http_error | ssl | other
+    copyright_year: int | None = None
+    has_viewport_meta: bool | None = None
+    has_booking: bool | None = None
+    has_click_to_call: bool | None = None
+    has_messaging_link: bool | None = None
+    ads_tags: list[str] | None = None  # meta_pixel | google_ads | gtm
 
     # scoring (v6 — see SCORING.md for the full model)
     scoring_version: int = 3       # bump whenever the weighting formula changes
@@ -185,6 +194,7 @@ pipeline/
   dedupe.py           # domain normalization + seen-domain tracking
   market.py           # Market presets (config.yaml markets:) + "new market" prompts
   niche.py            # Niche definition (created in go / --niche-file, never config)
+  audit.py            # shared audit core: probe, signals, Lighthouse (enrich, audit-report)
   channels.py         # per-market channel rules: usable_channels / best_channel — pure,
                       # shared by drafting (and the v4 scorer's reach)
 
@@ -197,7 +207,7 @@ pipeline/
   enrichers/
     base.py           # Enricher protocol: enrich(lead: Lead) -> Lead
     contact.py         # email/phone/social scraping
-    audit.py           # Lighthouse CLI wrapper
+    audit.py           # maps the shared audit core onto a Lead
 
   scoring/
     scorer.py          # score(lead: Lead, weights: dict, qualification: dict) -> Lead — pure function

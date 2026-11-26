@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Iterable
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 SCORING_VERSION = 3
 
 
@@ -58,6 +58,20 @@ class Lead:
     cms: str | None = None
     lighthouse: dict[str, int] | None = None  # {"performance": 42, "accessibility": 88, ...}
     audit_notes: str = ""
+
+    # v11 — audit signals from the probe's homepage HTML (pipeline/audit.py), kept
+    # even when Lighthouse fails. None = not checked (no website, social page, or
+    # v10-and-older JSONL; `enrich --only audit --rescan` fills them in).
+    site_reachable: bool | None = None  # False: the homepage GET failed on https and http
+    probe_error: str | None = None  # why, when site_reachable is False: dns | refused |
+    # timeout | http_error | ssl | other — dns/refused mean nothing is there,
+    # the rest may be a live site worth checking again
+    copyright_year: int | None = None  # highest year next to ©/copyright/"sva prava zadržana"
+    has_viewport_meta: bool | None = None
+    has_booking: bool | None = None  # known booking widget, or a date input
+    has_click_to_call: bool | None = None  # a tel: link
+    has_messaging_link: bool | None = None  # viber: / whatsapp: / wa.me / api.whatsapp.com
+    ads_tags: list[str] | None = None  # subset of meta_pixel, google_ads, gtm
 
     # scoring (docs/SCORING.md) — reachability_score/opportunity_score/total_score/
     # qualified are all None/False until a lead passes the qualification filters
