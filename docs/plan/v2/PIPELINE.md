@@ -6,14 +6,15 @@ what comes after (follow-ups, replies, retuning). Each stage links to its deep-d
 **[built]**, **[changed]** (built, but this sketch changes it), **[new]**, **[planned]**.
 
 What changed vs v1, in one line each:
-- Scoring now works in **four levels**: L0 gates, L1 automatic sub-scores, L2 your review, L3 outcomes. Only L1 is a formula.
+- Scoring now works in **four levels**: L0 gates, L1 automatic sub-scores, L2 what you do at send time, L3 outcomes. Only L1 is a formula.
 - L1 splits the single `total_score` into **Need / Viability / Reach** plus a niche-match check, then a **Priority** score and an **A–D Tier**. Every score comes with the reasons behind it.
 - **No default niches.** Every run's niche is created in `go`. **Markets** (country, phone rules, language, channel order) are chosen or created in `go` too, and English/UAE are handled alongside Serbian.
 - Reach now uses the same channel order as drafting (Instagram first), not email 50 / phone 40 / social 10.
 - Need scores the problems an owner can actually see (mobile, HTTPS, an outdated site), and Lighthouse matters less.
-- Your review gets a `Verdict` field, and drafting runs only on `Go`.
+- **Drafting is automatic**: every run drafts its synced pages at tier ≥ B with no approval, prompt or required note. You only open Notion to send (or `Skip`).
+- "No website always outranks a bad audited site" is dropped: new_build and redesign compete on Need.
 - `sync --rescore` lets a retuned formula update leads that are already in Notion.
-- Feedback comes first from your verdicts, which arrive on day one, and later from replies.
+- Feedback comes first from what you send or skip, and later from replies.
 
 ```
  SOURCES              RUN FOLDER: data/runs/<run_id>/             NOTION (outreach tracker)            YOU
@@ -29,19 +30,18 @@ What changed vs v1, in one line each:
                           │ L0 gates ──► disqualified (kept in JSONL, never synced)
                           │ L1 niche match · Need · Viability · Reach ─► Priority ─► Tier A–D + reasons
                           ▼
-                     4 SYNC ──── tier ≥ C ──────────────────► page per lead ─────────────────► L2 REVIEW
-                          │ --rescore: score fields only        Tier, Priority, sub-scores,       Verdict Go/Maybe/Skip
-                          ▼                                     Score Reasons                     + SM Audit note
-                     manifest.json (counts, tier mix)                  │                          + Skip Reason
-                                                                       ▼                               │
-                                                              5 DRAFT-NOTION ◄──── Verdict = Go ───────┘
-                                                                 Status = Queued ─────────────────► review, edit,
-                                                                                                    SEND BY HAND,
-                                                                                                    log `Communication`
+                     4 SYNC ──── tier ≥ C ──────────────────► page per lead
+                          │ --rescore: score fields only        Tier, Priority, sub-scores, Score Reasons
+                          ▼                                            │
+                     5 DRAFT (auto, same run) ─── tier ≥ B, Verdict ≠ Skip ─► Draft Message, Draft Notes,
+                          │ no prompt, failures → Draft failed               Status = Queued ──────────► L2 AT SEND:
+                          ▼                                                                             send as is / edit /
+                     manifest.json (counts, tier mix, drafted / failed / undrafted)                    Skip + Skip Reason,
+                                                                                                        log `Communication`
                                                               6 FOLLOW-UP [planned] ◄──────────────────┘
                                                                  Follow-up due / Dead, sets L3 Outcome
                                                               7 CALIBRATE [new]
-                                                                 score-report: L1 vs L2 verdicts (fast)
+                                                                 score-report: L1 vs L2 send/skip (fast)
                                                                                L1 vs L3 outcomes (slow)
                                                                  → retune weights, scoring_version++, sync --rescore
 ```
@@ -54,11 +54,11 @@ Nothing is ever sent by the pipeline. Every outward message is a human action.
 
 | Command | What it chains | Use when |
 | --- | --- | --- |
-| `go` | interactive menu: **Lead Gen** (1→4), **Draft Outreach** (5). Lead Gen asks for the **market** (pick or create) and **creates the niche** (name, search terms, draft phrase, optional accepted Google categories / question / landing URL), then the location. "Both" removed (it skipped review) | day-to-day |
-| `run --source … --market … --niche-file … --location …` | 1 → 2 → 3 → 4 (`--draft` removed: nothing is drafted before review) | one scripted run |
+| `go` | interactive menu: **Lead Gen** (1→5, drafting included), **Draft Outreach** (catch-up for undrafted / hand-made pages). Lead Gen asks for the **market** (pick or create) and **creates the niche** (name, search terms, draft phrase, optional accepted Google categories / question / landing URL), then the location. "Both" removed (it skipped review) | day-to-day |
+| `run --source … --market … --niche-file … --location …` | 1 → 2 → 3 → 4 → 5, no prompts (`--no-draft` to stop after sync) | one scripted run |
 | `batch --file batches/<name>.yaml` | `run` per entry, sequential, `--pause-s` between. Each entry carries full `market` and `niche` blocks, with no defaults | several cities / niches |
 | individual stages (`collect`, `enrich`, `score`, `sync`, `draft`, `draft-notion`) | one stage | debugging, re-running a step |
-| `score-report` **[new]** | reads Notion + JSONL, prints calibration tables (stage 7) | after a review session / every ~50 sends |
+| `score-report` **[new]** | reads Notion + JSONL, prints calibration tables (stage 7) | every ~50 sends |
 
 - Every command takes `--limit N`: dry-run on a few leads before spending rate limits or AI credits.
 - `run` builds the sink first, so a missing `NOTION_TOKEN` fails before collect/enrich spend time.
@@ -108,10 +108,10 @@ Every number it returns comes with a short reason string. Weights and thresholds
 | --- | --- | --- | --- |
 | **L0 Gates** | pipeline, stage 3 | *Can we contact them at all?* | `qualified`, `disqualify_reason` |
 | **L1 Auto score** | pipeline, stage 3 | *In what order should I review them?* | niche match, `need`, `viability`, `reach` → `priority` → `tier`, `score_reasons`, `score_confidence` |
-| **L2 Human verdict** | you, in Notion | *Are they actually worth a message?* | `Verdict`, `SM Audit`, `Skip Reason` |
+| **L2 Send decision** | you, in Notion, at send time | *Is this draft worth sending?* | sent / edited / `Verdict = Skip` + `Skip Reason` |
 | **L3 Outcome** | follow-up stage, from the `Communication` log | *Did it work?* | `Outcome` |
 
-L1 sets the review order and replaces nothing. L2 is the real decision. L3 is the ground truth that L1
+L1 decides which leads get drafted (tier ≥ B) and the send order. L2 is still the real decision, made when you send. L3 is the ground truth that L1
 is tuned against.
 
 ### L0 — gates (filters, no score)
@@ -178,7 +178,7 @@ tier     = A ≥ 65 · B 45–64 · C 25–44 · D < 25
 ```
 
 - `score_reasons`: kept separate from `audit_notes`. `audit_notes` is the fact sheet the draft prompt reads, so ratings and scores stay out of it. `score_reasons` holds the top 3–5 drivers, e.g. `niche match · not mobile-friendly · no HTTPS ·
-  4.7★/212 reviews · best channel: Instagram`. They go into Notion and save you the digging before you write the SM Audit.
+  4.7★/212 reviews · best channel: Instagram`. They go into Notion and show you why a lead was drafted.
 - `score_confidence`: `high` / `low` (low if Need or Viability fell back to a default).
 - The thresholds are a first guess. The manifest records the tier mix for each run. Aim for A ≈ top 15–20%,
   a number you can review in one sitting, and move the thresholds if a run is mostly A or almost no A.
@@ -201,29 +201,25 @@ Output: `scored.jsonl` + `scored.csv` (sub-scores, priority, tier, reasons, disq
 - `Industry` (select) is kept and holds the niche name created in `go`; there is no separate Niche column.
 - Field mapping stays in `to_notion_properties()`; bookkeeping (`run_id`, `errors`, versions) stays in JSONL.
 
-## 5. Human review (L2) + draft first messages **[changed]** — docs/OUTREACH.md
+## 5. Draft first messages, automatically **[changed]** — docs/OUTREACH.md, script_edits.md §11
 
-**Review (you).** Use a Notion view filtered to `Status = Not started`, `Verdict` empty, and sorted by **Tier, then Priority**.
-For each lead, set:
-- `Verdict`: **Go** / **Maybe** / **Skip**
-- `SM Audit`: what you actually liked on their profile and anything broken (only for Go)
-- `Skip Reason` (select, only for Skip): wrong industry · chain · site is fine · too small · closed ·
-  bad fit for ONIX · other
+Runs at the end of every `run` / `batch` / `go` Lead Gen, right after sync, on the pages synced in that run. No
+dry run, no confirmation, no required note.
 
-Your verdicts are the fastest training data you'll get, because they exist after one review session.
-Replies take weeks.
+Eligible page: `Qualified` ✓, `Tier` ≥ `outreach.auto_draft_min_tier` (B), Status `Not started`, empty
+`Draft Message`, `Verdict` ≠ `Skip`, `Market` and `Industry` set. `SM Audit` is optional.
 
-**Draft.** `draft-notion --limit 1` (dry run), then `draft-notion --yes`.
-Eligible page: `Qualified` ✓, **`Verdict = Go`**, Status `Not started`/`Queued`, empty `Draft Message`,
-filled `SM Audit`. `--all` drops the note requirement; `--redraft` overwrites; `--company X` targets one page.
+Per page: channel (shared ranking function, market order) → message (`claude -p`, language rule set sr/en, 2–3
+sentences) → validate (one retry) → write `Suggested Channel`, `Draft Message`, `Draft Notes`, `Status = Queued`.
+- Praise source: your `SM Audit` if present → `profile_facts` from enrich (site title/description, services,
+  Maps category, OSM tags) → the plain praise line, flagged in `Draft Notes`. Never invented.
+- Validation failure → Status `Draft failed` + reason; a CLI error on one page → logged; both continue.
+- Out of AI credits → drafting stops for this run and reports how many pages are undrafted; the next run or
+  `draft-notion` picks them up (eligibility = empty `Draft Message`).
+- `draft-notion` remains for catch-up, hand-made pages and `--redraft`. It writes by default (`--dry-run` to preview).
+- Ratings and audit numbers are still never written into the message (the validator blocks them).
 
-Per page, as in v1: channel (shared ranking function) → message (`claude -p`, Serbian Latin, "Vi" form, 2–3
-sentences, praise only from your note) → validate (greeting, question, no rating / "nemate sajt" / price /
-link / emoji / Cyrillic; one retry) → write `Suggested Channel`, `Draft Message`, `Status = Queued`.
-`Score Reasons` may guide **what** to praise or ask about. Ratings and audit numbers are still never
-written into the message (the validator already blocks them).
-
-Then **you** review, edit, choose `Chosen Channel`, send by hand, and log
+Then **you** read the draft and `Draft Notes`, edit if needed (or set `Verdict = Skip` + `Skip Reason`), choose `Chosen Channel`, send by hand, and log
 `Communication`: `YYYY-MM-DD · SENT · channel · text` / `YYYY-MM-DD · REPLY · text`, plus `Last Contacted`.
 
 ## 6. Follow-ups **[planned — Phase B]**
@@ -243,15 +239,15 @@ Allowed writes: Status, Suggested Channel, Draft Message, Follow-up date, Outcom
 
 | Signal | Available | Compare | Healthy looks like |
 | --- | --- | --- | --- |
-| **L1 vs L2** | after the first review session | Go-rate by tier, by `lead_type`, by industry; count of each `Skip Reason` | Go-rate falls steadily A → D |
+| **L1 vs L2** | after the first ~50 drafts | send-rate / skip-rate by tier, `lead_type`, niche, market; count of each `Skip Reason` | skip-rate rises A → C |
 | **L1 vs L3** | after ~30+ sends per band | reply rate and meeting rate by tier, sub-score band, channel, industry | A clearly beats C |
 
 How to act on it:
 - A `Skip Reason` that keeps recurring is a missing **gate**. If "chain" keeps appearing, lower
   `chain_listing_min`. If "closed" keeps appearing, check the Maps status parsing.
-- If Go-rate doesn't fall with tier, a **sub-score weight** is wrong. Check which sub-score separates Go
+- If skip-rate doesn't rise as tier drops, a **sub-score weight** is wrong. Check which sub-score separates Go
   from Skip, and give it more weight.
-- If Go-rate is high but replies are low, the **message** is the problem, not the score. Feed it into
+- If you send most drafts but replies are low, the **message** is the problem, not the score. Feed it into
   `config/outreach.md`.
 - Don't retune on fewer than ~30 leads per band. Change one thing at a time, bump `scoring_version`,
   then `sync --rescore`.
@@ -336,15 +332,15 @@ scoring:
 for comparison, then removed.
 
 `Lead.status`: `collected` → `enriched` | `enrich_failed` → `scored` | `disqualified` → `synced`.
-Notion `Status`: `Not started` → (Verdict) → `Queued` → (sent) → `Follow-up due` → `Dead`, or a reply.
-Notion `Verdict`: Go / Maybe / Skip. Notion `Outcome`: no_reply / declined / replied / meeting / won.
+Notion `Status`: `Not started` → (auto draft) → `Queued` | `Draft failed` → (sent) → `Follow-up due` → `Dead`, or a reply.
+Notion `Verdict`: optional, `Skip` stops all further work on a page. Notion `Outcome`: no_reply / declined / replied / meeting / won.
 
 ## Principles that hold across every stage
 
 - One `Lead` dataclass flows everywhere; new fields bump `schema_version`.
 - Degrade, don't crash: missing data becomes a default plus `score_confidence: low`, never an exception or a silent drop.
 - **Every score explains itself**: no number without a reason string.
-- **The formula ranks and you decide**: L1 orders your review queue and never drafts or skips on its own.
+- **The formula drafts, you send**: L1 picks what gets drafted and in what order; nothing is sent without you.
 - **One source per rule**: domain key in `dedupe.py`, channel ranking in one shared function,
   Notion mapping in `to_notion_properties()`, weights in `config.yaml`.
 - Idempotent re-runs: enrich skips enriched, sync and collect skip cached, drafting skips drafted,

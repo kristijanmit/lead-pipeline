@@ -84,10 +84,10 @@ Legend: **FIX** = wrong or inconsistent now · **CHANGE** = existing code, new b
 | # | Decision | Options | Recommendation |
 | --- | --- | --- | --- |
 | **D1** | ~~Industry Fit~~ **Decided:** no default niches. The niche is created per run in `go`, so there's no industry Fit. It's replaced by a niche-match check (section 9). | — | — |
-| **D2** | The "no website always outranks a bad audited site" rule (`audited_score_cap < no_website_score`, enforced in `config.py` and with an `assert` in the scorer). `SCORING.md` §5.2 argues both sides in the same paragraph | (a) keep it: cap redesign Need below new_build's minimum · (b) drop it: both compete on Need | **(b)**, and write the reason into the changelog. With Instagram-only salons, "no site" isn't automatically the hotter lead. Let the Go-rate settle it. |
-| **D3** | Draft-before-review paths (G10) | delete · keep for tier A only, with a warning | **Delete** `run --draft`, `go` "Both", batch `draft:`. That also removes the batch "paused → resume at draft" machinery for `run`. Keep `draft-notion` as the only drafting path. |
+| **D2** | ~~"No website always outranks a bad audited site"~~ **Decided 2026-11-26: dropped.** Remove `audited_score_cap < no_website_score` from `config.py` validation, the `assert` in the scorer and the config key. new_build and redesign compete on Need. Record the reason in the `SCORING.md` changelog (v4): with Instagram-only salons, "no site" isn't automatically the hotter lead. | — | — |
+| **D3** | ~~Draft-before-review paths~~ **Decided 2026-11-26: drafting is automatic** (section 11). No review gate before drafting; `run` / `batch` / `go` draft at the end of every run. The old `run --draft` / `go` "Both" / batch `draft:` paths are replaced by the one auto step, not kept side by side. | — | — |
 | **D4** | `Score Reasons` vs `Audit Notes` (P5) | one field · two fields | **Two**: facts for drafting, reasons for you. |
-| **D5** | Verdict for hand-made pages (G11) | require Go everywhere · auto-allow Source = Manual | **Require Go**. It's one click, and the rule stays simple. |
+| **D5** | ~~Verdict for hand-made pages~~ **Obsolete:** no Verdict gate (section 11). Hand-made pages draft like any other page. | — | — |
 
 The edits below assume the recommendations. Change them if you decide otherwise.
 
@@ -174,14 +174,14 @@ The edits below assume the recommendations. Change them if you decide otherwise.
   - stop writing the old score properties once D-version cleanup lands
   - `Status` logic unchanged
 - **ADD** `score_properties(lead) -> dict`, the *only* properties `--rescore` may write. Test that it contains no human field.
-- **CHANGE** `lead_from_page`: also read `Verdict` (used by draft-notion) and `Score Reasons` (not passed to the prompt).
-- **CHANGE** `query_draftable`: add `{"property": "Verdict", "select": {"equals": "Go"}}`. `--all` drops only the SM Audit condition.
+- **CHANGE** `lead_from_page`: also read `Verdict` (only `Skip` matters) and `Score Reasons` (not passed to the prompt).
+- **CHANGE** `query_draftable`: superseded by section 11 (no Verdict = Go, no SM Audit requirement).
 
 ### `pipeline/runner.py` — sync
 - **CHANGE** `cmd_sync` (lines 543-562): `to_sync` = `scored` leads with `qualified` and tier ≥ `--min-tier` (default C) (G6).
 - **ADD** `--rescore` (G7, G8): loop over `synced` leads → find the page via `cache_key`, then the email index → `update_page(page_id, score_properties(lead))`. Report updated / no page / failed. Respect `--limit`.
 
-### `pipeline/runner.py` — drafting paths (D3)
+### `pipeline/runner.py` — drafting paths (D3, superseded by section 11)
 - **DELETE**: `run --draft`, `go` mode "Both", batch key `draft`, the `cmd_draft` stage in `cmd_run` / `cmd_batch`, and the batch "paused → resume at draft" branch (lines 699-704, 723-734).
 - **DECIDE** whether to remove the `draft` command itself, or keep it hidden for `scripts/backfill_drafts.py`. Recommended: delete both the command and the script once `--rescore` covers updating existing pages.
 
@@ -193,10 +193,10 @@ The edits below assume the recommendations. Change them if you decide otherwise.
   - a warning on any band with fewer than 30 leads
 
 ### Notion (manual, one time)
-- **ADD** properties: `Tier`, `Priority`, `Score Reasons`, `Verdict` (Go/Maybe/Skip), `Skip Reason`, `Outcome`.
-- **ADD** a review view: Status Not started, Verdict empty, sorted Tier ↑ then Priority ↓.
+- **ADD** properties: `Tier`, `Priority`, `Score Reasons`, `Verdict` (optional, only `Skip` is used), `Skip Reason`, `Outcome`, Status option `Draft failed`.
+- **ADD** a send view: Status Queued, sorted Tier ↑ then Priority ↓.
 - **CHANGE** default view: hide Reachability / Opportunity / Total Score / Lighthouse (G13).
-- **Migration**: set `Verdict = Go` on every page that has an `SM Audit` note or a `Draft Message` (G11). Otherwise queued work disappears from `draft-notion`.
+- **Migration**: none needed for drafting (no Verdict gate). Existing queued pages keep their drafts.
 
 ---
 
@@ -219,7 +219,7 @@ At this commit, `test_scoring.py` (78 test/assert lines), `test_notion_sink.py` 
 - `extract_signals` against `tests/fixtures/contact_page.html` plus 2 new fixtures (old site with ©2017 and no viewport; modern site with a booking widget).
 - `audit.enrich` when Lighthouse raises: the probe fields are kept and the step isn't retried.
 - `score_properties` never contains `Verdict`, `SM Audit`, `Status`, `Communication`, `Draft Message`.
-- `query_draftable` filter includes `Verdict = Go`, with and without `--all`.
+- `query_draftable` filter: see section 11.4.
 - `--rescore`: cached page updated; lead without a page reported, not crashed.
 - v9 JSONL loads under schema v10 (all new fields default).
 - Config: a v3-shaped `scoring` block fails with a clear message ("scoring v4 expected, see SCORING.md").
@@ -240,8 +240,8 @@ At this commit, `test_scoring.py` (78 test/assert lines), `test_notion_sink.py` 
 2. **Audit split + signals** (G1, G2, G3) and **schema v10** fields. Better data even under the v3 scorer.
 3. **Collect**: `maps_category`, `listing_count`, `business_status` (after checking a real CSV), the rejected-domains skip.
 4. **Scorer v4** + config/validation + `cmd_score` manifest. Run it on one existing run next to v3, compare top 20, and adjust tiers.
-5. **Notion properties + migration (Verdict = Go on existing worked pages)**, then `to_notion_properties`, `query_draftable`, `--min-tier`, `--rescore`.
-6. **Delete the draft-before-review paths** (D3).
+5. **Notion properties**, then `to_notion_properties`, `query_draftable`, `--min-tier`, `--rescore`.
+6. **Auto-drafting** (section 11).
 7. **`score-report`** after your first review session: Go-rate per market and per niche.
 8. **Cleanup** one version later: remove `reachability_score` / `opportunity_score` / `total_score` (schema 11) and their Notion columns.
 
@@ -366,3 +366,84 @@ maps:
 Notes: Dubai and Sharjah overlap at Al Nahda/Al Qusais (dedupe handles it). Do not use the Sharjah emirate box
 (24.69,55.35,25.63,56.38): mostly desert and the east coast, ~250 cells. For a first test, run Dubai with one
 category ("dental clinic") and check the result count before running the rest. For comparison, Beograd is 25 cells.
+
+
+## 11. Automatic drafting, no manual gates (decided 2026-11-26)
+
+Goal: a run goes from collect to a ready draft in Notion with **no approval step, no confirmation prompt and no
+required manual note**. You only open Notion to send. Sending stays a human action.
+
+### 11.1 Flow
+```
+run / batch / go (Lead Gen):  collect → enrich → score → sync → draft (auto)
+                                                        pages synced in this run, tier ≥ outreach.auto_draft_min_tier
+```
+- Drafting runs after sync and writes to the existing page with `update_page`, so the old "draft before sync because
+  fields are only written at page creation" constraint is gone.
+- `go` Lead Gen still asks for market, niche and location (that defines the run), then runs everything without
+  another prompt. `go --yes` skips the final summary confirmation; `run` / `batch` never prompt.
+- Old draft-before-review paths (`run --draft`, `go` "Both", batch `draft:`, the "resume at draft" branch) are deleted
+  and replaced by this one step.
+
+### 11.2 Eligibility (replaces the Verdict = Go + SM Audit gate)
+A page is drafted when all hold: `Qualified` ✓, `Tier` ≥ `outreach.auto_draft_min_tier` (default `B`), Status
+`Not started`, `Draft Message` empty, `Verdict` ≠ `Skip`, `Market` and `Industry` set.
+- `SM Audit` is **optional**. If you wrote one, it is still the first praise source.
+- `Verdict` is optional: set `Skip` on a page and nothing more happens to it (no draft, no follow-up).
+
+### 11.3 Praise without your note
+Without an SM Audit note, the drafter needs facts it can trust.
+- **ADD** `profile_facts: list[str]` on `Lead` (schema v10), built in enrich from data already fetched, no new
+  requests: site title + meta description, services named on the site (`site_text`), Maps category and description,
+  OSM tags (e.g. `healthcare:speciality`), photo count when Maps gives it.
+- **CHANGE** drafter prompt: praise source order = SM Audit → `profile_facts` → the plain line ("sviđa mi se kako
+  radite" / "I like the way you present your services") with `verify_note` "no concrete detail found". Never invent.
+- `draft_notes` (verify_note) goes to Notion `Draft Notes` as now, so you see what to double-check while sending.
+- Instagram bio scraping stays out (login wall, ToS). If you want IG bios later, that's the DM-automation project.
+
+### 11.4 Never stop, never ask
+| Situation | Today | Auto |
+|---|---|---|
+| `draft-notion` without `--yes` | dry run | **writes** when `outreach.auto_draft: true`; `--dry-run` to preview |
+| interactive confirms in `run` / `batch` | some | none |
+| validation fails after one retry | skipped | Status `Draft failed`, reason in `Draft Notes`, continue with the next page |
+| Claude CLI error on one page | stops | log to `Lead.errors` / `Draft Notes`, continue |
+| out of AI credits (exit 3) | batch pauses, resume state | stop drafting for this run, report "N pages undrafted"; the next run (or `draft-notion`) picks them up automatically because eligibility is "Draft Message empty". No resume state file. |
+| page missing Market / Industry | — | skipped and counted in the report, no prompt |
+
+`draft-notion` stays as the catch-up command (hand-made pages, pages left undrafted, `--redraft`).
+
+### 11.5 Config
+```yaml
+outreach:
+  auto_draft: true
+  auto_draft_min_tier: B     # A only = fewer, safer drafts; C = more volume
+  first_offer: question      # audit later (section 10)
+```
+
+### 11.6 Feedback without a review step
+L2 moves from "Verdict before drafting" to **what you do at send time**:
+- Sent as is → good. Edited before sending → keep the edit (later: diff feeds the examples file). Not worth sending
+  → set `Verdict = Skip` + `Skip Reason`.
+- `score-report`: send-rate and skip-rate by tier / niche / market instead of Go-rate. Same "Go-rate should fall
+  with tier" logic, read as "skip-rate should rise with tier".
+
+### 11.7 Files
+| File | Edit |
+|---|---|
+| `runner.py` `cmd_run`, `cmd_batch`, `cmd_go` | **ADD** auto draft step after sync (scoped to this run's synced pages); remove draft-before-sync paths, `input()` confirmations in run/batch, resume-at-draft state; `go --yes`. |
+| `runner.py` `cmd_draft_notion` | write by default when `auto_draft`; `--dry-run`; per-page failures never raise; summary: drafted / failed / skipped (reason) / undrafted (credits). |
+| `notion_sink.py` `query_draftable` | filter from 11.2; optional `run_id` / page-id list to scope to one run. |
+| `drafter.py` | praise order from 11.3; `profile_facts` in the prompt; return a failure result instead of raising. |
+| `enrichers/contact.py` or audit core | build `profile_facts`. |
+| `schema.py` | `profile_facts`. |
+| `config.py` | `outreach.auto_draft`, `auto_draft_min_tier` (validate A/B/C); drop `audited_score_cap` validation (D2). |
+| `scorer.py` | drop the cap `assert` (D2). |
+
+### 11.8 Tests
+- `run` with a fake drafter: drafts only this run's synced pages at tier ≥ B, never calls `input()`.
+- Eligibility: empty Verdict and no SM Audit → drafted; `Skip` → not; tier C with min B → not.
+- Validator failure → Status `Draft failed`, next page still drafted. Credit-out → remaining pages untouched, exit code
+  reports it, a second call drafts them.
+- Drafter prompt without SM Audit contains `profile_facts`; with no facts, the plain praise line rule.
+- D2: a redesign lead with high Need can outrank a weak new_build lead; no assert/validation error.

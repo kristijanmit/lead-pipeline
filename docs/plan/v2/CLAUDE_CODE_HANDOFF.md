@@ -13,7 +13,7 @@ These files are in `docs/plan/v2/` (committed to master):
 | `outreach.en.md` | becomes `config/outreach.en.md` |
 
 Before you start, settle these (the plan assumes the recommendations in `script_edits.md` §3):
-- D2 drop the "no website always outranks" cap · D3 delete draft-before-review paths · D4 two fields (Score Reasons + Audit Notes) · D5 require Verdict = Go everywhere.
+- Decided: D2 drop the "no website always outranks" cap · D3 automatic drafting, no review gate (script_edits.md §11) · D4 two fields (Score Reasons + Audit Notes) · D5 obsolete.
 - Edit and approve both outreach files.
 - Open the UAE boxes (`script_edits.md` §10.4) on a map once.
 
@@ -27,7 +27,7 @@ This is the v2 plan for this repo. Rules:
   them against the current code before editing.
 - Decisions: no default niches (niche is always created in `go`); markets Serbia + UAE with sr/en drafting;
   agency lane removed; Notion `Industry` select is kept and holds the niche name (no `Niche` property);
-  D2–D5 as recommended in script_edits.md §3.
+  D2 dropped; drafting is automatic with no approval, prompt or required note (script_edits.md §11).
 - Keep CLAUDE.md rules: never commit data/ or .env, no parallel Overpass queries, robots.txt before fetching,
   Maps is a supplement, scorer.py stays pure (no I/O).
 - Never call the Notion API for writes, never run a real scrape, never send anything. Where a step needs Notion
@@ -48,11 +48,11 @@ Each prompt starts with: `Read CLAUDE.md and docs/plan/v2/*. We're on step N of 
 | 3 | "Audit split + signals as the shared audit core: probe and Lighthouse separate, signals from the probe HTML (site_reachable, copyright_year, viewport, booking, click-to-call, ads pixels, viber/wa links). Schema v10. Add `enrich --only audit --rescan`." | Re-run audit on one old run |
 | 4 | "Collect: `maps_category`, `listing_count`, `business_status`, rejected_domains.json skip, Maps language per market, UAE `maps.areas` from script_edits.md §10.4, OSM `name:en` for en markets." | Give it one real gosom CSV (Serbia) so it can check the column names |
 | 5 | "Scorer v4 per PIPELINE.md §3: L0 gates, niche-match check, Need/Viability/Reach, priority, tiers, score_reasons, confidence; per-market values; scoring_version 4. Then run v3 and v4 side by side on run <id> and show me the top 20 of each." | Pick the run; judge the top 20 |
-| 6 | "Notion side: `to_notion_properties`, `lead_from_page`, `query_draftable` (Verdict = Go), `sync --min-tier`, `sync --rescore`. Write me the exact list of Notion properties and options to add and the migration steps; don't touch Notion." | Add properties, run the migration (Market = serbia, Language = sr, Verdict = Go on worked pages), then `sync --rescore --limit 10` |
-| 7 | "Drafting rule sets `rules_sr.py` / `rules_en.py`, examples per language from `config/outreach.{language}.md`, niche-neutral question rule, `outreach.first_offer` (default question), LinkedIn outputs, banned-terms update. See script_edits.md §10.1." | Move the approved outreach files into `config/`; dry-run `draft-notion --limit 1` on one sr and one en page |
+| 6 | "Notion side: `to_notion_properties`, `lead_from_page`, `query_draftable` (auto-draft eligibility, script_edits.md §11.2), `sync --min-tier`, `sync --rescore`. Write me the exact list of Notion properties and options to add and the migration steps; don't touch Notion." | Add properties, run the migration (Market = serbia, Language = sr), then `sync --rescore --limit 10` |
+| 7 | "Drafting rule sets `rules_sr.py` / `rules_en.py`, examples per language from `config/outreach.{language}.md`, niche-neutral question rule, `outreach.first_offer` (default question), LinkedIn outputs, banned-terms update. See script_edits.md §10.1." | Move the approved outreach files into `config/`; run `draft-notion --dry-run --limit 1` on one sr and one en page |
 | 8 | "`audit-report` command from the audit core: one-page audit per lead, language from the market." | Read 2–3 reports |
-| 9 | "Delete draft-before-review paths: `run --draft`, `go` Both, batch `draft:` and the resume-at-draft machinery." | — |
-| 10 | "`score-report`: Go-rate by tier / market / niche, Skip Reason counts, the A/B rule from the docs with 'not enough data' on small samples." | After your first review session |
+| 9 | "Automatic drafting per script_edits.md §11: draft step after sync in run/batch/go (this run's pages, tier ≥ B), no `input()` in run/batch, `go --yes`, failures never stop the run, credit-out leaves pages for the next run, `profile_facts` in enrich and the drafter, drop the D2 cap. Replace the old draft-before-review paths." | One `run --limit 5` end to end, then read the drafts and Draft Notes |
+| 10 | "`score-report`: send-rate / skip-rate by tier / market / niche, Skip Reason counts, the A/B rule from the docs with 'not enough data' on small samples." | After ~50 drafts |
 | 11 | Not code: no sends until website P0 (demo, sample audit, About, review pages) is live. | — |
 
 ## 4. Tips
