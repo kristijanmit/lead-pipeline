@@ -39,25 +39,112 @@ Start with step 1 of §E.
 
 ## 3. One prompt per step (new session or after /clear)
 
-Each prompt starts with: `Read CLAUDE.md and docs/plan/v2/*. We're on step N of strategy_gaps.md §E.`
+Copy the whole block for the step you are on. "You do by hand" is for you, not for Claude Code.
 
-| # | Prompt (after the line above) | You do by hand |
-|---|---|---|
-| 1 | "Implement market profiles and niche-on-go: `markets:` in config with Serbia and UAE, the `go` prompts, `--market` / `--niche-file`, manifest blocks, Lead fields `market/language/niche/niche_label` (`industry` = niche name), batch format with full blocks. Remove `collect.categories`, `industry_labels`, country defaults. No scoring change. See script_edits.md §9.1–9.2, §9.4." | Run `go` once with a test niche and `--limit 3` |
-| 2 | "Create shared `pipeline/channels.py` with market rules (mobile prefixes, channel order, first-touch exclusions, labels). `drafting/channel.py` re-exports it. Add LinkedIn as a channel." | — |
-| 3 | "Audit split + signals as the shared audit core: probe and Lighthouse separate, signals from the probe HTML (site_reachable, copyright_year, viewport, booking, click-to-call, ads pixels, viber/wa links). Schema v10. Add `enrich --only audit --rescan`." | Re-run audit on one old run |
-| 4 | "Collect: `maps_category`, `listing_count`, `business_status`, rejected_domains.json skip, Maps language per market, UAE `maps.areas` from script_edits.md §10.4, OSM `name:en` for en markets." | Give it one real gosom CSV (Serbia) so it can check the column names |
-| 5 | "Scorer v4 per PIPELINE.md §3: L0 gates, niche-match check, Need/Viability/Reach, priority, tiers, score_reasons, confidence; per-market values; scoring_version 4. Then run v3 and v4 side by side on run <id> and show me the top 20 of each." | Pick the run; judge the top 20 |
-| 6 | "Notion side: `to_notion_properties`, `lead_from_page`, `query_draftable` (auto-draft eligibility, script_edits.md §11.2), `sync --min-tier`, `sync --rescore`. Write me the exact list of Notion properties and options to add and the migration steps; don't touch Notion." | Add properties, run the migration (Market = serbia, Language = sr), then `sync --rescore --limit 10` |
-| 7 | "Drafting rule sets `rules_sr.py` / `rules_en.py`, examples per language from `config/outreach.{language}.md`, niche-neutral question rule, `outreach.first_offer` (default question), LinkedIn outputs, banned-terms update. See script_edits.md §10.1." | Move the approved outreach files into `config/`; run `draft-notion --dry-run --limit 1` on one sr and one en page |
-| 8 | "`audit-report` command from the audit core: one-page audit per lead, language from the market." | Read 2–3 reports |
-| 9 | "Automatic drafting per script_edits.md §11: draft step after sync in run/batch/go (this run's pages, tier ≥ B), no `input()` in run/batch, `go --yes`, failures never stop the run, credit-out leaves pages for the next run, `profile_facts` in enrich and the drafter, drop the D2 cap. Replace the old draft-before-review paths." | One `run --limit 5` end to end, then read the drafts and Draft Notes |
-| 10 | "`score-report`: send-rate / skip-rate by tier / market / niche, Skip Reason counts, the A/B rule from the docs with 'not enough data' on small samples." | After ~50 drafts |
-| 11 | Not code: no sends until website P0 (demo, sample audit, About, review pages) is live. | — |
+### Step 1
+
+```
+Read CLAUDE.md and docs/plan/v2/*. We're on step 1 of strategy_gaps.md §E. Follow the rules in the kickoff prompt in docs/plan/v2/CLAUDE_CODE_HANDOFF.md §2.
+Implement market profiles and niche-on-go: `markets:` in config with Serbia and UAE, the `go` prompts, `--market` / `--niche-file`, manifest blocks, Lead fields `market/language/niche/niche_label` (`industry` = niche name), batch format with full blocks. Remove `collect.categories`, `industry_labels`, country defaults. No scoring change. See script_edits.md §9.1–9.2, §9.4.
+If the plan conflicts with the code, stop and tell me.
+```
+
+You do by hand: Run `go` once with a test niche and `--limit 3`
+
+### Step 2
+
+```
+Read CLAUDE.md and docs/plan/v2/*. We're on step 2 of strategy_gaps.md §E. Follow the rules in the kickoff prompt in docs/plan/v2/CLAUDE_CODE_HANDOFF.md §2.
+Create shared `pipeline/channels.py` with market rules (mobile prefixes, channel order, first-touch exclusions, labels). `drafting/channel.py` re-exports it. Add LinkedIn as a channel.
+If the plan conflicts with the code, stop and tell me.
+```
+
+### Step 3
+
+```
+Read CLAUDE.md and docs/plan/v2/*. We're on step 3 of strategy_gaps.md §E. Follow the rules in the kickoff prompt in docs/plan/v2/CLAUDE_CODE_HANDOFF.md §2.
+Audit split + signals as the shared audit core: probe and Lighthouse separate, signals from the probe HTML (site_reachable, copyright_year, viewport, booking, click-to-call, ads pixels, viber/wa links). Schema v10. Add `enrich --only audit --rescan`.
+If the plan conflicts with the code, stop and tell me.
+```
+
+You do by hand: Re-run audit on one old run
+
+### Step 4
+
+```
+Read CLAUDE.md and docs/plan/v2/*. We're on step 4 of strategy_gaps.md §E. Follow the rules in the kickoff prompt in docs/plan/v2/CLAUDE_CODE_HANDOFF.md §2.
+Collect: `maps_category`, `listing_count`, `business_status`, rejected_domains.json skip, Maps language per market, UAE `maps.areas` from script_edits.md §10.4, OSM `name:en` for en markets.
+If the plan conflicts with the code, stop and tell me.
+```
+
+You do by hand: Give it one real gosom CSV (Serbia) so it can check the column names
+
+### Step 5
+
+```
+Read CLAUDE.md and docs/plan/v2/*. We're on step 5 of strategy_gaps.md §E. Follow the rules in the kickoff prompt in docs/plan/v2/CLAUDE_CODE_HANDOFF.md §2.
+Scorer v4 per PIPELINE.md §3: L0 gates, niche-match check, Need/Viability/Reach, priority, tiers, score_reasons, confidence; per-market values; scoring_version 4. Then run v3 and v4 side by side on run <id> and show me the top 20 of each.
+If the plan conflicts with the code, stop and tell me.
+```
+
+You do by hand: Pick the run; judge the top 20
+
+### Step 6
+
+```
+Read CLAUDE.md and docs/plan/v2/*. We're on step 6 of strategy_gaps.md §E. Follow the rules in the kickoff prompt in docs/plan/v2/CLAUDE_CODE_HANDOFF.md §2.
+Notion side: `to_notion_properties`, `lead_from_page`, `query_draftable` (auto-draft eligibility, script_edits.md §11.2), `sync --min-tier`, `sync --rescore`. Write me the exact list of Notion properties and options to add and the migration steps; don't touch Notion.
+If the plan conflicts with the code, stop and tell me.
+```
+
+You do by hand: Add properties, run the migration (Market = serbia, Language = sr), then `sync --rescore --limit 10`
+
+### Step 7
+
+```
+Read CLAUDE.md and docs/plan/v2/*. We're on step 7 of strategy_gaps.md §E. Follow the rules in the kickoff prompt in docs/plan/v2/CLAUDE_CODE_HANDOFF.md §2.
+Drafting rule sets `rules_sr.py` / `rules_en.py`, examples per language from `config/outreach.{language}.md`, niche-neutral question rule, `outreach.first_offer` (default question), LinkedIn outputs, banned-terms update. See script_edits.md §10.1.
+If the plan conflicts with the code, stop and tell me.
+```
+
+You do by hand: Move the approved outreach files into `config/`; run `draft-notion --dry-run --limit 1` on one sr and one en page
+
+### Step 8
+
+```
+Read CLAUDE.md and docs/plan/v2/*. We're on step 8 of strategy_gaps.md §E. Follow the rules in the kickoff prompt in docs/plan/v2/CLAUDE_CODE_HANDOFF.md §2.
+`audit-report` command from the audit core: one-page audit per lead, language from the market.
+If the plan conflicts with the code, stop and tell me.
+```
+
+You do by hand: Read 2–3 reports
+
+### Step 9
+
+```
+Read CLAUDE.md and docs/plan/v2/*. We're on step 9 of strategy_gaps.md §E. Follow the rules in the kickoff prompt in docs/plan/v2/CLAUDE_CODE_HANDOFF.md §2.
+Automatic drafting per script_edits.md §11: draft step after sync in run/batch/go (this run's pages, tier ≥ B), no `input()` in run/batch, `go --yes`, failures never stop the run, credit-out leaves pages for the next run, `profile_facts` in enrich and the drafter, drop the D2 cap. Replace the old draft-before-review paths.
+If the plan conflicts with the code, stop and tell me.
+```
+
+You do by hand: One `run --limit 5` end to end, then read the drafts and Draft Notes
+
+### Step 10
+
+```
+Read CLAUDE.md and docs/plan/v2/*. We're on step 10 of strategy_gaps.md §E. Follow the rules in the kickoff prompt in docs/plan/v2/CLAUDE_CODE_HANDOFF.md §2.
+`score-report`: send-rate / skip-rate by tier / market / niche, Skip Reason counts, the A/B rule from the docs with 'not enough data' on small samples.
+If the plan conflicts with the code, stop and tell me.
+```
+
+You do by hand: After ~50 drafts
+
+### Step 11: go-live gate
+
+Not code: no sends until website P0 (demo, sample audit, About, review pages) is live.
 
 ## 4. Tips
 
-- Keep each step in its own session; paste the step prompt fresh. Long sessions drift.
-- If Claude Code finds the plan wrong against the code, it should say so and propose a fix, not silently deviate. Add: "If the plan conflicts with the code, stop and tell me."
+- Keep each step in its own session; paste the step block fresh. Long sessions drift. The kickoff prompt (§2) is only needed once; each step block points back to its rules.
 - After step 5, ask it to update `docs/SCORING.md` and the changelog with the D2 reason.
 - Cleanup (remove `total_score` etc., schema 11) one version after step 6 is stable.
