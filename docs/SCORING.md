@@ -1,270 +1,330 @@
-# AGENCY lead scoring — design notes
+# AGENCY lead scoring — design notes (scorer v4)
 
 ## 1. Overview
 
 `pipeline/scoring/scorer.py` implements
-`score(lead, weights, qualification) -> Lead`, a pure function with no I/O
-(per ARCHITECTURE.md §6/§13). This document is both the "why" behind the
-model — what the qualification filters are gating, what each sub-score is
-trying to measure, why they're kept separate, how the edge cases in real
-data are handled — and an implementation reference, section by section:
+`score(lead, scoring, market, niche, year) -> Lead`, a pure function with no
+I/O (ARCHITECTURE.md §6/§13): the `scoring:` block from `config.yaml`, the
+run's `Market` and `Niche` (both from the run's `manifest.json`) and the
+current year all arrive as arguments. It returns a new `Lead` and never
+mutates the input.
+
+This document is the "why" behind the model and a reference to the code. The
+target design is `docs/plan/v2/PIPELINE.md` §3; where the two differ, this
+file describes what the code does.
+
+Scoring works in four levels. Only L0 and L1 are in the scorer:
+
+| Level | Who / when | Question | Output |
+| --- | --- | --- | --- |
+| **L0 Gates** | `score`, stage 3 | Can we contact them at all? | `qualified`, `disqualify_reason`, `status: disqualified` |
+| **L1 Auto score** | `score`, stage 3 | In what order should I review them? | `niche_match`, `need_score`, `viability_score`, `reach_score` → `priority` → `tier`, `score_reasons`, `score_confidence` |
+| L2 Send decision | you, in Notion | Is this draft worth sending? | sent / edited / `Verdict = Skip` + `Skip Reason` |
+| L3 Outcome | follow-up stage (planned) | Did it work? | `Outcome` |
+
+L2 is the real decision; L3 is the ground truth L1 is tuned against (§11).
 
 | Section | Concept | Function in `scorer.py` |
 | --- | --- | --- |
-| §2 | Qualification gate | `_qualifies()` |
-| §4 | `reachability_score` | `_reachability_score()` |
-| §5.1 | Which audit case a lead falls into | `_audit_case()` |
-| §5.2 | `opportunity_score` (audited case) | `_opportunity_score()` |
-| §6 | `total_score` multiplier | `_reachability_multiplier()` |
-| §7 | `Audit Notes` | `_build_audit_notes()` |
-| §8 | `lead_type` | shares `_audit_case()` with §5.1 |
+| §2 | L0 gates | `gate()` |
+| §3 | Niche-match check | `niche_match()` |
+| §4 | Which Need branch / `lead_type` | `audit_case()`, `_CASES` |
+| §5 | Need | `need()`, `_new_build_need()`, `_redesign_need()` |
+| §6 | Viability | `viability()` |
+| §7 | Reach | `reach()` + `pipeline/channels.best_channel()` |
+| §8 | Priority, tiers, confidence | `score()`, `tier_for()`, `_cap()` |
+| §9 | `score_reasons` and `audit_notes` | `score()`, `_build_audit_notes()` |
 
-How to retune the formula once real reply data exists is covered in
-`docs/ROADMAP.md`'s Phase 3/6 tuning items.
+All weights and thresholds live in `config.yaml › scoring` (`version: 4`).
+Per-market values live in `config.yaml › markets` (§10).
 
-## 2. Qualification filters — a gate, not a score
+## 2. L0 gates — filters, not scores
 
-Before anything is scored, a lead has to pass one hard filter
-(resolved by `_qualifies()` in `scorer.py`):
+A lead is disqualified by the **first** gate that matches, in this order:
 
-- **Country** — `lead.country` (stamped at collection time from the run's
-  market) must equal the run's market country. `cmd_score` reads the market
-  block from the run's `manifest.json` and passes `{"target_countries":
-  [market.country]}` to the scorer; `score --market <id>` is only for runs
-  collected before markets existed. (`qualification:` in `config.yaml` was
-  removed in v2 step 1.)
+| Gate | Reason string | Source |
+| --- | --- | --- |
+| `lead.country` ≠ the market's country | `country: X is not Serbia` | collect (market) |
+| `business_status` contains "closed" | `closed: temporarily` / `closed: permanently` | Maps |
+| `listing_count ≥ gates.chain_listing_min` (3) | `chain: 4 listings` | collect |
+| domain in `gates.exclude_domains` | `chain: excluded domain x.rs` | config |
+| `maps_category` in `gates.exclude_categories` | `excluded category: Pharmacy` | config |
+| company name matches one of the market's `exclude_name_patterns` (whole words, case-insensitive) | `excluded name: dom zdravlja` | market |
+| `gates.niche_mismatch: true` and the niche match is `mismatch` (§3) | `niche mismatch: Pharmacy store` | niche |
+| no first-touch channel (`best_channel` is empty, §7) | `no usable contact channel` | channels |
 
-If a lead fails the filter, `reachability_score`, `opportunity_score`,
-and `total_score` are all left `None`, `qualified` is `False`, and
-`Audit Notes` states the country failure instead of a score breakdown.
-Nothing downstream computes a score for a lead outside scope.
+A disqualified lead gets `qualified=False`, `status: disqualified`, its
+`disqualify_reason`, `niche_match`, `lead_type` and `audit_notes`, and
+`score_reasons = ["disqualified: <reason>"]`. Need, Viability, Reach,
+priority, tier and confidence stay `None`. It stays in `scored.jsonl` and
+`scored.csv` but `sync` never pushes it, and `score` writes its dedup key to
+`data/rejected_domains.json` (with reason and run id) so `collect` skips it
+next time (`--include-seen` overrides). If a later re-score lets the lead
+through, its key comes off that file again.
 
-There is deliberately no industry filter: the industries collected are
-the run's niche, and `lead.industry` holds the niche name (this is what syncs to Notion's `Industry` column).
+The manifest counts disqualifications by reason kind (`country`, `closed`,
+`chain`, …). A kind that keeps showing up as a `Skip Reason` at send time
+instead is a missing gate (§11).
 
-**Why filters and not weights:** it's too early to know which of these
-verticals actually converts — weighting them against each other now would
-be guessing at data that doesn't exist yet. Once there's real close-rate
-data across verticals, industry weighting can come back as a deliberate,
-evidence-based scoring dimension, not folded back into a hard gate.
-Deliberately **not** reintroduced here: industry weighting, business-size
-signals, or multi-location logic — all removed on purpose pending that data
-(see the v3 changelog in §10).
+## 3. Niche-match check — instead of industry Fit
 
-## 3. The core split: reachability vs. opportunity
+**There are no default niches** (strategy_gaps.md K1). Every run's niche is
+created in `go` or spelled out in full (`--niche-file`, batch `niche:`), and
+every lead in the run belongs to it. Ranking niches against each other inside
+one run makes no sense, so **industry Fit is gone from the formula**. In its
+place is a check that the lead really is in the niche:
 
-Two different questions, kept as separate sub-scores so a high or low total
-is always explainable, rather than averaged into one number that looks the
-same whether a lead can't be reached or just has a good website:
+| Situation | `niche_match` | Effect |
+| --- | --- | --- |
+| `maps_category` is in the niche's `accepted_categories` (case-insensitive) | `match` | reason line "niche match" |
+| niche has no `accepted_categories`, lead has no `maps_category` (OSM, manual), or the run has no niche (old run) | `unknown` | none |
+| `maps_category` is not in the list | `mismatch` | L0 gate if `gates.niche_mismatch: true`; otherwise reason line "niche mismatch: X" and tier capped at C |
 
-| Score               | Question it answers                                          | What moves it                                                       |
-| -------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `reachability_score` | Can we actually contact this lead right now, today?           | Which contact channels are present (email, phone, social)              |
-| `opportunity_score`  | How much upside is there in pitching a redesign or new build? | How bad (not how good) their web presence is — runs in the "pain" direction |
-| `lead_type`          | Which pitch applies — new build, redesign, or unclear?         | Same branch as `opportunity_score`, see §8; doesn't feed `total_score` directly |
-| `total_score`        | Overall outreach priority among qualified leads                | `opportunity_score × ` a multiplier derived from `reachability_score`  |
+Which niches work is learned across runs in `score-report` (step 10: send
+rate and outcomes by niche), not in the weights.
 
-A dentist with a fast, accessible, mobile-friendly WordPress site and no
-listed phone number scores low on both — nothing to sell, and no way to
-reach them even if there were. A dentist with no website at all but three
-phone numbers and an Instagram scores high on both — reachable, and in
-obvious need of a web presence.
+## 4. Which Need branch applies — `audit_case()` and `lead_type`
 
-## 4. `reachability_score` — can we contact them, today
+One helper decides the branch, so `lead_type`, Need and `audit_notes` can
+never disagree:
 
-```
-has_email  = Primary Email is non-empty   -> +50
-has_phone  = Phone is non-empty            -> +40
-has_social = Social Links is non-empty     -> +10
+| `audit_case` | When | `lead_type` | Need confidence |
+| --- | --- | --- | --- |
+| `no_website` | no domain, or the "website" is a social page / non-site link (`dedupe.is_social_domain`: Instagram, Facebook, TikTok, YouTube, Linktree, wa.me, Maps links…) | `new_build` | high |
+| `dead_site` | probe failed with `dns` / `refused` — nothing is there | `new_build` | high |
+| `cert_error` | probe failed with `ssl` — the site exists, browsers show a warning | `redesign` | high |
+| `probe_failed` | probe failed with `timeout` / `http_error` / other — may be temporary | `unclear` | **low** |
+| `audited` | site reachable and Lighthouse returned data | `redesign` | high |
+| `no_audit` | site reachable but Lighthouse failed, or an old run with no probe signals | `unclear` | **low** |
 
-reachability_score = has_email*50 + has_phone*40 + has_social*10
-```
+`unclear` no longer drops out of scoring (it did in v3): it gets a
+provisional score from what the probe saw, is flagged "needs manual look", and
+its tier is capped at B (§8). A lead whose enrichment never reached it
+(status still `collected`) is passed through unscored by `cmd_score` rather
+than scored as "site didn't load".
 
-Deliberately does **not** count having a `domain`/website as a contact
-channel — a website isn't itself a way to reach someone, only a signal that
-one might exist somewhere on it. (This is a real difference from the
-enrich-stage `_has_no_contact_info` filter in `runner.py`, which *does*
-treat `domain` as a reason to keep a lead — that filter runs earlier, for a
-different purpose: dropping leads with literally nothing to act on at all.
-A lead with only a domain and no email/phone/social passes that filter but
-still gets `reachability_score == 0` here.)
+## 5. Need — how much their web presence would visibly improve (0–100)
 
-If `reachability_score == 0`, the lead is never marked `qualified` — there's
-no channel to act on yet — but it is still scored (see §6 on the total-score
-multiplier at `reachability_score == 0`) rather than being silently dropped;
-`Audit Notes` flags it as needing further enrichment.
+Need scores what an owner can see on their own phone, not Lighthouse numbers
+(which they never see and a message can't mention). A modern site lands near
+0, which is correct. Capped at 100.
 
-## 5. `opportunity_score` — opportunity, not quality
-
-This is the inverse of a normal website-quality score. A high
-`opportunity_score` means *more* opportunity to sell into, not a healthier
-site. Computed differently depending on `lead_type`:
-
-### 5.1 The three cases
-
-| Case                                                 | `lead_type`  | `opportunity_score`                                      |
-| ------------------------------------------------------ | ------------ | ----------------------------------------------------------- |
-| **No domain at all**                                  | `new_build`  | Fixed policy value, `opportunity.no_website_score` (default 90) |
-| **Domain exists, unreachable during audit**            | `unclear`   | `None` — left blank, `Audit Notes` flags "needs classification" |
-| **Domain exists, audited**                             | `redesign`   | Computed from Lighthouse + flags, capped at `audited_score_cap` (default 85) |
-
-An `unclear` lead genuinely doesn't tell you which pitch applies — the
-domain could be a live business with a site that's temporarily down
-(a redesign pitch) or an abandoned domain (arguably no pitch yet). Rather
-than default to either the new-build or a discounted fixed value (as an
-earlier version of this model did), it's left blank on purpose — a `None`
-here means "needs a manual look," not "zero opportunity."
-
-`no_website_score` (90) is a fixed policy value, not a placeholder: a
-business with zero web presence is assumed to have high need until evidence
-says otherwise for a given vertical.
-
-### 5.2 The computed case (redesign leads)
-
-Unchanged from the previous scoring model — only the field name changed
-(`website_audit_score` → `opportunity_score`):
+**No website / dead site** (`scoring.need.new_build`, `dead_site_base`):
 
 ```
-weighted_quality = Σ (lighthouse[metric] × lighthouse_weight[metric])
-opportunity       = 100 − weighted_quality
-opportunity      += no_https_bonus            if https is False
-opportunity      += not_mobile_friendly_bonus if mobile_friendly is False
-opportunity       = min(opportunity, audited_score_cap)
+base  = new_build.base (60)     no_website
+      = dead_site_base (50)     dead_site, cert_error, probe_failed
+need  = base
+      + new_build.has_social (25)     if they have Instagram or Facebook
+      + new_build.reviews_20plus (15) if review_count ≥ 20
 ```
 
-If Lighthouse returned only some categories, the weights are renormalized
-over the categories present — a missing category reads as "no signal," not
-fake opportunity. If *none* of the weighted categories are present, there's
-nothing to compute from and the lead falls into the `unclear` case above.
-The result is clamped to `[0, 100]` so the flat bonuses can't push it past
-the scale.
+The social add-on means "already online, just missing a site". First reason
+line: "no website" / "domain dead (dns)" / "certificate error, browsers show a
+warning" / "site didn't load (timeout)".
 
-**The cap:** without it, a terrible audited site (very low Lighthouse
-quality plus both bonuses) can compute to 100 — beating `no_website_score`'s
-fixed 90. That's backwards: a lead with no website at all is the strongest
-new-build signal in the batch, and a bad audited site is still a warmer,
-easier sell than a blank slate — there's already an owner who plausibly
-knows they need a working site, no domain/DNS setup required, and a live
-baseline to point at. `audited_score_cap` (default 85) enforces that by
-construction: it must always stay below `no_website_score`, and both
-`config.py`'s startup validation and an assertion in `scorer.py` enforce
-that ordering.
+**Has a site** (`scoring.need.redesign`), one item per problem found:
 
-Default Lighthouse weights (unchanged from the previous model):
+| Item | Points | Hit when | Reason line |
+| --- | --- | --- | --- |
+| `not_mobile` | 30 | Lighthouse `mobile_friendly` is False; without Lighthouse, `has_viewport_meta` is False | not mobile-friendly |
+| `no_https` | 20 | `https` is False | no HTTPS |
+| `outdated` | 20 | `copyright_year ≤ year − outdated_years` (4), else `cms` in `legacy_cms` ([Joomla]) | outdated (© 2019) / outdated builder (Joomla) |
+| `no_booking_or_call` | 10 | no booking widget, no `tel:` link and no Viber/WhatsApp link | no booking, tap-to-call or messaging link |
+| `perf_below_50` | 15 | Lighthouse performance < 50 | slow site |
+| `seo_below_70` | 5 | Lighthouse SEO < 70 | weak SEO basics |
 
-| Metric           | Weight | Why                                                                       |
-| ----------------- | ------ | ---------------------------------------------------------------------------- |
-| `performance`    | 0.40   | Most visible, most correlated with "this site feels broken" to a visitor    |
-| `best_practices` | 0.25   | Catches structural/security issues perf alone misses                        |
-| `accessibility`  | 0.20   | Real gap, but rarely the reason a lead replies to cold outreach             |
-| `seo`            | 0.15   | Weighted lowest — most sites in this dataset already score 75–100 here |
+`audited` uses all six. `no_audit` (Lighthouse failed) leaves out the two
+Lighthouse items, so it maxes at 80; for an old run without probe signals it
+adds "no audit signals (old run: enrich --only audit --rescan)". No hit at
+all gives the reason "site looks fine".
 
-`https is False` and `mobile_friendly is False` add flat bonuses on top,
-since Lighthouse doesn't always penalize these cleanly and they're easy,
-concrete talking points in a pitch.
+**Niche overrides** (S15): a niche's optional `need_overrides` replaces the
+points of any `redesign` item for that niche, e.g. accommodation
+`{no_booking_or_call: 0}` because a booking widget is the whole job there. An
+item set to 0 is skipped and gets no reason line. Keys are validated against
+`scorer.NEED_ITEMS`.
 
-## 6. `total_score`
+## 6. Viability — active and able to pay (0–100)
+
+With no rating and no review count (OSM, manual): `viability = no_data` (50)
+and the reason "no rating data (viability 50)". This is **not** low
+confidence and never caps the tier. Otherwise:
 
 ```
-multiplier =
-    1.0  if reachability_score == 100
-    0.95 if reachability_score == 90
-    0.7  if 40 <= reachability_score <= 89
-    0.5  if 1 <= reachability_score <= 39
-    0.2  if reachability_score == 0
-
-total_score = opportunity_score * multiplier
+volume  = min(volume_max (60),
+              volume_at_strong (40) · log10(review_count + 1) / log10(review_strong + 1))
+quality = rating ≥ 4.5 → 40 · 4.0–4.4 → 30 · 3.5–3.9 → 15 · below → 0   (rating_bands)
+viability = volume + quality  (+ runs_ads (10) if Meta Pixel / Google Ads / GTM found), capped at 100
 ```
 
-`total_score` is `None` whenever `opportunity_score` is `None` (the
-`unclear` lead-type case) — there's nothing to multiply. The multiplier is
-a fixed policy table in `scorer.py`, not a tunable config weight — unlike
-the point values in `reachability_score`, these bucket boundaries are a
-deliberate business rule, not something to retune per batch.
+`review_strong` comes from the market (Serbia 50, UAE 100), so the market's
+"strong" count always scores 40 on volume. Serbia: 10 reviews → 24, 50 → 40,
+300 → 58. UAE: 10 → 21, 100 → 40, 1000 → 60. Reasons: "4.7★/212 reviews",
+"runs ads".
 
-Note the `reachability_score == 0` row still produces a (small) total
-rather than `None` — the lead isn't marked `qualified` (see §2), but if that
-gate is ever bypassed downstream, a `0.2` multiplier keeps it from ranking
-artificially high rather than crashing on a missing value.
+Why it exists: v3 had no such signal. A 4.8★ practice with 300 reviews and a
+bad site should beat a dormant one with 2 reviews and the same bad site.
 
-`scoring_version` is stamped on every scored `Lead` from `weights["version"]`
-(ARCHITECTURE.md §5). Bump it whenever the weights *or formula shape*
-change, not just the numbers, so old and new `total_score`s are never
-silently compared as if they meant the same thing.
+## 7. Reach — the best single first-touch channel (0–100)
 
-## 7. `Audit Notes` — every score explainable
+`pipeline/channels.best_channel(lead, market)` picks the first channel the
+lead has, in the **market's** channel order, skipping the market's
+`first_touch_excluded` channels and placeholder phones/emails. Drafting uses
+the same function, so the score and the suggested channel can't drift apart.
 
-Auto-generated on every scoring run by `_build_audit_notes()` in
-`scorer.py`, overwriting whatever `enrichers/audit.py` wrote at enrich time.
-The note is a plain-language fact sheet and the input for drafting outreach.
-A qualified lead reads, in order: industry and country; the web-presence
-sentence; which contact channels exist and which are missing; and how the
-priority score was derived.
+```
+reach = reach_by_rank[rank of best channel in market.channels]   # [100, 90, 80, 60, 40]
+```
 
-- **No website**: `"Qualified: dentist, Serbia. No website: pitch a new build.
-  Can be reached by email and phone. No social media found. Priority score
-  85.5/100: opportunity 90 (no website) x 0.95 for how reachable the contact
-  details are (90/100)."`
-- **Rating**: when a Maps listing supplied it, a sentence follows the website
-  one: `"Google Maps: 4.9 stars from 127 reviews."` Omitted otherwise.
-- **Audited site**: `"Has a website (example.rs): pitch a redesign.
-  Lighthouse: performance 42/100, accessibility 88/100, ...; no HTTPS; not
-  mobile friendly; built on WordPress."` replaces the no-website sentence.
-- **Domain that couldn't be audited**: says so and asks for a manual look; the
-  priority score is not computed.
-- **Zero reachability**: starts `"Not qualified (no email, phone or social media
-  found; needs further enrichment): ..."`.
-- **Fails the country filter**: `"Not qualified: country '{country}' not in
-  scope."` — no breakdown, since none was computed.
+| Market | 100 | 90 | 80 | 60 | 40 |
+| --- | --- | --- | --- | --- | --- |
+| Serbia | Instagram | Facebook | Viber/Whatsapp (mobile `+3816…`) | Email | Call (landline) |
+| UAE | Instagram | Facebook | LinkedIn | Email | Call |
 
-## 8. `lead_type` — new-build vs. redesign are different pitches
+UAE WhatsApp (`+9715…`) is listed last in the market's channels and is
+excluded for first touch: it stays visible (`usable_channels`) but is never
+the best channel. Numbers without a country code are normalized with the
+market's dialing code before the mobile check. No channel → reach 0 → the
+L0 "no usable contact channel" gate. Reason: "best channel: Instagram".
 
-Set by `scorer.py` from the exact same branch that decides
-`opportunity_score`, via a single shared helper (`_audit_case`) so the two
-can never disagree about which case a lead falls into:
+v3 gave email 50, phone 40 and social 10, even though social is the channel
+used first.
 
-| `_audit_case` result | `opportunity_score`              | `lead_type`  | Meaning                                                      |
-| --------------------- | ---------------------------------- | ------------ | -------------------------------------------------------------- |
-| `"no_website"`        | fixed `no_website_score`          | `new_build`  | No domain at all — the pitch is building a site from scratch  |
-| `"unreachable"`       | `None`                            | `unclear`   | Domain exists but couldn't be audited — genuinely ambiguous until someone looks |
-| `"audited"`           | computed from Lighthouse + flags   | `redesign`  | Domain exists and was audited — the pitch is improving an existing site |
+## 8. Priority, tiers and confidence
 
-This stays a separate field rather than folding into `total_score` itself —
-two leads can tie on `total_score` and still need different outreach
-templates. `unclear` leads are worth a specific manual look before either
-pitch goes out — sending a "let's redesign your site" pitch to a business
-whose domain is actually dead would land badly.
+```
+priority = (weights.need (0.6) · need + weights.viability (0.4) · viability) × (0.5 + reach/200)
+           reach 100 → ×1.0 · 90 → ×0.95 · 80 → ×0.9 · 60 → ×0.8 · 40 → ×0.7
 
-## 9. Testing
+tier     = A ≥ 65 · B ≥ 45 · C ≥ 25 · D below      (scoring.tiers)
+```
 
-Per ARCHITECTURE.md §13, `score()` is a pure function — test with
-hand-built `Lead` objects, no mocking (see `tests/test_scoring.py`):
+Then the caps, which only ever lower a tier:
 
-- Industry/country filter failures leave every score field `None` and
-  `qualified=False`, and never raise on an unrecognized raw industry string
-- A qualifying industry synonym (e.g. `dentist`) folds `lead.industry` to
-  its canonical category (`clinic`)
-- Every reachability channel combination produces the documented score and
-  multiplier bucket
-- `reachability_score == 0` still produces a `total_score` (via the `0.2`
-  multiplier) but `qualified` stays `False`
-- A no-domain lead → `opportunity_score == no_website_score`
-- An `enrich_failed`/unreachable-domain lead → `opportunity_score is None`,
-  `Audit Notes` flags "needs classification"
-- A fully-audited lead with known Lighthouse numbers → hand-computed
-  `weighted_quality` matches
-- `lead_type` and `opportunity_score` always agree on which case a lead fell
-  into — both derive from the single `_audit_case()` branch
-- A terrible audited site never exceeds `audited_score_cap`, which stays
-  below `no_website_score` — both directly, and via an assertion that a
-  misconfigured `audited_score_cap >= no_website_score` raises
-- `Audit Notes` matches the documented format exactly for at least one
-  hand-computed example
-- Two leads with identical inputs except `weights["version"]` produce
-  different `scoring_version` on output, identical everything else
+- `niche_match == mismatch` (gate off) → at most **C**.
+- `score_confidence == low` (`unclear`: `probe_failed` or `no_audit`) →
+  at most **B**, plus the reason "needs manual look".
 
-## 10. Changelog
+`score_confidence` is `high` / `low`, and low **only** when Need had no audit
+data to rest on. A missing rating is a reason line, not low confidence.
 
+Worked examples (Serbia, default config, computed with `score()`):
+
+| Lead | Need | Viability | Reach | Priority | Tier |
+| --- | --- | --- | --- | --- | --- |
+| Audited site: no HTTPS, not mobile, © 2019, no booking/call, perf 30, SEO 60; 4.2★/30 reviews; mobile phone | 100 | 64.9 | 80 | (60 + 26) × 0.9 = **77.4** | A |
+| No website, on Instagram, 4.7★/212 reviews | 100 | 94.5 | 100 | **97.8** | A |
+| No website, email only, no rating data | 60 | 50 | 60 | (36 + 20) × 0.8 = **44.8** | C |
+
+The thresholds are a first guess. The manifest records `tier_counts` for each
+run: aim for A ≈ top 15–20% of a run and move `tiers` if a run is mostly A or
+has almost none. One weight set for all lead types for now; split by
+`lead_type` only if `score-report` shows one type behaving differently.
+
+## 9. `score_reasons` and `audit_notes` — two fields, two readers
+
+**`score_reasons`** (list of strings) explains the score to you: niche
+match/mismatch, then the Need reasons, then the Viability reasons, then the
+best channel, then "needs manual look" when confidence is low. Example:
+`niche match · not mobile-friendly · no HTTPS · outdated (© 2019) ·
+4.2★/30 reviews · best channel: Viber/Whatsapp`. Every number in the score
+has a line behind it. It goes to Notion as `Score Reasons` (step 6) and to
+`scored.csv`.
+
+**`audit_notes`** is the fact sheet the draft prompt reads, rebuilt on every
+scoring run by `_build_audit_notes()`: niche, location and country; the web
+presence ("No website." / domain dead / certificate warning / didn't load /
+"Has a website (x.rs): no HTTPS; not mobile friendly; copyright year 2019;
+built on WordPress; …"); contact channels found. It holds **no ratings,
+review counts, scores or Lighthouse numbers**: they must never reach a
+message, and drafting never sees `score_reasons`.
+
+## 10. Per-market values
+
+From `config.yaml › markets.<id>` (the run's market, stamped in the manifest
+at collect; `score --market` only for runs collected before markets existed):
+
+| Value | Used in | Serbia | UAE |
+| --- | --- | --- | --- |
+| `country` | country gate | Serbia | United Arab Emirates |
+| `exclude_name_patterns` | name gate | dom zdravlja, zavod, opšta bolnica, KBC, institut | (none yet) |
+| `channels` (order) | Reach rank | Instagram, Facebook, Viber/Whatsapp, Email, Call | Instagram, Facebook, LinkedIn, Email, Call, WhatsApp |
+| `first_touch_excluded` | Reach / channel gate | — | WhatsApp |
+| `mobile_prefixes`, `dial_code` | mobile channel detection | `+3816`, `+381` | `+9715`, `+971` |
+| `review_strong` | Viability volume | 50 | 100 |
+
+A new market starts with empty `exclude_name_patterns` until you add some.
+Everything else in `scoring:` (weights, Need points, rating bands, tiers) is
+shared across markets.
+
+## 11. Retuning
+
+Calibration replaces guesswork (PIPELINE.md §7; `score-report` is step 10):
+
+- **L1 vs L2** (after ~50 drafts): send/skip rate by tier, `lead_type`,
+  niche, market; `Skip Reason` counts. Healthy: skip rate rises A → C. A
+  recurring `Skip Reason` is a missing gate (e.g. "chain" → lower
+  `chain_listing_min`). If skip rate doesn't rise as tier drops, a sub-score
+  weight is wrong.
+- **L1 vs L3** (after ~30+ sends per band): reply and meeting rate by tier,
+  sub-score band, channel, niche. If most drafts get sent but replies are
+  low, the message is the problem, not the score.
+- Don't retune on fewer than ~30 leads per band. Change one thing at a time,
+  bump `scoring.version`, re-run `score`, then `sync --rescore` (step 6) so
+  existing Notion pages update.
+
+`scoring_version` is stamped on every scored lead from `scoring.version`.
+Bump it whenever a weight, threshold or the formula shape changes, so old
+and new scores are never compared as if they meant the same thing.
+
+## 12. Testing
+
+`score()` is pure — `tests/test_scoring.py` uses hand-built `Lead` objects
+and a hand-built mirror of the config, no mocks:
+
+- each L0 gate in order, including that a lead passing on re-score clears
+  `disqualify_reason`
+- niche match / unknown / mismatch, and the C cap vs the gate
+- every `audit_case` branch, its `lead_type` and confidence
+- Need points per item, the no-Lighthouse 80 max, `need_overrides`
+- Viability volume per market `review_strong`, rating bands, no-data, ads
+- Reach per market order, WhatsApp excluded in the UAE
+- priority and tier for hand-computed leads, the B cap for low confidence
+- D2: a bad redesign lead can outrank a weak new_build lead
+- `audit_notes` holds facts only (no ratings, stars, scores, Lighthouse)
+- `score()` doesn't mutate its input and leaves the v3 fields empty
+- the shipped `config.yaml` matches the test mirror
+
+## 13. Changelog
+
+- **v4** (schema v13, v2 step 5) — layered scoring replaces the single
+  `total_score`. **L0 gates** (country = the run's market, closed, chain,
+  excluded domain/category, per-market name patterns, optional niche
+  mismatch, no first-touch channel) disqualify, keep the lead in JSONL only
+  and record its key in `data/rejected_domains.json`. **L1**: Need /
+  Viability / Reach → `priority` → tier A–D, with `score_reasons` and
+  `score_confidence`; low confidence caps at B. Need scores visible problems
+  (mobile, HTTPS, outdated, booking/tap-to-call) instead of
+  `100 − Lighthouse`, and `unclear` leads get a provisional, flagged score
+  instead of none. Viability (reviews, rating, ads) is new. Reach follows the
+  market's channel order via `pipeline/channels.py` (social first) instead of
+  email 50 / phone 40 / social 10. Per-market values: channel order and
+  first-touch exclusions, mobile prefixes, `review_strong`, name patterns.
+  `audit_notes` now holds facts only; scores and ratings moved to
+  `score_reasons`. `reachability_score` / `opportunity_score` /
+  `total_score` stay in the schema for one version, always empty, then go.
+  - **Industry Fit removed.** There are no default niches (K1): each run's
+    niche is created in `go`, so every lead in a run is in the same niche and
+    weighting industries against each other means nothing. Replaced by the
+    niche-match check (§3); niche learning moves to `score-report`.
+  - **D2: "no website always outranks a bad audited site" dropped.** The v2
+    rule `audited_score_cap < no_website_score` (config key, `config.py`
+    validation and the scorer `assert`) is gone. With Instagram-only salons,
+    "no site" isn't automatically the hotter lead: a business with a live but
+    broken site, good reviews and a reachable owner can be the better
+    prospect. `new_build` and `redesign` now compete on Need, and a bad
+    redesign lead can outrank a weak new_build lead (tested).
 - **v3** — dropped `icp_fit_score` and `intent_score` entirely. Industry and
   location moved out of scoring into hard qualification filters
   (`qualification:` in `config.yaml`), run before scoring rather than
@@ -281,9 +341,10 @@ hand-built `Lead` objects, no mocking (see `tests/test_scoring.py`):
   rather than kept as a disconnected leftover feature.
 - **v2** — capped the audited-site computed score below `no_website_score`
   (`audited_score_cap`, default 85) so a bad audited site can never outrank
-  a lead with no website at all; changed the established-practice bonus to
-  require distinct channel *types* rather than a raw item count; made the
-  manual intent-research pool size explicit and configurable.
+  a lead with no website at all (reversed in v4, D2); changed the
+  established-practice bonus to require distinct channel *types* rather than
+  a raw item count; made the manual intent-research pool size explicit and
+  configurable.
 - **v1** — initial weighted scoring: `icp_fit` (contact channels + industry
   match), `website_audit` (Lighthouse + https/mobile flags, fixed scores for
   no-website/unreachable), manual `intent_score`, `lead_type`.

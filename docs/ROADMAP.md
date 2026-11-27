@@ -40,10 +40,12 @@ properly" means in practice.
   runs ads), Reach (market channel order) → priority → tier A–D, `score_reasons`, `score_confidence` (low Need
   caps at B). `audit_notes` holds facts only. D2 cap removed. Schema v13, scoring v4; the v3 score fields stay one
   version, empty. Manifest: tier mix, disqualify reasons, low-confidence count. Open: v3/v4 top-20 comparison on
-  `2026-10-20T00-08-14` after its audit rescan (`scripts/compare_scorers.py`); SCORING.md rewrite is step 5b.
+  `2026-10-20T00-08-14` after its audit rescan (`scripts/compare_scorers.py`).
+- Step 5b done: docs/SCORING.md rewritten for scorer v4 (gates, niche match, Need / Viability / Reach, priority,
+  tiers, reasons, confidence, per-market values); v4 changelog records D2 dropped and industry Fit removed.
 - Website links that aren't the lead's own site (TikTok, YouTube, X, Threads, Linktree, wa.me, Viber, Google Maps /
   g.page / goo.gl) now count as no website (`dedupe.NON_SITE_HOSTS`): kept as a social link, never audited.
-- Next: step 5b (SCORING.md), then step 6 (Notion: Tier, Priority, Score Reasons, `--min-tier`, `--rescore`).
+- Next: step 6 (Notion: Tier, Priority, Score Reasons, `--min-tier`, `--rescore`).
 
 **Done**
 - Phases 1-4: collect (OSM, Google Maps, manual CSV), enrich (contacts + Lighthouse), score, Notion sync with
@@ -185,9 +187,9 @@ thing in the whole project to unit test.
       reachability-derived multiplier` (schema v6, `scoring_version` 3; see
       docs/SCORING.md for the full model)
 - [ ] After the first real batch, tune the
-      `scoring.opportunity`/`scoring.reachability` weights in `config.yaml`
+      `scoring` v4 weights / tiers in `config.yaml`
       against which leads actually replied — don't guess the weights twice
-      (tuning procedure written up ahead of time in docs/SCORING.md §7)
+      (tuning procedure in docs/SCORING.md §11)
 
 ## Phase 4 — Notion sync
 
