@@ -18,8 +18,10 @@ from urllib.robotparser import RobotFileParser
 import requests
 from bs4 import BeautifulSoup
 
+from pipeline.audit import ProbeError, SiteClient, html_text
 from pipeline.dedupe import SOCIAL_HOSTS, normalize_domain, phone_key
 from pipeline.enrichers.base import register
+from pipeline.enrichers.profile import build_profile_facts
 from pipeline.schema import Lead
 
 _USER_AGENT = "agency-lead-pipeline/0.1 (single-operator lead tool)"
@@ -178,16 +180,23 @@ class ContactEnricher:
     def __init__(self, config: dict):
         enrich = config.get("enrich", {})
         self.timeout_s: int = enrich["http_timeout_s"]
+        # shared with the audit in cmd_enrich: host spacing, 429 retry, one homepage fetch
+        self.site = SiteClient.from_config(config)
         self._robots: dict[str, RobotFileParser | None] = {}
 
     def enrich(self, lead: Lead) -> Lead:
         if not lead.domain:
-            return lead  # no website is data, not an error
+            # no website is data, not an error; the Maps fields may still give facts
+            facts = lead.profile_facts or build_profile_facts(lead)
+            return replace(lead, profile_facts=facts) if facts != lead.profile_facts else lead
 
         try:
             page_url, html = self._fetch_homepage(lead.domain)
         except RobotsDisallowedError as e:
-            return replace(lead, errors=[*lead.errors, f"contact: {e}"])
+            return replace(
+                lead, errors=[*lead.errors, f"contact: {e}"],
+                profile_facts=lead.profile_facts or build_profile_facts(lead),
+            )
 
         pages = [html]
         errors = list(lead.errors)
@@ -216,30 +225,33 @@ class ContactEnricher:
             contact_phones=_merge_unique(lead.contact_phones, phones, phone_key),
             social_links={**socials, **lead.social_links},
             site_text=lead.site_text or extract_site_text(html),
+            profile_facts=lead.profile_facts or build_profile_facts(lead, html),
             errors=errors,
         )
 
     def _fetch_homepage(self, domain: str) -> tuple[str, str]:
-        last_error: Exception | None = None
-        for scheme in ("https", "http"):
-            try:
-                return self._fetch(f"{scheme}://{domain}/")
-            except RobotsDisallowedError:
-                raise
-            except requests.RequestException as e:
-                last_error = e
-        raise RuntimeError(f"homepage unreachable: {last_error}")
+        """The audit probe's homepage (SiteClient.probe, cached): one GET for contact
+        and the audit together. robots.txt is checked first, and again for the final
+        URL when the probe landed on another host or scheme."""
+        self._check_robots(f"https://{domain}/")
+        try:
+            url, html, _ = self.site.probe(domain)
+        except ProbeError as e:
+            raise RuntimeError(f"homepage unreachable: {e.detail}") from None
+        self._check_robots(url)
+        return url, html
 
     def _fetch(self, url: str) -> tuple[str, str]:
         """robots.txt-checked GET; returns (final URL after redirects, HTML)."""
+        self._check_robots(url)
+        response = self.site.get(url)
+        response.raise_for_status()
+        return str(response.url), html_text(response)
+
+    def _check_robots(self, url: str) -> None:
         robots = self._robots_for(url)
         if robots is not None and not robots.can_fetch(_USER_AGENT, url):
             raise RobotsDisallowedError(f"robots.txt disallows {url}")
-        response = requests.get(
-            url, headers={"User-Agent": _USER_AGENT}, timeout=self.timeout_s
-        )
-        response.raise_for_status()
-        return str(response.url), response.text
 
     def _robots_for(self, url: str) -> RobotFileParser | None:
         # robots.txt lives at the host root — not at a dedup key, which keeps
@@ -249,11 +261,7 @@ class ContactEnricher:
         if base not in self._robots:
             parser: RobotFileParser | None = RobotFileParser()
             try:
-                response = requests.get(
-                    f"{base}/robots.txt",
-                    headers={"User-Agent": _USER_AGENT},
-                    timeout=self.timeout_s,
-                )
+                response = self.site.get(f"{base}/robots.txt")
                 if response.status_code >= 400:
                     parser = None  # no robots.txt -> everything is allowed
                 else:

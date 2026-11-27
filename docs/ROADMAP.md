@@ -78,13 +78,29 @@ properly" means in practice.
   skipped. Stored audit by default with its date (warning past 14 days), `--rescan` via the audit core. A
   hand-edited .md is kept (placeholder for a manual finding), `--force` rebuilds. GBP completeness (S14) left out:
   no data source. Open: you read 2–3 reports.
-- Next: step 9 (automatic drafting).
+- Step 9 done (branch `v2-step9-auto-draft`): automatic drafting (script_edits.md §11). `run` / `batch` / `go` Lead
+  Gen draft after sync: this run's pages at Tier ≥ `outreach.auto_draft_min_tier` (B), from the run's JSONL lead
+  joined to its page via the sync cache, written with `update_page`. No `input()` in run/batch, `go --yes` skips the
+  Start? confirm. A message that fails validation → Status `Draft failed` + reason in `Draft Notes`; a CLI/Notion
+  error → `Draft Notes`, page stays eligible; out of credits → rest undrafted, `run` exits 3, `batch` syncs later
+  entries without drafting (no pause / resume state). `draft-notion` writes by default (`outreach.auto_draft`,
+  `--dry-run`) and drafts run pages from their latest JSONL row (profile_facts, niche question). Schema v14:
+  `profile_facts` (built in enrich by `enrichers/profile.py` from the homepage HTML + Maps fields; generic headings
+  dropped, ≤ 5 facts of ~80 chars) and `maps_description` (gosom `descriptions`). Praise order SM Audit →
+  profile_facts → plain line ("no concrete detail found"). Removed: `draft` command, `run --draft`, `go` "Both",
+  batch `draft:` / `no_draft:`, `scripts/backfill_drafts.py`. D2 was already dropped in step 5. Not used yet: OSM
+  tags and a Maps photo count (`images` was empty in the real CSV). Open: you run `run --limit 5` end to end, then
+  read the drafts and Draft Notes.
+  Follow-up after the first real run (Šabac): HTML decoded by the page's own charset (`audit.html_text`); one
+  shared `audit.SiteClient` per enrich run (contact reuses the probe's homepage, `enrich.same_domain_delay_s` 1.5 s
+  between requests to one site, a 429 waits Retry-After ≤ 10 s and retries once) after MIS Dental answered 429.
+- Next: step 10 (`score-report`). Cleanup of the v3 score fields is now schema 15.
 
 **Done**
 - Phases 1-4: collect (OSM, Google Maps, manual CSV), enrich (contacts + Lighthouse), score, Notion sync with
   a local dedupe cache. Social Links are clickable links in Notion.
-- Draft stage (`python -m pipeline.runner draft`): suggested channel plus one Serbian first message per
-  qualified lead via the `claude` CLI, written to `Suggested Channel` / `Draft Message` with `Status = Queued`.
+- Draft stage (now automatic after sync, v2 step 9; the `draft` command is gone): suggested channel plus one
+  first message per qualified lead via the `claude` CLI, written to `Suggested Channel` / `Draft Message` with `Status = Queued`.
   Replaces the manual `draft-outreach` skill for queue / channel / first message. See docs/OUTREACH.md.
 - Draft rules rewritten to the ONIX outreach instructions: praise only from your note, no ratings or
   "no site" remarks, question by business type, friendly-warning exception (docs/OUTREACH.md).
@@ -124,7 +140,8 @@ properly" means in practice.
 - Separate `Instagram` / `Facebook` URL columns in Notion for one-click DMs.
 - Industry cleanup in Notion: drop unused options, decide on merging `beauty` and `hairdresser` (since v2 the
   `Industry` value is the niche name created in `go`).
-- Make `sync` update existing pages for cached leads, so `scripts/backfill_drafts.py` is not needed.
+- ~~Make `sync` update existing pages for cached leads, so `scripts/backfill_drafts.py` is not needed.~~ Done
+  differently in v2 step 9: drafts are written to existing pages with `update_page`; the script is deleted.
 - Parallel drafting (small thread pool) and an API-key fallback if volume outgrows the Claude plan limits.
 - Trim the Notion default view (about 34 columns shown) to the 10 used daily.
 - Fill `Contact Name` only in a later stage, once a lead replies (intentionally empty now).

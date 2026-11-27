@@ -101,6 +101,7 @@ def parse_results_csv(path: str | Path, categories: set[str]) -> list[Lead]:
             # scoring decides what counts as closed or off-niche
             maps_category = (row.get("category") or "").strip() or None
             business_status = (row.get("status") or "").strip() or None
+            maps_description = (row.get("descriptions") or "").strip() or None
             leads.append(
                 Lead(
                     company=company,
@@ -110,6 +111,7 @@ def parse_results_csv(path: str | Path, categories: set[str]) -> list[Lead]:
                     industry=industry,
                     maps_category=maps_category,
                     business_status=business_status,
+                    maps_description=maps_description,
                     address=(row.get("address") or "").strip(),
                     rating=_parse_rating(row.get("review_rating")),
                     review_count=_parse_review_count(row.get("review_count")),

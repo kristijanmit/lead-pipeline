@@ -184,6 +184,24 @@ def test_rescan_refreshes_audit_and_keeps_contact_data(tmp_path, monkeypatch, ca
     assert "run `score --run test-run` again" in capsys.readouterr().out
 
 
+def test_rescan_replaces_old_audit_errors_keeps_others(tmp_path, monkeypatch):
+    from pipeline.audit import AuditResult
+
+    old = replace(_old("MIS", "mis.rs"), errors=[
+        "contact: contact page fetch failed: 429 Client Error",
+        "audit: site unreachable (http_error): https: 429 Client Error",
+    ])
+    run_dir = _rescan_run(tmp_path, monkeypatch, [old, replace(_old("Down", "down.rs"), errors=["audit: lighthouse timed out"])])
+    _fake_audit(monkeypatch, {
+        "mis.rs": AuditResult(site_reachable=True, https=True, lighthouse={"performance": 80}),
+        "down.rs": AuditResult(site_reachable=False, probe_error="dns", probe_detail="Failed to resolve"),
+    })
+    assert main(["enrich", "--run", "test-run", "--only", "audit", "--rescan"]) == 0
+    by = {l.company: l for l in read_jsonl(run_dir / "enriched.jsonl")}
+    assert by["MIS"].errors == ["contact: contact page fetch failed: 429 Client Error"]  # 429 line gone
+    assert by["Down"].errors == ["audit: site unreachable (dns): Failed to resolve"]  # replaced, not appended
+
+
 def test_rescan_respects_limit(tmp_path, monkeypatch):
     from pipeline.audit import AuditResult
 

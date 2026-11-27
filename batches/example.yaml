@@ -1,7 +1,7 @@
 # python -m pipeline.runner batch --file batches/example.yaml [--dry-run] [--pause-s 30]
 # Entry keys mirror `run`: source (required), market (required), niche (required), location,
-# input, limit, sink, include_seen, bbox, grid. draft: true drafts before sync;
-# no_draft: true stops after score (sync later).
+# input, limit, sink, include_seen, bbox, grid. Every entry drafts after sync
+# (this run's pages, Tier >= outreach.auto_draft_min_tier), like `run`.
 # market: a preset id from config.yaml `markets:` or a full block with an `id`.
 # niche: always spelled out in full — there are no default niches. name, search_terms (Maps)
 # and phrase (plural, in the market language) are required; osm_tags is required for

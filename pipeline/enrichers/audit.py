@@ -14,6 +14,7 @@ from datetime import datetime
 from pipeline.audit import (  # re-exported: tests and older imports use these names
     CATEGORIES,
     AuditResult,
+    SiteClient,
     audit_site,
     detect_cms,
     parse_lighthouse_report,
@@ -66,7 +67,8 @@ def apply_audit(lead: Lead, result: AuditResult, keep_lighthouse: bool = False) 
     signals = result.signals
     lighthouse_failed = result.site_reachable and bool(result.lighthouse_error)
     keep = keep_lighthouse and lighthouse_failed and lead.lighthouse is not None
-    errors = list(lead.errors)
+    # a re-audit replaces the previous audit's lines (e.g. an old 429) instead of piling up
+    errors = [e for e in lead.errors if not e.startswith("audit:")]
     if not result.site_reachable:
         errors.append(f"audit: site unreachable ({result.probe_error}): {result.probe_detail}")
     elif lighthouse_failed:
@@ -100,6 +102,7 @@ class AuditEnricher:
         self.binary: str = lighthouse["binary"]
         self.lighthouse_timeout_s: int = lighthouse["timeout_s"]
         self.keep_lighthouse = False  # set by `enrich --rescan`
+        self.site = SiteClient.from_config(config)  # cmd_enrich shares one with contact
 
     def enrich(self, lead: Lead) -> Lead:
         # a Facebook/Instagram page says nothing about the business's own site
@@ -115,4 +118,5 @@ class AuditEnricher:
             lighthouse_binary=self.binary,
             lighthouse_timeout_s=self.lighthouse_timeout_s,
             current_year=datetime.now().year,
+            client=self.site,
         )

@@ -44,7 +44,7 @@ def _reviews_rule(lead: Lead, review_strong: int | None) -> str:
         )
     return (
         ' Do NOT mention Google ratings or reviews at all (no "dosta ocena", no "dobre ocene"): there are too few '
-        "to cite. Use photos or work from the operator's note or the bio for the observation, or leave it out."
+        "to cite. Use photos or work from the operator's note or the profile facts for the observation, or leave it out."
     )
 
 def _viber_redesign_rules(lead: Lead, reviews: str) -> list[str]:
@@ -60,7 +60,7 @@ def _viber_redesign_rules(lead: Lead, reviews: str) -> list[str]:
         'Greeting "Pozdrav". Casing and the polite form follow the references (lowercase "vaš", "vam"). '
         "Latin script with diacritics. No emoji, no exclamation marks, no price, no superlatives.",
         "The observation must be true: \'lepe slike radova\' or \'dobre ocene\' only if the operator's note, the "
-        "bio or the data below says so." + reviews,
+        "profile facts or the data below says so." + reviews,
         'Decline the city into the locative case after "u" ("u Beogradu", "u Nišu", "u Zemunu"), never the '
         "nominative. If unsure of the form, rephrase so the city is not needed.",
         "Never criticize their existing site (design, speed, age) and never mention Lighthouse numbers; only "
@@ -89,7 +89,7 @@ def _viber_rules(lead: Lead, niche: str, review_strong: int | None = None) -> li
         'then the line "Da li želite da vam pošaljem primer vašeg sajta besplatno?", then the niche link line.',
         'Greeting "Pozdrav". Casing and the polite form follow the references (lowercase "vaš", "vam"). '
         "Latin script with diacritics. No emoji, no exclamation marks, no price, no superlatives.",
-        "The observation must be true: use the operator's note or the bio for praise (\'dobre slike radova\'). "
+        "The observation must be true: use the operator's note, else the profile facts, for praise (\'dobre slike radova\'). "
         "If there is nothing concrete, use the plain wording from the references." + reviews,
         "Never write that you could not find their site or that they have none, and never criticize an "
         "existing site; only ask whether they have thought about a website. Never mention Lighthouse numbers.",
@@ -126,11 +126,11 @@ def prompt_rules(
         'Serbian, Latin script with diacritics (even if the company name is Cyrillic). Polite "Vi" form, '
         'always capitalized: Vaš, Vam, Vas, Vaši. Avoid "Vam" and "Vas" in the same sentence '
         '("kako Vam novi klijenti najčešće stižu?" or "kako novi klijenti najčešće dolaze do Vas?").',
-        "Praise only what the operator's note or the bio says (photos, videos, before/after, experience, a "
+        "Praise only what the operator's note (first) or the profile facts say (photos, videos, before/after, experience, a "
         "concrete service, a slogan). The operator's own wording sets the strength: \"dobre slike\" stays "
         f'"dobre". If there is no note and nothing concrete, use the plain "{PLAIN_PRAISE}" and put '
-        '"a concrete detail would be better" in verify_note. If the profile looks weak, praise the service '
-        "from the bio or leave the praise out. Never invent details.",
+        '"no concrete detail found" in verify_note. If the profile looks weak, praise the service '
+        "from the profile facts or leave the praise out. Never invent details.",
         "Never mention the Google rating or review count. Never write that you could not find their site or "
         "that they have none; a gap in the website is surfaced only through the question. Never criticize the "
         "design, speed or age of an existing site. Never mention Lighthouse numbers or audit scores.",

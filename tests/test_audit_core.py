@@ -129,6 +129,7 @@ def test_dead_or_slow_site_is_data_not_an_exception(monkeypatch, error, kind):
 class _Response:
     url = "https://klinika.rs/"
     text = (FIXTURES / "modern_site.html").read_text(encoding="utf-8")
+    headers = {"Content-Type": "text/html; charset=utf-8"}
 
     def raise_for_status(self):
         pass
@@ -169,3 +170,17 @@ def test_v9_and_v10_rows_load_with_empty_signals():
     for version in (9, 10):
         lead = Lead.from_dict({"company": "A", "domain": "a.rs", "source": "osm", "schema_version": version})
         assert lead.site_reachable is None and lead.ads_tags is None and lead.probe_error is None
+
+
+def test_html_text_honours_meta_charset_when_the_header_has_none():
+    from types import SimpleNamespace
+
+    from pipeline.audit import html_text
+
+    body = '<html><head><meta charset="utf-8"><title>Dr Isailović u Šapcu</title></head></html>'.encode()
+    no_charset = SimpleNamespace(headers={"Content-Type": "text/html"}, content=body,
+                                 text=body.decode("iso-8859-1"))
+    assert "Isailović u Šapcu" in html_text(no_charset)
+    with_charset = SimpleNamespace(headers={"Content-Type": "text/html; charset=utf-8"}, content=body,
+                                   text=body.decode("utf-8"))
+    assert html_text(with_charset) == with_charset.text

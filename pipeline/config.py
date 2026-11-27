@@ -49,6 +49,9 @@ DEFAULTS: dict = {
     },
     "enrich": {
         "delay_s": 2,
+        # pause between two requests to the same site (homepage, robots.txt, contact
+        # page, Lighthouse), so a lead's own site never sees a burst (429s)
+        "same_domain_delay_s": 1.5,
         "http_timeout_s": 20,
         "lighthouse": {
             "binary": "lighthouse",
@@ -72,6 +75,9 @@ DEFAULTS: dict = {
         # last sentence of a first message: "question" (default) or "audit" (offer a
         # one-page audit note, Instagram only). Keep "question" until website P0 is live.
         "first_offer": "question",
+        # draft automatically at the end of run / batch / go, and let draft-notion write
+        # without --yes (script_edits.md §11); false = drafting only via draft-notion --yes
+        "auto_draft": True,
         # lowest Notion Tier drafting picks up (script_edits.md §11.2); a page with
         # no Tier (hand-made, backfilled) stays eligible
         "auto_draft_min_tier": "B",
@@ -217,6 +223,8 @@ def _validate(config: dict, path: Path) -> None:
     enrich = config["enrich"]
     if not isinstance(enrich.get("delay_s"), (int, float)) or enrich["delay_s"] < 0:
         raise ConfigError(f"{path}: enrich.delay_s must be a non-negative number")
+    if not isinstance(enrich.get("same_domain_delay_s"), (int, float)) or enrich["same_domain_delay_s"] < 0:
+        raise ConfigError(f"{path}: enrich.same_domain_delay_s must be a non-negative number")
     if not isinstance(enrich.get("http_timeout_s"), int) or enrich["http_timeout_s"] <= 0:
         raise ConfigError(f"{path}: enrich.http_timeout_s must be a positive integer")
     lighthouse = enrich.get("lighthouse")
@@ -234,7 +242,7 @@ def _validate(config: dict, path: Path) -> None:
         raise ConfigError(f"{path}: draft.timeout_s must be a positive integer")
 
     outreach = config["outreach"]
-    for key in ("link_in_first_message",):
+    for key in ("link_in_first_message", "auto_draft"):
         if not isinstance(outreach.get(key), bool):
             raise ConfigError(f"{path}: outreach.{key} must be true or false")
     for key in ("site_link", "price_from", "signature", "examples_path"):

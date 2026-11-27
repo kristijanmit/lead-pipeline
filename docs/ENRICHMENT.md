@@ -67,6 +67,33 @@ Extraction rules, in order of what's tried first:
   property, and following those would attribute someone else's contact
   info to this lead.
 
+Pages are decoded with `audit.html_text()` (contact and the audit probe alike): without a charset in the
+`Content-Type` header, the page's own `<meta charset>` decides, not requests' ISO-8859-1 fallback, which turned
+"Isailović u Šapcu" into "IsailoviÄ\x87 u Å apcu".
+
+### One polite visitor per site (`audit.SiteClient`)
+
+Every GET to a lead's own site during enrich (contact, discovery, the audit probe) goes through one `SiteClient`
+that `cmd_enrich` shares across the enrichers:
+- **One homepage fetch:** contact takes the homepage from the audit probe (`SiteClient.probe`, cached per domain;
+  robots.txt checked first, and again for the final URL), and the audit reuses it. A probe failure is cached too.
+- **Same-site spacing:** `enrich.same_domain_delay_s` (default 1.5 s) between two requests to the same host
+  (robots.txt, homepage, contact page) and before Lighthouse starts. `enrich.delay_s` still spaces different leads.
+- **429:** wait `Retry-After` (seconds or an HTTP date, max 10 s; 10 s when missing) and retry once. A second 429
+  is recorded like any HTTP error (`contact: …` / `probe_error: http_error`).
+
+### `profile_facts` (schema v14)
+
+The contact step also builds `profile_facts` with `pipeline/enrichers/profile.py` (pure, fixture-tested): short,
+labelled facts the drafter may praise when there is no `SM Audit` note (script_edits.md §11.3). Sources, most
+praise-worthy first: the Maps description (`maps_description`, gosom's `descriptions` column, kept at collect), the
+homepage meta description, services named in h1–h3 headings, the page title, the Maps category. Generic headings
+(kontakt, o nama, usluge, početna, contact, about, home, services, cookies/kolačići, menu/meni…), the bare company
+name and duplicates are dropped, as are headings whose first part is generic ("O nama – Brand") or that open
+with a pitch ("Zašto odabrati …", "Welcome to …"); at most 5 facts of ~80 characters each. No extra request: it uses the homepage
+HTML already fetched. Leads without a website (or blocked by robots.txt) get the Maps facts only; the drafter rebuilds
+those for leads enriched before v14.
+
 Whatever the collector already found (`lead.contact_emails`,
 `contact_phones`, `social_links`) is merged with what this step finds,
 collector-provided values winning ties (`_merge_unique`: first occurrence
@@ -139,7 +166,8 @@ Contact data and `status` are kept; the audit fields are replaced. If Lighthouse
 Lighthouse scores are kept (noted in `errors`). Leads without a site are left alone. `--limit N` re-audits the
 first N only. Writes `enriched.jsonl` / `enriched.csv` and an `enrich_rescan` block in `manifest.json`. It
 doesn't touch `scored.jsonl`, so run `score` again afterwards. `--only` and `--rescan` go together; `audit` is
-the only step that can be re-run.
+the only step that can be re-run. A re-audit replaces the lead's earlier `audit:` error lines
+(e.g. an old 429) instead of adding to them; other errors are kept.
 
 ## 4. Retry-once-then-fail, and degrade-don't-crash
 

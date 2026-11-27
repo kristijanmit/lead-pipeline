@@ -55,12 +55,11 @@ All stages run through `pipeline.runner`:
 | `collect --source osm,maps,manual --market <id> --niche-file <yaml> --location "..."` | Collect + merge + dedupe leads (market and niche required) |
 | `enrich --run <run_id>` | Find a website for leads listed without one (guessed from the name, verified on the page), then contact scrape, then Lighthouse audit |
 | `score --run <run_id>` | Apply scoring weights from `config.yaml` |
-| `draft --run <run_id>` | Suggest a channel and draft one Serbian first message per qualified lead via the `claude` CLI (your Claude login, drafts only, never sends) — see [`docs/OUTREACH.md`](docs/OUTREACH.md) |
 | `sync --run <run_id> --sink notion [--min-tier C]` | Push qualified leads at tier ≥ `--min-tier` (default C) to Notion |
 | `sync --sink notion --rescore [--run <run_id>]` | Update only the score properties on pages already in Notion (see [`docs/EXPORT.md`](docs/EXPORT.md) §3.4) |
-| `draft-notion [--limit N] [--company NAME] [--yes] [--redraft]` | Draft for Notion pages with no draft yet (Verdict not Skip, Tier empty or ≥ B, Market and Industry set; `SM Audit` optional); dry run unless `--yes`. `--redraft` rewrites existing drafts |
-| `run [--draft]` | Chains collect, enrich, score and sync (`--draft` adds the draft stage before sync) |
-| `go [--source ...] [--limit N]` | Interactive: pick maps / osm / Notion drafts, answer the prompts, run |
+| `draft-notion [--limit N] [--company NAME] [--redraft] [--dry-run] [--yes]` | Catch-up drafting for Notion pages with no draft yet (Verdict not Skip, Tier empty or ≥ B, Market and Industry set; `SM Audit` optional); writes when `outreach.auto_draft` is on, `--dry-run` previews. `--redraft` rewrites existing drafts |
+| `run` | Chains collect, enrich, score, sync, then drafts this run's pages at Tier ≥ B automatically via the `claude` CLI (your Claude login, drafts only, never sends; never prompts) — see [`docs/OUTREACH.md`](docs/OUTREACH.md) |
+| `go [--source ...] [--limit N] [--yes]` | Interactive: pick maps / osm / Notion drafts, answer the prompts, run (`--yes` skips the Start? confirm) |
 | `batch --file batches/<name>.yaml [--dry-run] [--pause-s N]` | Runs the listed `run` entries one after another (see below) |
 
 Every command accepts `--limit N` — use it as a dry run before spending
@@ -93,13 +92,13 @@ Two ways in:
   --location "Beograd" --input leads_manual.csv   # combine with a scraper
 
 # 2. pages you create by hand in Notion (Source = Manual, Market + Industry set, notes in SM Audit optional)
-.venv/bin/python -m pipeline.runner draft-notion --limit 5   # dry run, prints drafts
-.venv/bin/python -m pipeline.runner draft-notion --yes       # writes them to Notion
+.venv/bin/python -m pipeline.runner draft-notion --limit 5 --dry-run   # prints drafts
+.venv/bin/python -m pipeline.runner draft-notion                       # writes them to Notion
 ```
 
-CSV columns are in [`docs/COLLECTION.md`](docs/COLLECTION.md). `draft-notion`
-only moves Status from "Not started" to "Queued" and overwrites an existing
-draft only with `--redraft`.
+CSV columns are in [`docs/COLLECTION.md`](docs/COLLECTION.md). Drafting moves
+Status from "Not started" to "Queued" (or "Draft failed" when the message fails
+validation) and overwrites an existing draft only with `--redraft`.
 
 ### Interactive run
 
@@ -116,20 +115,19 @@ First prompt picks what to run (skip it with `--source maps|osm|notion`):
   3. the source (maps / osm), plus OSM tags when the source is osm
   4. the location
 
-  then collect, enrich, score, sync
-- **Draft Outreach**: asks which Notion pages (only with an `SM Audit` note / also without a
-  note / redraft existing) and how many (answer 1 to pick one lead by name, default auto), dry-runs `draft-notion`, then asks before writing
-- **Both**: Lead Gen plus the draft stage before sync, no pauses and no notes (generic praise
-  where there is no bio); add notes later and redraft with Draft Outreach
+  then collect, enrich, score, sync and draft (automatic, Tier ≥ B), with no further prompt
+- **Draft Outreach**: asks which Notion pages (no draft yet / redraft existing) and how many (answer 1
+  to pick one lead by name, default auto), then runs `draft-notion` (writes directly while
+  `outreach.auto_draft` is on)
 
-There are no default niches; the market presets come from `config.yaml`. Every run prints a summary and asks
-"Start? (y/n)" first.
+There are no default niches; the market presets come from `config.yaml`. Every Lead Gen run prints a summary and
+asks "Start? (y/n)" first; `go --yes` skips it.
 
 ### Batches
 
 List runs in `batches/<name>.yaml` (see `batches/example.yaml`; keys mirror
 `run`: `source`, `market`, `niche`, `location`, `input`, `limit`, `sink`,
-`include_seen`, `bbox`, `grid`, plus `draft: true` to draft before sync and `no_draft: true` to stop after score).
+`include_seen`, `bbox`, `grid`). Every entry drafts after sync, like `run`.
 `market` (a preset id or a full block with `id`) and a full `niche` block are required in every entry; every
 entry is validated before the first one runs:
 
@@ -157,14 +155,14 @@ runs:
 - Entries run strictly one after another; a failed entry is recorded and the
   batch moves on. Finished entries are saved in `data/batches/<name>.json` and
   skipped on re-run.
-- **Out of AI credits / usage limit:** drafting stops cleanly (exit code 3,
-  finished drafts kept, nothing synced without its draft) and the batch pauses.
-  Re-run the same command once credits are back; it resumes that entry at
-  draft, then continues. For a single run, resume with `draft --run <run_id>`
-  then `sync`.
+- **Out of AI credits / usage limit:** drafting stops cleanly (finished drafts
+  kept). The batch doesn't pause: later entries still collect, enrich, score and
+  sync, but skip drafting, and the batch exits 3. The undrafted pages keep an
+  empty Draft Message; run `draft-notion` once credits are back. A single `run`
+  behaves the same (sync done, exit 3).
 
 ```bash
-# collect, enrich, score, and sync in one pass, dry-run first
+# collect, enrich, score, sync and draft in one pass, dry-run first
 .venv/bin/python -m pipeline.runner run --source osm --market serbia --niche-file niche.yaml \
   --location "Novi Sad" --limit 15
 

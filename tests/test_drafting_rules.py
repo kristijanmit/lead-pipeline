@@ -276,7 +276,7 @@ def test_linkedin_note_too_long_is_retried_then_failed(monkeypatch):
     calls = _fake(monkeypatch, bad, bad)
     out = drafter.draft_lead(lead, _outreach(), _CFG, _market("uae"))
     assert len(calls) == 2 and "connection note" in calls[1]["prompt"]
-    assert out.draft_message == "" and out.errors[-1].startswith("draft: connection note")
+    assert out.draft_message == "" and out.errors[-1].startswith("draft: invalid: connection note")
 
 
 def test_uae_lead_never_gets_a_serbian_draft(monkeypatch):

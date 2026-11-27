@@ -121,6 +121,24 @@ def test_lead_without_domain_passes_through_unchanged():
     assert ContactEnricher(CONFIG).enrich(lead) is lead
 
 
+def test_profile_facts_built_from_the_fetched_homepage():
+    class OnePageEnricher(ContactEnricher):
+        def _fetch_homepage(self, domain):
+            return (f"https://{domain}/", HTML)
+
+        def _fetch(self, url):
+            return (url, HTML)
+
+    lead = Lead(company="Dental Centar Novak", domain="dentalnovak.rs", source="maps", maps_category="Dentist")
+    facts = OnePageEnricher(CONFIG).enrich(lead).profile_facts
+    assert facts and facts[-1] == "Google Maps category: Dentist" and len(facts) <= 5
+
+
+def test_lead_without_domain_gets_maps_facts():
+    lead = Lead(company="No Web Bistro", domain="", source="maps", maps_description="Domaća kuhinja")
+    assert ContactEnricher(CONFIG).enrich(lead).profile_facts == ["Google Maps description: Domaća kuhinja"]
+
+
 def test_extract_site_text_title_meta_headings_deduped_and_capped():
     from pipeline.enrichers.contact import extract_site_text
 
