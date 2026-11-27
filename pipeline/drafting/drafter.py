@@ -181,7 +181,7 @@ def _question_rule(channel: str, niche_phrase: str, niche: Niche | None, offer: 
     if offer == "audit":
         return (
             "Offer instead of a question: the last sentence offers to look at how their clients get from a phone "
-            "or Google to a booking and send a one-page note with three concrete things to improve, phrased as a "
+            "or Google to a booking and send a one-page note with concrete suggestions, phrased as a "
             "question (follow the \"with audit offer\" references). Describe the work, never price it."
         )
     if niche and niche.question:

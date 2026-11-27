@@ -111,7 +111,7 @@ hope you're well.
     <DM-shaped message, one question last>
 
 **`outreach.first_offer`**: `question` (default) or `audit`. With `audit`, an Instagram first message ends with
-an offer of a one-page note with three concrete improvements, phrased as a question. It uses the `## Instagram
+an offer of a one-page note with concrete suggestions, phrased as a question. It uses the `## Instagram
 (DM) with audit offer` examples, and "free" stays banned, so the work is described, never priced. Other channels
 keep the question, and so does every lead without an audited site that answered: only `lead_type` redesign /
 unclear with `site_reachable` and at least one Need item (`scorer.need_items`, niche `need_overrides` applied; the
