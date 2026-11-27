@@ -851,7 +851,7 @@ def cmd_draft(args: argparse.Namespace) -> int:
         try:
             out = draft_lead(
                 lead, outreach, draft_cfg, market, variant=drafted + failed,
-                examples=examples.get(market.language), niche=niche,
+                examples=examples.get(market.language), niche=niche, need_cfg=config["scoring"]["need"],
             )
         except DraftBudgetError as e:
             out_of_credits = str(e)
@@ -947,7 +947,8 @@ def cmd_draft_notion(args: argparse.Namespace) -> int:
             continue
         # a page has no niche definition: the question comes from the examples' Questions list
         out = draft_lead(
-            lead, outreach, draft_cfg, market, variant=drafted + failed, examples=examples.get(market.language)
+            lead, outreach, draft_cfg, market, variant=drafted + failed, examples=examples.get(market.language),
+            need_cfg=config["scoring"]["need"],
         )
         if not out.draft_message:
             if out.errors != lead.errors:

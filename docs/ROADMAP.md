@@ -67,7 +67,9 @@ properly" means in practice.
   approved sender line per language and allows Viber review claims only from `review_strong` reviews. Open: you approve `docs/plan/v2/outreach.{sr,en}.md`,
   move them into `config/`, then `draft-notion --limit 1` (dry run) on one sr and one en page.
   Follow-up fix: `first_offer: audit` only for leads with an audited site that answered (`lead_type` redesign /
-  unclear and `site_reachable`); new_build leads keep the question (`drafter.offer_for`). Notion pages carry no
+  unclear and `site_reachable`) that shows at least one Need item (shared `scorer.need_items`); new_build and
+  "site looks fine" leads keep the question (`drafter.offer_for`). Audit-offer examples are count-free
+  ("concrete suggestions", not "three"). Notion pages carry no
   `site_reachable`, so `draft-notion` always uses the question.
 - Step 8 done (branch `v2-step8-audit-report`): `audit-report` writes a one-page audit per qualified lead
   (`data/runs/<id>/reports/<domain>.md` + self-contained `.html`) in the market's language (`pipeline/reports/`).
