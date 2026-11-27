@@ -114,8 +114,9 @@ hope you're well.
 an offer of a one-page note with three concrete improvements, phrased as a question. It uses the `## Instagram
 (DM) with audit offer` examples, and "free" stays banned, so the work is described, never priced. Other channels
 keep the question, and so does every lead without an audited site that answered: only `lead_type` redesign /
-unclear with `site_reachable` gets the offer (`drafter.offer_for`); new_build, dead-domain, certificate-error and
-didn't-load leads keep the question. Notion pages don't carry `site_reachable`, so `draft-notion` drafts always use
+unclear with `site_reachable` and at least one Need item (`scorer.need_items`, niche `need_overrides` applied; the
+items the audit report lists) gets the offer (`drafter.offer_for`); new_build, dead-domain, certificate-error,
+didn't-load and "site looks fine" leads keep the question. Notion pages don't carry `site_reachable`, so `draft-notion` drafts always use
 the question. Leave it on `question` until website P0 (sample audit, About, review page) is live.
 
 ## Settings (`config.yaml` -> `outreach`)

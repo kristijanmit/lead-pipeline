@@ -142,7 +142,9 @@ def _new_build_need(lead: Lead, base: float, cfg: dict) -> tuple[float, list[str
     return need, reasons
 
 
-def _redesign_need(lead: Lead, points: dict, cfg: dict, year: int, with_lighthouse: bool) -> tuple[float, list[str]]:
+def need_items(lead: Lead, cfg: dict, year: int, with_lighthouse: bool) -> list[tuple[str, str]]:
+    """The Need items (NEED_ITEMS) an audited site shows, as (item, reason). Pure; shared
+    with the audit report so both read a site the same way. `cfg` is scoring.need."""
     hits: list[tuple[str, str]] = []  # (item, reason)
     mobile = lead.mobile_friendly if with_lighthouse and lead.mobile_friendly is not None else None
     if mobile is None and lead.has_viewport_meta is not None:
@@ -163,6 +165,11 @@ def _redesign_need(lead: Lead, points: dict, cfg: dict, year: int, with_lighthou
             hits.append(("perf_below_50", "slow site"))
         if "seo" in lead.lighthouse and lead.lighthouse["seo"] < 70:
             hits.append(("seo_below_70", "weak SEO basics"))
+    return hits
+
+
+def _redesign_need(lead: Lead, points: dict, cfg: dict, year: int, with_lighthouse: bool) -> tuple[float, list[str]]:
+    hits = need_items(lead, cfg, year, with_lighthouse)
     need = 0.0
     reasons = []
     for item, reason in hits:

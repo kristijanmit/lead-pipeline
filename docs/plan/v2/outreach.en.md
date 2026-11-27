@@ -38,9 +38,9 @@ Hi, I came across your profile and noticed the link in your bio opens an error p
 ## Instagram (DM) with audit offer
 <!-- Used only when `outreach.first_offer: audit` is on, which stays OFF until website P0 proof (demo, sample audit,
 About page, review page) is live. The offer replaces the question and stays a question. -->
-Hi, I came across your profile and really liked the before-and-after posts. I'm Kristijan, I build websites for clinics. If it helps, I can look at how patients get from Google to a booked appointment on your site and send you a one-page note with three things to improve, would that be useful?
+Hi, I came across your profile and really liked the before-and-after posts. I'm Kristijan, I build websites for clinics. If it helps, I can look at how patients get from Google to a booked appointment on your site and send you a one-page note with concrete suggestions, would that be useful?
 
-Hi, I came across your profile and like the way you present your services. I'm Kristijan, I build websites for local businesses. I can check how people on a phone get from your site to a booking and send a one-page note with three concrete suggestions, would that be helpful?
+Hi, I came across your profile and like the way you present your services. I'm Kristijan, I build websites for local businesses. I can check how people on a phone get from your site to a booking and send a one-page note with concrete suggestions, would that be helpful?
 
 ## Facebook
 <!-- Adds the "pass it to the owner" line, same as the Serbian Facebook section. -->

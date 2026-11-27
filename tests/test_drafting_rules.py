@@ -122,13 +122,13 @@ def test_en_examples_match_niche_alias_and_fall_back_to_generic():
 
 def test_audit_offer_sections_only_when_first_offer_is_audit():
     audit = drafter.select_examples(EN_FILE, "Instagram", "yoga studio", offer="audit")
-    assert "one-page note with three concrete suggestions" in audit
+    assert "one-page note with concrete suggestions" in audit
     assert "how new clients usually find you?" not in audit
     fb = drafter.select_examples(EN_FILE, "Facebook", "yoga studio", offer="audit")
     assert "one-page note" not in fb  # no audit section for Facebook -> question
     sr = drafter.select_examples(SR_FILE, "Instagram", "frizer")
-    assert "jednu stranu sa tri" not in sr
-    assert "jednu stranu sa tri" in drafter.select_examples(SR_FILE, "Instagram", "frizer", offer="audit")
+    assert "jednu stranu sa konkretnim predlozima" not in sr
+    assert "jednu stranu sa konkretnim predlozima" in drafter.select_examples(SR_FILE, "Instagram", "frizer", offer="audit")
 
 
 def test_linkedin_examples_keep_connection_note_and_matching_after_accept():
@@ -168,15 +168,21 @@ def test_english_prompt_uses_english_rules():
     assert "I'm Kristijan" in p and "Vaš" not in p and "Pozdrav" not in p
 
 
+NEED = DEFAULTS["scoring"]["need"]
+# an audited site with one visible problem (not mobile-friendly) and nothing else wrong
+_PROBLEM = dict(https=True, mobile_friendly=False, has_viewport_meta=False, has_booking=True,
+                has_click_to_call=True, lighthouse={"performance": 90, "seo": 95})
+
+
 def _audited(**kw):
-    return _lead(domain="smile.ae", lead_type="redesign", site_reachable=True, **kw)
+    return _lead(domain="smile.ae", lead_type="redesign", site_reachable=True, **{**_PROBLEM, **kw})
 
 
 def test_audit_offer_rule_only_on_instagram_when_turned_on():
     on = _outreach(first_offer="audit")
-    assert "one-page note" in drafter.build_prompt(_audited(), "Instagram", on, 0, "")
-    assert "one-page note" not in drafter.build_prompt(_audited(), "Facebook", on, 0, "")
-    assert "one-page note" not in drafter.build_prompt(_audited(), "Instagram", _outreach(), 0, "")
+    assert "one-page note" in drafter.build_prompt(_audited(), "Instagram", on, 0, "", need_cfg=NEED)
+    assert "one-page note" not in drafter.build_prompt(_audited(), "Facebook", on, 0, "", need_cfg=NEED)
+    assert "one-page note" not in drafter.build_prompt(_audited(), "Instagram", _outreach(), 0, "", need_cfg=NEED)
 
 
 @pytest.mark.parametrize("lead_type, reachable, offer", [
@@ -189,11 +195,30 @@ def test_audit_offer_rule_only_on_instagram_when_turned_on():
     ("redesign", None, "question"),      # not known to have answered (e.g. a Notion page)
 ])
 def test_audit_offer_only_for_leads_with_an_audited_site(lead_type, reachable, offer):
-    lead = _lead(domain="smile.ae" if lead_type != "new_build" else "", lead_type=lead_type, site_reachable=reachable)
-    assert drafter.offer_for(lead, "Instagram", _outreach(first_offer="audit")) == offer
-    assert ("one-page note" in drafter.build_prompt(lead, "Instagram", _outreach(first_offer="audit"), 0, "")) == (
-        offer == "audit"
-    )
+    lead = _lead(domain="smile.ae" if lead_type != "new_build" else "", lead_type=lead_type, site_reachable=reachable,
+                 **{**_PROBLEM, "lighthouse": None if lead_type == "unclear" else _PROBLEM["lighthouse"]})
+    on = _outreach(first_offer="audit")
+    assert drafter.offer_for(lead, "Instagram", on, NEED) == offer
+    assert ("one-page note" in drafter.build_prompt(lead, "Instagram", on, 0, "", need_cfg=NEED)) == (offer == "audit")
+
+
+def test_site_that_looks_fine_keeps_the_question():
+    fine = _audited(mobile_friendly=True, has_viewport_meta=True)
+    on = _outreach(first_offer="audit")
+    assert drafter.offer_for(fine, "Instagram", on, NEED) == "question"
+    assert "one-page note" not in drafter.build_prompt(fine, "Instagram", on, 0, "", need_cfg=NEED)
+
+
+def test_need_items_a_niche_turned_off_dont_count():
+    niche = Niche(name="dental clinic", search_terms=["dentist"], phrase="dental clinics",
+                  need_overrides={"not_mobile": 0})
+    on = _outreach(first_offer="audit")
+    assert drafter.offer_for(_audited(), "Instagram", on, NEED) == "audit"
+    assert drafter.offer_for(_audited(), "Instagram", on, NEED, niche) == "question"
+
+
+def test_without_need_config_the_question_is_kept():
+    assert drafter.offer_for(_audited(), "Instagram", _outreach(first_offer="audit")) == "question"
 
 
 def test_new_build_lead_keeps_question_examples_when_audit_offer_is_on(monkeypatch):
@@ -372,5 +397,6 @@ def test_prompts_spell_out_the_sender_line():
 def test_audited_lead_gets_audit_offer_examples_when_audit_offer_is_on(monkeypatch):
     calls = _fake(monkeypatch, {"message": "Hi, I came across your profile. Could I send a short note?",
                                 "verify_note": ""})
-    drafter.draft_lead(_audited(), _outreach(first_offer="audit"), _CFG, _market("uae"), examples=EN_FILE)
+    drafter.draft_lead(_audited(), _outreach(first_offer="audit"), _CFG, _market("uae"), examples=EN_FILE,
+                       need_cfg=NEED)
     assert "with audit offer" in calls[0]["prompt"].lower()

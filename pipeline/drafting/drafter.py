@@ -20,6 +20,7 @@ import re
 import subprocess
 import tempfile
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 from pipeline.drafting import rules_en, rules_sr
@@ -28,6 +29,7 @@ from pipeline.drafting.rules import MAX_CHARS, Rules, validate_connection_note, 
 from pipeline.market import Market
 from pipeline.niche import Niche
 from pipeline.schema import Lead
+from pipeline.scoring.scorer import need_items
 
 __all__ = ["MAX_CHARS", "RULE_SETS", "build_prompt", "draft_lead", "rules_for", "select_examples", "validate_message"]
 
@@ -41,18 +43,26 @@ AUDIT_CHANNELS = ("Instagram",)
 _AUDITED_TYPES = ("redesign", "unclear")
 
 
-def offer_for(lead: Lead, channel: str, outreach: dict) -> str:
+def offer_for(
+    lead: Lead, channel: str, outreach: dict, need_cfg: dict | None = None, niche: Niche | None = None,
+) -> str:
     """The first message's offer: "audit" only when `outreach.first_offer` is audit, the
-    channel has audit-offer examples, and the lead has an audited site that answered
-    (lead_type redesign / unclear, site_reachable). Everything else: "question"."""
-    if (
+    channel has audit-offer examples, the lead has an audited site that answered
+    (lead_type redesign / unclear, site_reachable), and that site shows at least one Need
+    item (`scorer.need_items`, with the niche's need_overrides; the same items the audit
+    report lists). `need_cfg` is scoring.need; without it there is nothing to judge the
+    site by, so the question is kept. Everything else: "question"."""
+    if not (
         outreach.get("first_offer") == "audit"
         and channel in AUDIT_CHANNELS
         and lead.lead_type in _AUDITED_TYPES
         and lead.site_reachable is True
+        and need_cfg is not None
     ):
-        return "audit"
-    return "question"
+        return "question"
+    points = {**need_cfg["redesign"], **(getattr(niche, "need_overrides", None) or {})}
+    items = need_items(lead, need_cfg, datetime.now().year, with_lighthouse=bool(lead.lighthouse))
+    return "audit" if any(points.get(item, 0) > 0 for item, _ in items) else "question"
 
 _SCHEMA = {
     "type": "object",
@@ -189,6 +199,7 @@ def _question_rule(channel: str, niche_phrase: str, niche: Niche | None, offer: 
 def build_prompt(
     lead: Lead, channel: str, outreach: dict, variant: int, examples: str,
     rules: Rules | None = None, niche: Niche | None = None, market: Market | None = None,
+    need_cfg: dict | None = None,
 ) -> str:
     # `variant` is unused (one fixed descriptor and a question rule); kept so the
     # runner call sites and signature stay stable.
@@ -196,7 +207,7 @@ def build_prompt(
     socials = lead.social_links
     # the run's draft phrase; pages without Niche Label fall back to the niche name in Industry
     phrase = lead.niche_label or lead.industry
-    offer = offer_for(lead, channel, outreach)
+    offer = offer_for(lead, channel, outreach, need_cfg, niche)
     rules_list = rules.prompt_rules(
         lead, channel, outreach, phrase, _question_rule(channel, phrase, niche, offer), offer,
         review_strong=market.review_strong if market else None,
@@ -327,7 +338,7 @@ def _compose(raw: dict, channel: str) -> str:
 
 def draft_lead(
     lead: Lead, outreach: dict, draft_cfg: dict, market: Market, variant: int = 0, examples: str = "",
-    niche: Niche | None = None,
+    niche: Niche | None = None, need_cfg: dict | None = None,
 ) -> Lead:
     """Return a new Lead with suggested_channel/draft_message/draft_notes filled.
     No usable contact data -> returned unchanged. A failure lands in Lead.errors instead
@@ -347,9 +358,11 @@ def draft_lead(
         return lead  # nothing to send to; the runner counts these, no error recorded
     selected = select_examples(
         examples, channel, lead.niche or lead.industry, redesign=bool(lead.domain),
-        offer=offer_for(lead, channel, outreach),
+        offer=offer_for(lead, channel, outreach, need_cfg, niche),
     )
-    prompt = build_prompt(lead, channel, outreach, variant, selected, rules=rules, niche=niche, market=market)
+    prompt = build_prompt(
+        lead, channel, outreach, variant, selected, rules=rules, niche=niche, market=market, need_cfg=need_cfg,
+    )
     cite_reviews = reviews_ok(lead, market)
     call = {"system": rules.system, "schema": _LINKEDIN_SCHEMA if channel == "LinkedIn" else _SCHEMA}
     try:

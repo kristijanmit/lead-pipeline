@@ -77,9 +77,9 @@ Pozdrav, naišao sam na Vaš profil i imate dobre slike radova, vidi se da ste o
 <!-- NEW. Used only when `outreach.first_offer: audit` is on, which stays OFF until website P0 proof (demo, sample audit,
 About page, /analiza) is live. The offer replaces the question as the last sentence and stays a question. "besplatno" stays
 banned, so the offer is described, not priced. -->
-Pozdrav, naišao sam na Vaš profil i svidele su mi se slike pre i posle. Ja sam Kristijan, pravim sajtove za lokalne firme. Ako želite, mogu da pogledam Vaš sajt i pošaljem jednu stranu sa tri stvari koje bi pacijentima olakšale zakazivanje, da li bi Vam to bilo korisno?
+Pozdrav, naišao sam na Vaš profil i svidele su mi se slike pre i posle. Ja sam Kristijan, pravim sajtove za lokalne firme. Ako želite, mogu da pogledam Vaš sajt i pošaljem jednu stranu sa konkretnim predlozima kako da pacijentima olakšate zakazivanje, da li bi Vam to bilo korisno?
 
-Pozdrav, naišao sam na Vaš profil i sviđa mi se kako predstavljate svoje usluge. Ja sam Kristijan, pravim sajtove za lokalne firme. Mogu da pogledam kako klijenti sa telefona dolaze do Vas i pošaljem jednu stranu sa tri konkretna predloga, da li bi Vam to značilo?
+Pozdrav, naišao sam na Vaš profil i sviđa mi se kako predstavljate svoje usluge. Ja sam Kristijan, pravim sajtove za lokalne firme. Mogu da pogledam kako klijenti sa telefona dolaze do Vas i pošaljem jednu stranu sa konkretnim predlozima, da li bi Vam to značilo?
 
 ## Facebook
 
