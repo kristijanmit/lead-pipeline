@@ -212,3 +212,28 @@ def test_include_seen_keeps_rejected_too(tmp_path, monkeypatch):
     companies, counts = _collect_with_caches(tmp_path, monkeypatch, ["--include-seen"])
     assert companies == ["Seen", "Rejected", "No Site", "Fresh"]
     assert (counts["already_in_notion"], counts["already_rejected"]) == (0, 0)
+
+
+def test_collect_lets_unblocked_legacy_businesses_back_in(tmp_path, monkeypatch, capsys):
+    from datetime import date, timedelta
+
+    old = (date.today() - timedelta(days=200)).isoformat()
+    recent = (date.today() - timedelta(days=10)).isoformat()
+    leads = [Lead(company=c, domain=f"{c}.rs", source="maps") for c in ("free", "client", "cooling", "live")]
+    _setup(tmp_path, monkeypatch, {"maps": FakeCollector(leads=leads)})
+    data = tmp_path / "data"
+    data.mkdir(exist_ok=True)
+    legacy = {"campaign": "legacy-v1"}
+    (data / "seen_domains.json").write_text(json.dumps({
+        "domain:free.rs": {**legacy, "page_id": "p1", "legacy": {"status": "Sent", "last_contacted": old}},
+        "domain:client.rs": {**legacy, "page_id": "p2", "legacy": {"status": "Closed"}},
+        "domain:cooling.rs": {**legacy, "page_id": "p3", "legacy": {"status": "Sent", "last_contacted": recent}},
+        "domain:live.rs": {"page_id": "p4", "campaign": "frizerski salon"},
+    }))
+    assert main(["collect", "--source", "maps", "--market", "serbia", "--niche-file", "niche.yaml",
+                 "--location", "Novi Sad"]) == 0
+    run_dir = max((data / "runs").iterdir())
+    assert [lead.company for lead in read_jsonl(run_dir / "collected.jsonl")] == ["free"]
+    counts = json.loads((run_dir / "manifest.json").read_text())["counts"]
+    assert (counts["already_in_notion"], counts["legacy_collected_again"]) == (3, 1)
+    assert "1 legacy-v1 businesses collected again" in capsys.readouterr().out

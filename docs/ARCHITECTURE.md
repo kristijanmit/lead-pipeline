@@ -279,6 +279,8 @@ has to flatten a few `Lead` fields deliberately rather than fail on them:
 | `qualified`                                              | `Qualified` (Checkbox)          | Always sent — passed every L0 gate (scorer v4, SCORING.md)                                                                                                |
 | `market`, `language`                                    | `Market`, `Language` (Select)   | Preset id (`serbia` / `uae`) and `sr` / `en`; only sent when set. `lead_from_page` reads Market lowercased                                                 |
 | `industry` (= `niche`)                                  | `Industry` (Select)             | The niche name created in `go`; there is no separate Niche property. Read back into both `industry` and `niche`                                         |
+| `niche`                                                 | `Campaign` (Select)             | The run's niche name = the cohort `score-report` groups by; only sent when set. `legacy-v1` marks pages from before the 2026-11 niche/offer change (`scripts/archive_legacy.py`): never drafted, left out of `score-report` by default. Not in `score_properties` |
+| _(sync)_                                                | `Notes` (Rich text)             | Only on a page created for a business that has an older `legacy-v1` page: `legacy-v1: https://www.notion.so/<old page id>` (§9). Otherwise left for you |
 | `niche_label`                                           | `Niche Label` (Rich text)       | The niche's draft phrase; read back by `draft-notion` (falls back to `Industry`)                                                                         |
 | `tier`, `priority`                                      | `Tier` (Select A–D), `Priority` (Number) | Scorer v4; only sent when set                                                                                                                    |
 | `need_score`, `viability_score`, `reach_score`, `score_reasons` | `Score Reasons` (Rich text) | One line: `Need 70 · Viability 55.5 · Reach 100 · <reasons>` (no sub-score columns, G13). Never passed to drafting                                    |
@@ -371,6 +373,18 @@ leads twice — see dedupe/idempotency below.
   The cache's key structure, its secondary email-index matching, and the
   new-info-as-comment behavior on a cache hit are covered in
   `docs/EXPORT.md` §3.1.
+- **Campaigns and legacy-v1**: each cache entry carries `campaign` (the page's
+  Campaign; missing = blocks, like any live page). Only *blocking* entries
+  (`notion_sink.blocking_seen`) stop a lead at collect and sync: every non-legacy
+  entry, plus `legacy-v1` entries whose old page is Status Closed / Replied, has
+  Outcome declined / won / replied / meeting / proposal, or was Last Contacted
+  within `notion.legacy_recontact_days` (90). Those fields are copied into the
+  entry's `legacy` block by `scripts/archive_legacy.py` and `--refresh-cache`, so
+  no live query is needed. Any other legacy business is collected again; sync
+  creates a new page (Campaign = the new niche, `Notes` = `legacy-v1: <old page
+  url>`), points the cache key at it and keeps `legacy_page_id`. Legacy pages are
+  never written to (no new-info comment either). `--refresh-cache` prefers the
+  live page when a key has both.
 - **Within a run**: if `enrich` is re-run on a `collected.jsonl` that
   already has a partial `enriched.jsonl`, only leads with `status:
   enriched` are skipped — see `docs/ENRICHMENT.md` §5 for why

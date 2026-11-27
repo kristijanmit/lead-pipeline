@@ -96,6 +96,9 @@ DEFAULTS: dict = {
         "delay_s": 0.35,
         "timeout_s": 30,
         "cache_path": "data/seen_domains.json",
+        # a legacy-v1 business is collectable again once its legacy page's Last
+        # Contacted is empty or more than this many days ago (docs/ROADMAP.md)
+        "legacy_recontact_days": 90,
     },
     # Scorer v4 (docs/plan/v2/PIPELINE.md §3). Per-market values (channel order,
     # review_strong, exclude_name_patterns) live on the market, not here.
@@ -281,6 +284,9 @@ def _validate(config: dict, path: Path) -> None:
         raise ConfigError(f"{path}: notion.database_id must be a string")
     if not isinstance(notion.get("api_version"), str) or not notion["api_version"]:
         raise ConfigError(f"{path}: notion.api_version must be a non-empty string")
+    days = notion.get("legacy_recontact_days")
+    if not isinstance(days, int) or isinstance(days, bool) or days < 0:
+        raise ConfigError(f"{path}: notion.legacy_recontact_days must be a non-negative integer, e.g. 90")
     if not isinstance(notion.get("delay_s"), (int, float)) or notion["delay_s"] < 0:
         raise ConfigError(f"{path}: notion.delay_s must be a non-negative number")
     if not isinstance(notion.get("timeout_s"), int) or notion["timeout_s"] <= 0:

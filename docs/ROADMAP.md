@@ -103,6 +103,19 @@ properly" means in practice.
   Replied / Closed, Last Contacted, a SENT line or Outcome; Status Dead counts only next to one of the last three;
   sent beats `Verdict = Skip`. No schema or scoring bump. Not built: reply rate by sub-score band (PIPELINE.md §7
   L3). Open: run it after ~50 drafts.
+- Archived: legacy-v1 (branch `v2-archive-legacy`, 2026-11-27). Every lead up to now was collected for a different
+  niche and offer, so its send / skip / reply data would skew calibration for the new one. Nothing deleted:
+  `scripts/archive_legacy.py` set Notion `Campaign = legacy-v1` on every page with no Campaign and Date Added
+  before 2026-11-28 00:00 (+01:00); the cutoff means a re-run never tags new pages. Sync now writes
+  `Campaign` = the run's niche name. `legacy-v1` pages are never drafted (`query_draftable`); `score-report` leaves
+  them out unless `--include-legacy` or `--campaign legacy-v1`. Local runs moved from `data/runs/` to
+  `data/archive/legacy-v1/` (not committed), so `--run <old id>` no longer finds them.
+  Archived businesses can be collected again for a new campaign: the script also marks their `seen_domains.json`
+  entries `legacy-v1` with the old page's Status / Outcome / Last Contacted (backup `.bak`). Collect and sync skip
+  one only while its old page is Closed / Replied, has Outcome declined / won / replied / meeting / proposal, or
+  was contacted within `notion.legacy_recontact_days` (90); otherwise sync creates a new page (Campaign = the new
+  niche, `Notes` = `legacy-v1: <old page url>`). Duplicates are blocked only across non-legacy campaigns
+  (docs/ARCHITECTURE.md §9). `data/rejected_domains.json` is unchanged (its one entry is a niche-independent gate).
 - Next: step 11 (go-live gate, not code). Cleanup of the v3 score fields is now schema 15.
 
 **Done**

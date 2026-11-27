@@ -80,6 +80,8 @@ def test_sync_flips_only_created_leads(tmp_path, monkeypatch, capsys):
         "input": 5,
         "created": 1,
         "already_in_notion": 0,
+        "legacy_relinked": 0,
+        "legacy_blocked": 0,
         "already_synced": 1,
         "skipped_disqualified": 1,
         "skipped_below_min_tier": 0,

@@ -19,8 +19,8 @@ the sync cache, with `SM Audit` and a hand-set `Suggested Channel` taken from th
 leads whose page passes the eligibility filter below. `--limit N` caps the pages drafted.
 
 **Eligibility** (§11.2, `NotionSink.query_draftable`): `Qualified` checked, Status `Not started` (or blank), an empty
-`Draft Message`, `Verdict` not `Skip`, `Tier` empty or at least `outreach.auto_draft_min_tier` (default `B`), and
-`Market` + `Industry` set. An empty Tier stays eligible (hand-made pages have none). `SM Audit` is optional; when
+`Draft Message`, `Verdict` not `Skip`, `Tier` empty or at least `outreach.auto_draft_min_tier` (default `B`),
+`Campaign` not `legacy-v1` (empty is fine), and `Market` + `Industry` set. An empty Tier stays eligible (hand-made pages have none). `SM Audit` is optional; when
 present it is the first praise source. Set `Verdict = Skip` and drafting never touches the page.
 
 **Never stop, never ask** (§11.4):

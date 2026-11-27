@@ -18,7 +18,7 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import requests
@@ -49,6 +49,16 @@ class NotionAuthError(RuntimeError):
 
 _TIERS = ("A", "B", "C", "D")
 
+# Campaign cohort of every page synced before the 2026-11 niche/offer change
+# (scripts/archive_legacy.py tags them). Never drafted; score-report leaves it
+# out unless asked (docs/ROADMAP.md, "Archived: legacy-v1").
+LEGACY_CAMPAIGN = "legacy-v1"
+# a legacy business stays blocked (never collected or synced again) while its
+# legacy page says it is a client, said no, or a conversation is open...
+LEGACY_BLOCK_STATUSES = frozenset({"Closed", "Replied"})
+LEGACY_BLOCK_OUTCOMES = frozenset({"declined", "won", "replied", "meeting", "proposal"})
+# ...or it was contacted within notion.legacy_recontact_days (cooldown)
+
 # properties `sync --rescore` may write — score output only, never a field the
 # operator edits (Verdict, SM Audit, Status, Communication, drafts, Runs Ads…)
 SCORE_PROPERTIES = ("Tier", "Priority", "Score Reasons", "Qualified", "Lead Type", "Audit Notes")
@@ -62,6 +72,11 @@ class SyncReport:
     cached: list[Lead] = field(default_factory=list)  # already in Notion
     failed: list[tuple[Lead, str]] = field(default_factory=list)
     pending: int = 0  # beyond --limit, untouched
+    # matched only a legacy-v1 entry that is still blocked (status/outcome or
+    # cooldown): not created, not marked synced
+    legacy_blocked: list[Lead] = field(default_factory=list)
+    # created as a new page next to an older legacy-v1 page (Notes links it)
+    relinked: list[Lead] = field(default_factory=list)
 
 
 @dataclass
@@ -124,8 +139,13 @@ def score_properties(lead: Lead) -> dict:
     }
 
 
-def to_notion_properties(lead: Lead) -> dict:
-    """The single §6.1 mapping point. None/empty fields are omitted rather
+def notion_page_url(page_id: str) -> str:
+    return f"https://www.notion.so/{page_id.replace('-', '')}"
+
+
+def to_notion_properties(lead: Lead, legacy_url: str | None = None) -> dict:
+    """The single §6.1 mapping point. legacy_url: the business's earlier
+    legacy-v1 page, written to Notes as "legacy-v1: <url>". None/empty fields are omitted rather
     than sent as blanks — a checkbox can't say "unknown", so HTTPS/Mobile
     Friendly only appear when the audit actually determined them.
     schema_version/scoring_version/run_id/errors are deliberately not
@@ -143,6 +163,11 @@ def to_notion_properties(lead: Lead) -> dict:
         props["Language"] = {"select": {"name": select_name(lead.language)}}
     if lead.niche_label:
         props["Niche Label"] = _text(lead.niche_label)
+    # the run's niche name is the campaign cohort score-report groups by
+    if lead.niche:
+        props["Campaign"] = {"select": {"name": select_name(lead.niche)}}
+    if legacy_url:
+        props["Notes"] = _text(f"{LEGACY_CAMPAIGN}: {legacy_url}")
     location = select_name(lead.location, city_only=True)
     if location:
         props["Location"] = {"select": {"name": location}}
@@ -210,6 +235,46 @@ def to_notion_properties(lead: Lead) -> dict:
     if lead.ads_tags is not None:
         props["Runs Ads"] = {"checkbox": bool(lead.ads_tags)}
     return props
+
+
+# --- legacy-v1 cache entries ----------------------------------------------------------
+# A seen_domains.json entry carries "campaign" (the page's Campaign; missing =
+# not legacy, so it blocks). A legacy-v1 entry also carries "legacy": the old
+# page's Status / Outcome / Last Contacted, written by scripts/archive_legacy.py
+# and refresh_cache(), so blocking never needs a live Notion query.
+
+def is_legacy(entry: dict) -> bool:
+    return entry.get("campaign") == LEGACY_CAMPAIGN
+
+
+def legacy_info(props: dict) -> dict:
+    """What legacy blocking reads from a page."""
+    contacted = ((props.get("Last Contacted") or {}).get("date") or {}).get("start") or ""
+    return {
+        "status": _select_name(props.get("Status")),
+        "outcome": _select_name(props.get("Outcome")),
+        "last_contacted": contacted[:10],
+    }
+
+
+def legacy_block_reason(info: dict, today: date, recontact_days: int) -> str | None:
+    """"status" (Status Closed / Replied, or a blocking Outcome), "cooldown" (Last
+    Contacted within recontact_days of today), or None = collectable again."""
+    if info.get("status") in LEGACY_BLOCK_STATUSES or info.get("outcome") in LEGACY_BLOCK_OUTCOMES:
+        return "status"
+    contacted = info.get("last_contacted")
+    if contacted and (today - date.fromisoformat(contacted)).days <= recontact_days:
+        return "cooldown"
+    return None
+
+
+def blocking_seen(seen: dict, today: date, recontact_days: int) -> dict:
+    """The cache entries that block a lead: every non-legacy entry, plus legacy-v1
+    entries still blocked. Collect and sync dedupe against this, not all of seen."""
+    return {
+        key: entry for key, entry in seen.items()
+        if not is_legacy(entry) or legacy_block_reason(entry.get("legacy", {}), today, recontact_days)
+    }
 
 
 def cache_key(lead: Lead) -> str:
@@ -413,6 +478,7 @@ class NotionSink:
         self.delay_s = notion["delay_s"]
         self.timeout_s = notion["timeout_s"]
         self.cache_path = Path(notion["cache_path"])
+        self.legacy_recontact_days = notion["legacy_recontact_days"]
         token = token or env.get("NOTION_TOKEN", "")
         if not token:
             raise ValueError(
@@ -442,12 +508,18 @@ class NotionSink:
         what landed.
         """
         seen = load_seen(self.cache_path)
-        email_index = _email_index(seen)
+        blocking = blocking_seen(seen, date.today(), self.legacy_recontact_days)
+        email_index = _email_index(blocking)
+        full_index = _email_index(seen)
         report = SyncReport()
         attempts = 0
         for lead in leads:
             key = cache_key(lead)
-            match_key = match_cache_key(lead, seen, email_index)
+            match_key = match_cache_key(lead, blocking, email_index)
+            if match_key is not None and is_legacy(seen[match_key]):
+                # a legacy-v1 business that is still blocked: legacy pages are never written to
+                report.legacy_blocked.append(lead)
+                continue
             if match_key is not None:
                 entry = seen[match_key]
                 new_info = _new_info(entry.get("snapshot", {}), lead)
@@ -471,23 +543,36 @@ class NotionSink:
             if limit is not None and attempts >= limit:
                 report.pending += 1
                 continue
+            # no blocking match: a legacy-v1 entry for this business (collectable
+            # again) gets a new page linking back to the old one
+            legacy_key = match_cache_key(lead, seen, full_index)
+            legacy_page = (
+                seen[legacy_key]["page_id"] if legacy_key is not None and is_legacy(seen[legacy_key]) else None
+            )
             if attempts and self.delay_s:
                 time.sleep(self.delay_s)
             attempts += 1
             try:
-                page_id = self._create_page(lead)
+                page_id = self._create_page(lead, notion_page_url(legacy_page) if legacy_page else None)
             except NotionAuthError:
                 raise
             except Exception as e:
                 report.failed.append((lead, str(e)))
                 continue
-            seen[key] = {
+            entry = {
                 "page_id": page_id,
                 "synced_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "snapshot": _snapshot(lead),
+                "campaign": select_name(lead.niche),
             }
+            if legacy_page:
+                entry["legacy_page_id"] = legacy_page
+                report.relinked.append(lead)
+            seen[key] = entry  # replaces the legacy entry when the key is the same
+            blocking[key] = entry
             for email in email_keys(lead):
                 email_index[email] = key
+                full_index[email] = key
             save_seen(self.cache_path, seen)
             report.created.append(lead)
         return report
@@ -530,16 +615,28 @@ class NotionSink:
         a refresh."""
         seen: dict = {}
         for page in self.query_pages():
-            snapshot = _snapshot_from_properties(page.get("properties", {}))
+            props = page.get("properties", {})
+            snapshot = _snapshot_from_properties(props)
             if snapshot["domain"]:
                 key = f"domain:{snapshot['domain']}"
             elif snapshot["company"]:
                 key = f"company:{snapshot['company'].lower()}"
             else:
                 continue  # untitled page — nothing to key on
-            seen.setdefault(
-                key, {"page_id": page["id"], "synced_at": None, "snapshot": snapshot}
-            )
+            entry = {
+                "page_id": page["id"], "synced_at": None, "snapshot": snapshot,
+                "campaign": _select_name(props.get("Campaign")),
+            }
+            if is_legacy(entry):
+                entry["legacy"] = legacy_info(props)
+            old = seen.get(key)
+            if old is None:
+                seen[key] = entry
+            elif is_legacy(old) and not is_legacy(entry):
+                # the business is back in a new campaign: the new page is the live one
+                seen[key] = {**entry, "legacy_page_id": old["page_id"]}
+            elif is_legacy(entry) and not is_legacy(old):
+                old.setdefault("legacy_page_id", entry["page_id"])
         save_seen(self.cache_path, seen)
         return len(seen)
 
@@ -564,7 +661,8 @@ class NotionSink:
     ) -> list[dict]:
         """Pages drafting may pick up (script_edits.md §11.2), oldest first:
         Qualified checked, Status Not started or blank, Draft Message empty, Verdict
-        not Skip, Tier empty or at least min_tier. An empty Tier stays eligible: a
+        not Skip, Tier empty or at least min_tier, Campaign not legacy-v1 (empty is
+        fine: hand-made pages have none). An empty Tier stays eligible: a
         hand-made or backfilled page has none. SM Audit is optional. Market and
         Industry are checked by the caller, so a page missing them is reported
         instead of silently left out.
@@ -590,6 +688,10 @@ class NotionSink:
             ]},
             {"or": [{"property": "Tier", "select": {"is_empty": True}}] + [
                 {"property": "Tier", "select": {"equals": t}} for t in tiers
+            ]},
+            {"or": [
+                {"property": "Campaign", "select": {"is_empty": True}},
+                {"property": "Campaign", "select": {"does_not_equal": LEGACY_CAMPAIGN}},
             ]},
         ]
         if not redraft:
@@ -626,10 +728,10 @@ class NotionSink:
             raise RuntimeError(f"Notion API {response.status_code}: {response.text[:200]}")
         time.sleep(self.delay_s)
 
-    def _create_page(self, lead: Lead) -> str:
+    def _create_page(self, lead: Lead, legacy_url: str | None = None) -> str:
         payload = {
             "parent": {"database_id": self.database_id},
-            "properties": to_notion_properties(lead),
+            "properties": to_notion_properties(lead, legacy_url),
         }
         return self._post(f"{API_BASE}/pages", payload)["id"]
 

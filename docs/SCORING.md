@@ -268,8 +268,10 @@ shared across markets.
 ## 11. Retuning
 
 Calibration replaces guesswork (PIPELINE.md §7). `python -m pipeline.runner score-report
-[--market X] [--niche Y] [--min-band N]` prints the tables below from Notion + JSONL (read only);
-groups under `score_report.min_band` (30) are marked "not enough data":
+[--market X] [--niche Y] [--campaign Z] [--include-legacy] [--min-band N]` prints the tables below from
+Notion + JSONL (read only); groups under `score_report.min_band` (30) are marked "not enough data".
+Pages with `Campaign = legacy-v1` (the earlier niche and offer, docs/ROADMAP.md) are left out unless
+`--include-legacy`; `--campaign Z` reports only that cohort (`legacy-v1` included when named):
 
 - **L1 vs L2** (after ~50 drafts): send/skip rate by tier, `lead_type`,
   niche, market; `Skip Reason` counts. Healthy: skip rate rises A → C. A

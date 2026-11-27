@@ -62,6 +62,7 @@ class PageRow:
     market: str = UNKNOWN
     niche: str = UNKNOWN
     confidence: str = UNKNOWN
+    campaign: str = ""  # Notion Campaign select; "" on hand-made pages
     skip_reason: str = ""
     channel: str = UNKNOWN  # sent pages: latest SENT line, else Suggested Channel
     channel_fallback: bool = False  # True = channel came from Suggested Channel
@@ -148,6 +149,7 @@ def page_row(page: dict, lead=None) -> PageRow | None:
         market=pick(_select(props, "Market").strip().lower(), "market"),
         niche=pick(_select(props, "Industry"), "niche"),
         confidence=(getattr(lead, "score_confidence", None) or UNKNOWN),
+        campaign=_select(props, "Campaign"),
     )
     if state == "skipped":
         row.skip_reason = _select(props, "Skip Reason") or "(none)"
@@ -164,6 +166,14 @@ def page_row(page: dict, lead=None) -> PageRow | None:
         )
         row.meeting = outcome in _MEETING_OUTCOMES
     return row
+
+
+def keep_campaign(row: PageRow, campaign: str, include_legacy: bool, legacy: str) -> bool:
+    """Cohort filter: campaign keeps only that Campaign (the legacy one too, when
+    named); otherwise the legacy cohort is left out unless include_legacy."""
+    if campaign:
+        return row.campaign == campaign
+    return include_legacy or row.campaign != legacy
 
 
 # --- tables -----------------------------------------------------------------------

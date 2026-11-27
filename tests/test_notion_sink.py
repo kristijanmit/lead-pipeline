@@ -4,6 +4,7 @@ Notion query per lead (docs/ARCHITECTURE.md §9). No live network — a fake
 session stands in for requests."""
 
 import json
+from datetime import date
 
 import pytest
 
@@ -12,7 +13,11 @@ from pipeline.schema import Lead
 from pipeline.sinks.notion_sink import (
     NotionAuthError,
     NotionSink,
+    blocking_seen,
     cache_key,
+    is_legacy,
+    legacy_block_reason,
+    legacy_info,
     load_seen,
     save_seen,
     to_notion_properties,
@@ -575,7 +580,7 @@ def _or_values(condition):
 def test_query_draftable_filter_follows_auto_draft_eligibility(monkeypatch):
     sink, sent = _draftable_sink(monkeypatch)
     sink.query_draftable()
-    status, qualified, verdict, tier, draft = _conditions(sent[-1])
+    status, qualified, verdict, tier, campaign, draft = _conditions(sent[-1])
     assert _or_values(status) == [("Status", {"equals": "Not started"}), ("Status", {"is_empty": True})]
     assert qualified == {"property": "Qualified", "checkbox": {"equals": True}}
     # an empty Verdict must pass: Skip is the only value that stops a page
@@ -583,6 +588,10 @@ def test_query_draftable_filter_follows_auto_draft_eligibility(monkeypatch):
     # empty Tier (hand-made / backfilled page) stays eligible; default minimum B
     assert _or_values(tier) == [
         ("Tier", {"is_empty": True}), ("Tier", {"equals": "A"}), ("Tier", {"equals": "B"}),
+    ]
+    # legacy-v1 is never drafted; an empty Campaign (hand-made page) still is
+    assert _or_values(campaign) == [
+        ("Campaign", {"is_empty": True}), ("Campaign", {"does_not_equal": "legacy-v1"}),
     ]
     assert draft == {"property": "Draft Message", "rich_text": {"is_empty": True}}
     assert "SM Audit" not in json.dumps(sent[-1])  # the note is optional now
@@ -628,12 +637,13 @@ def test_to_notion_properties_writes_market_niche_and_scores():
     assert props["Language"] == {"select": {"name": "sr"}}
     assert props["Industry"] == {"select": {"name": "dental clinic"}}
     assert props["Niche Label"]["rich_text"][0]["text"]["content"] == "stomatološke ordinacije"
+    assert props["Campaign"] == {"select": {"name": "dental clinic"}}  # the run's niche name
     assert props["Tier"] == {"select": {"name": "B"}}
     assert props["Priority"] == {"number": 64.2}
     assert props["Score Reasons"]["rich_text"][0]["text"]["content"] == (
         "Need 70 · Viability 55.5 · Reach 100 · niche match · no HTTPS · best channel: Instagram"
     )
-    for absent in ("Market", "Language", "Niche Label", "Tier", "Priority", "Score Reasons", "Runs Ads"):
+    for absent in ("Market", "Language", "Niche Label", "Campaign", "Tier", "Priority", "Score Reasons", "Runs Ads"):
         assert absent not in to_notion_properties(_lead())
 
 
@@ -765,3 +775,112 @@ def test_draft_notes_written_at_creation_and_read_back():
     lead = lead_from_page(page)
     assert lead.draft_notes == "check the slogan"
     assert lead.draft_message == ""  # never read back: an old draft must not pass for a new one
+
+
+# --- legacy-v1: collectable again, blocked by status / outcome / cooldown ---
+TODAY = date(2026, 12, 1)
+
+
+@pytest.mark.parametrize("info, reason", [
+    ({}, None),
+    ({"status": "Sent", "last_contacted": "2026-08-01"}, None),          # 122 days: past cooldown
+    ({"status": "Sent", "last_contacted": "2026-09-02"}, "cooldown"),    # exactly 90 days: still blocked
+    ({"status": "Sent", "last_contacted": "2026-09-01"}, None),          # 91 days
+    ({"status": "Closed"}, "status"),
+    ({"status": "Replied"}, "status"),
+    ({"status": "Dead", "outcome": "declined"}, "status"),
+    ({"outcome": "no_reply"}, None),
+    *[({"outcome": o}, "status") for o in ("won", "replied", "meeting", "proposal")],
+])
+def test_legacy_block_reason(info, reason):
+    assert legacy_block_reason(info, TODAY, 90) == reason
+
+
+def test_legacy_info_reads_page():
+    props = {"Status": {"select": {"name": "Sent"}}, "Outcome": {"select": None},
+             "Last Contacted": {"date": {"start": "2026-10-31T10:00:00.000+01:00"}}}
+    assert legacy_info(props) == {"status": "Sent", "outcome": "", "last_contacted": "2026-10-31"}
+
+
+def test_blocking_seen_keeps_non_legacy_and_blocked_legacy():
+    seen = {
+        "domain:new.rs": {"page_id": "a", "campaign": "salon"},
+        "domain:old-cache.rs": {"page_id": "b"},  # written before campaigns: still blocks
+        "domain:free.rs": {"page_id": "c", "campaign": "legacy-v1", "legacy": {"status": "Sent"}},
+        "domain:won.rs": {"page_id": "d", "campaign": "legacy-v1", "legacy": {"outcome": "won"}},
+    }
+    assert set(blocking_seen(seen, TODAY, 90)) == {"domain:new.rs", "domain:old-cache.rs", "domain:won.rs"}
+
+
+def _legacy_seen(tmp_path, entries):
+    save_seen(tmp_path / "seen_domains.json", entries)
+
+
+def test_unblocked_legacy_business_gets_a_new_page_linking_the_old_one(tmp_path):
+    sink, session = _sink(tmp_path, [FakeResponse(200, {"id": "new-page"})])
+    _legacy_seen(tmp_path, {"domain:a.rs": {
+        "page_id": "1111-2222", "campaign": "legacy-v1", "legacy": {"status": "Sent"},
+        "snapshot": {"emails": [], "phones": [], "socials": {}, "domain": "a.rs", "company": "A"},
+    }})
+    report = sink.write([_lead("A", "a.rs", niche="frizerski salon")])
+    assert [lead.company for lead in report.created] == ["A"] and len(report.relinked) == 1
+    props = session.calls[0]["json"]["properties"]
+    assert props["Campaign"] == {"select": {"name": "frizerski salon"}}
+    assert props["Notes"]["rich_text"][0]["text"]["content"] == "legacy-v1: https://www.notion.so/11112222"
+    entry = load_seen(sink.cache_path)["domain:a.rs"]
+    assert entry["page_id"] == "new-page" and entry["campaign"] == "frizerski salon"
+    assert entry["legacy_page_id"] == "1111-2222"
+    # the business now blocks as a live page: a second sync is a cache hit
+    assert sink.write([_lead("A", "a.rs", niche="frizerski salon")]).cached
+
+
+def test_legacy_match_by_email_also_links(tmp_path):
+    sink, session = _sink(tmp_path, [FakeResponse(200, {"id": "new-page"})])
+    _legacy_seen(tmp_path, {"company:old name": {
+        "page_id": "old", "campaign": "legacy-v1", "legacy": {},
+        "snapshot": {"emails": ["info@a.rs"], "phones": [], "socials": {}, "domain": "", "company": "Old Name"},
+    }})
+    report = sink.write([_lead("A", "a.rs", contact_emails=["info@a.rs"], niche="salon")])
+    assert len(report.relinked) == 1
+    assert "legacy-v1: https://www.notion.so/old" in json.dumps(session.calls[0]["json"])
+    seen = load_seen(sink.cache_path)
+    assert seen["domain:a.rs"]["legacy_page_id"] == "old" and is_legacy(seen["company:old name"])
+
+
+@pytest.mark.parametrize("legacy", [{"status": "Closed"}, {"outcome": "meeting"},
+                                     {"status": "Sent", "last_contacted": date.today().isoformat()}])
+def test_blocked_legacy_business_is_not_synced_or_commented(tmp_path, legacy):
+    sink, session = _sink(tmp_path, [])
+    _legacy_seen(tmp_path, {"domain:a.rs": {
+        "page_id": "old", "campaign": "legacy-v1", "legacy": legacy,
+        "snapshot": {"emails": [], "phones": [], "socials": {}, "domain": "a.rs", "company": "A"},
+    }})
+    report = sink.write([_lead("A", "a.rs", contact_emails=["new@a.rs"])])
+    assert len(report.legacy_blocked) == 1 and not report.created and not report.cached
+    assert session.calls == []  # no page, no comment on the legacy page
+
+
+def test_refresh_cache_prefers_the_live_page_over_legacy(tmp_path):
+    def page(page_id, campaign, **extra):
+        props = {"Domain": {"url": "a.rs"}, "Company": {"title": [{"plain_text": "A"}]},
+                 "Campaign": {"select": {"name": campaign} if campaign else None}, **extra}
+        return {"id": page_id, "properties": props}
+
+    legacy = page("old", "legacy-v1", Status={"select": {"name": "Closed"}})
+    for order in ([legacy, page("new", "salon")], [page("new", "salon"), legacy]):
+        sink, _ = _sink(tmp_path, [FakeResponse(200, {"results": order, "has_more": False})])
+        sink.refresh_cache()
+        entry = load_seen(sink.cache_path)["domain:a.rs"]
+        assert (entry["page_id"], entry["campaign"], entry["legacy_page_id"]) == ("new", "salon", "old")
+    sink, _ = _sink(tmp_path, [FakeResponse(200, {"results": [legacy], "has_more": False})])
+    sink.refresh_cache()
+    entry = load_seen(sink.cache_path)["domain:a.rs"]
+    assert entry["campaign"] == "legacy-v1" and entry["legacy"]["status"] == "Closed"
+
+
+def test_legacy_recontact_days_validated(tmp_path):
+    from pipeline.config import ConfigError, load_config
+
+    (tmp_path / "c.yaml").write_text("notion:\n  legacy_recontact_days: -1\n")
+    with pytest.raises(ConfigError, match="legacy_recontact_days"):
+        load_config(tmp_path / "c.yaml")
