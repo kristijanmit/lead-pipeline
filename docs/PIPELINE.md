@@ -163,8 +163,10 @@ Worth building only once real messages are logged.
 - **Reply drafts** (idea): classify the latest REPLY into send-me-more / "we have a site" / no budget /
   price, draft an answer. Needs approved price, reference and call slots in `config.yaml` `outreach`.
 - **Prompt feedback**: edits you make to drafts in Notion → new approved examples in `config/outreach.{language}.md`.
-- **Scoring retune** (Phase 3/6): after the first real batch, compare reply rate by `lead_type`, channel,
-  industry and score band; adjust weights per docs/SCORING.md §7, bump `scoring_version`.
+- **Scoring retune** (Phase 3/6): `score-report` (built, v2 step 10) prints the calibration tables: send / skip
+  rate by tier, `lead_type`, market, niche and confidence, `Skip Reason` counts, reply / meeting rate by tier,
+  market, niche and channel, and the A/B rule (≥ 8 replies and ~2× the other arm) for markets and niches, with
+  "not enough data" under 30 per group. Act on it per docs/SCORING.md §11, bump `scoring_version`.
 
 ---
 

@@ -94,6 +94,11 @@ because querying the full database per invocation is exactly the
 per-lead-live-query cost the cache exists to avoid (ARCHITECTURE.md §9);
 it's a deliberate, occasional reconciliation step instead.
 
+The full-database walk is `NotionSink.query_pages()` (read only, 100 pages per
+request). `score-report` uses it too: one read of every page, joined to the
+latest JSONL row per page through this cache; it never writes to Notion
+(docs/SCORING.md §11).
+
 ### 3.3 Failure handling
 
 - Per-lead API failures (page creation, or a comment post on a cache hit)

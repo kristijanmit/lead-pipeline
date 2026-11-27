@@ -31,6 +31,7 @@ from pipeline.market import Market, load_market, market_from_prompts, market_yam
 from pipeline.niche import Niche, check_sources, load_niche_file
 from pipeline.reports import build_report, findings, markdown_to_html, skip_reason
 from pipeline.reports.audit_report import positives
+from pipeline.reports.score_report import Settings, format_report, page_row
 from pipeline.schema import read_jsonl, write_jsonl
 from pipeline.scoring import score
 from pipeline.sinks import get_sink
@@ -1004,16 +1005,14 @@ def _auto_draft(args: argparse.Namespace) -> int:
     return EXIT_OUT_OF_CREDITS if tally.out_of_credits else 0
 
 
-def _jsonl_by_page(sink) -> tuple[dict[str, object], dict[str, Niche | None]]:
-    """page_id -> latest JSONL lead (via the sync cache key, then the email index,
-    like --rescore), and run_id -> that run's niche. draft-notion drafts from these
-    when it can, so pages a run left undrafted keep their profile_facts, niche_label
-    and niche question. Any scored row counts (scored, disqualified, synced): a
-    re-scored run resets "synced" to "scored", and that must not cut it off."""
+def _latest_rows_by_page(sink) -> dict[str, object]:
+    """page_id -> latest JSONL lead across all runs (G16): each row is matched to
+    its page via the sync cache key, then the email index, like --rescore. Any
+    scored row counts (scored, disqualified, synced): a re-scored run resets
+    "synced" to "scored", and that must not cut it off."""
     seen = load_seen(sink.cache_path)
     index = _email_index(seen)
     rows: dict[str, object] = {}
-    niches: dict[str, Niche | None] = {}
     for path in sorted(RUNS_DIR.glob("*/scored.jsonl")):  # run ids sort by time: later wins
         for lead in read_jsonl(path):
             if lead.status not in _SCORED_STATUSES:
@@ -1021,6 +1020,15 @@ def _jsonl_by_page(sink) -> tuple[dict[str, object], dict[str, Niche | None]]:
             key = match_cache_key(lead, seen, index)
             if key and seen[key].get("page_id"):
                 rows[seen[key]["page_id"]] = lead
+    return rows
+
+
+def _jsonl_by_page(sink) -> tuple[dict[str, object], dict[str, Niche | None]]:
+    """page_id -> latest JSONL lead (_latest_rows_by_page), and run_id -> that run's
+    niche. draft-notion drafts from these when it can, so pages a run left undrafted
+    keep their profile_facts, niche_label and niche question."""
+    rows = _latest_rows_by_page(sink)
+    niches: dict[str, Niche | None] = {}
     for lead in rows.values():
         if lead.run_id not in niches:
             niches[lead.run_id] = _score_niche(RUNS_DIR / lead.run_id) if lead.run_id else None
@@ -1157,6 +1165,42 @@ def _cmd_rescore(args: argparse.Namespace, config: dict, sink) -> int:
         print(f"  {no_source} Notion pages have no v4 JSONL row (hand-made, or run not re-scored): not updated")
     if report.pending:
         print(f"  {report.pending} beyond --limit left for the next run")
+    return 0
+
+
+def cmd_score_report(args: argparse.Namespace) -> int:
+    """Calibration tables (PIPELINE.md §7): send/skip rate by tier, lead_type,
+    market, niche and confidence; Skip Reason counts; reply/meeting rate by tier,
+    market, niche and channel; the A/B rule for markets and niches. Reads every
+    Notion page (read only) and the latest JSONL row per page. Writes nothing."""
+    config = load_config(args.config)
+    cfg = config["score_report"]
+    settings = Settings(
+        min_band=args.min_band or cfg["min_band"],
+        ab_min_replies=cfg["ab_min_replies"],
+        ab_ratio=float(cfg["ab_ratio"]),
+    )
+    sink = get_sink("notion", config)
+    pages = sink.query_pages()
+    leads = _latest_rows_by_page(sink)
+    rows, left_out = [], 0
+    for page in pages:
+        row = page_row(page, leads.get(page.get("id")))
+        if row is None:
+            left_out += 1
+            continue
+        if args.market and row.market != args.market.strip().lower():
+            continue
+        if args.niche and row.niche != args.niche:
+            continue
+        rows.append(row)
+    scope = ", ".join(f"{k} {v}" for k, v in (("market", args.market), ("niche", args.niche)) if v)
+    if scope:
+        print(f"filtered to {scope}")
+    if not rows:
+        print(f"score-report: no drafted, sent or skipped pages yet ({len(pages)} pages read)")
+        return 0
+    print(format_report(rows, settings, left_out=left_out), end="")
     return 0
 
 
@@ -1724,6 +1768,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--yes", action="store_true", help="write even when outreach.auto_draft is off (default then: dry run)"
     )
     dn_cmd.set_defaults(func=cmd_draft_notion)
+
+    sr_cmd = sub.add_parser(
+        "score-report",
+        help="calibration tables from Notion + JSONL: send/skip rate by tier / market / niche, "
+        "Skip Reason counts, reply rates, the A/B rule (read only)",
+    )
+    sr_cmd.add_argument("--market", help="only pages of this market (preset id, e.g. serbia)")
+    sr_cmd.add_argument("--niche", help="only pages whose Industry (niche name) is exactly this")
+    sr_cmd.add_argument(
+        "--min-band", type=int,
+        help="groups smaller than this print as not enough data (default score_report.min_band, 30)",
+    )
+    sr_cmd.set_defaults(func=cmd_score_report)
 
     sync_cmd = sub.add_parser(
         "sync", help="push scored leads to a sink, deduped via the local cache"

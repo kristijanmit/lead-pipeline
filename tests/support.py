@@ -105,6 +105,9 @@ class FakeNotion:
             out.append({"id": page_id, "properties": props})
         return out[:limit] if limit is not None else out
 
+    def query_pages(self):
+        return [{"id": page_id, "properties": props} for page_id, props in self.pages.items()]
+
     def update_page(self, page_id, properties):
         self.updates.append((page_id, properties))
         self.pages[page_id].update({k: _plain(v) for k, v in properties.items()})
