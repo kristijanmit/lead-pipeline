@@ -791,6 +791,8 @@ def cmd_draft_notion(args: argparse.Namespace) -> int:
             update = {
                 "Suggested Channel": {"select": {"name": out.suggested_channel}},
                 "Draft Message": _text(out.draft_message[:2000]),
+                # always sent: a redraft must not leave the old draft's note behind
+                "Draft Notes": _text(out.draft_notes[:2000]) if out.draft_notes else {"rich_text": []},
             }
             if _select_name(props.get("Status")) in ("Not started", ""):
                 update["Status"] = {"select": {"name": "Queued"}}

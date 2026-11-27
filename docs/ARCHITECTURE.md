@@ -274,6 +274,7 @@ has to flatten a few `Lead` fields deliberately rather than fail on them:
 | `niche_label`                                           | `Niche Label` (Rich text)       | The niche's draft phrase; read back by `draft-notion` (falls back to `Industry`)                                                                         |
 | `tier`, `priority`                                      | `Tier` (Select A–D), `Priority` (Number) | Scorer v4; only sent when set                                                                                                                    |
 | `need_score`, `viability_score`, `reach_score`, `score_reasons` | `Score Reasons` (Rich text) | One line: `Need 70 · Viability 55.5 · Reach 100 · <reasons>` (no sub-score columns, G13). Never passed to drafting                                    |
+| `draft_notes`                                           | `Draft Notes` (Rich text)       | The drafter's "verify before sending" note; only sent when set. Read back by `lead_from_page` (`Draft Message` is not read back) |
 | `ads_tags`                                              | `Runs Ads` (Checkbox)           | Page creation only: checked if any tag was found. Not in `score_properties`, so `--rescore` never overwrites your manual value                          |
 | `schema_version`, `scoring_version`, `run_id`, `errors` | _(none)_                        | Deliberately not synced — Notion is a sink for humans to act on, not the source of truth; this bookkeeping stays in the JSONL manifest where it's queryable |
 

@@ -26,6 +26,7 @@ before `sync`. Edits you make in Notion are not copied back to the run's JSONL.
 | `Status` = Queued | qualified lead with a draft (else `Not started`) |
 | `Suggested Channel` | always for a drafted lead |
 | `Draft Message` | always for a drafted lead |
+| `Draft Notes` | the "verify before sending" note; `draft-notion` always sends it, so a redraft clears an old note |
 
 Never written: `Chosen Channel`, `Last Contacted`, `Communication`, `Notes`, `Contact Name`, `Follow-up date`.
 With `draft --run` the fields are written only when a Notion page is created (existing pages are skipped by

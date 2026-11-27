@@ -381,6 +381,7 @@ def test_draft_notion_overwrite_needs_redraft_flag(monkeypatch, capsys):
     assert sink.queries == [(False, "B"), (True, "B")]  # min tier from outreach.auto_draft_min_tier
     assert sink.updates[0]["Draft Message"]["rich_text"][0]["text"]["content"] == "Pozdrav, nova poruka?"
     assert "Status" not in sink.updates[0]  # already Queued
+    assert sink.updates[0]["Draft Notes"] == {"rich_text": []}  # old note cleared on a redraft
     del page["properties"]["Status"]  # blank status counts as Not started
     assert runner.cmd_draft_notion(_draft_notion_args(redraft=True)) == 0
     assert sink.updates[1]["Status"] == {"select": {"name": "Queued"}}
@@ -397,11 +398,13 @@ def test_draft_notion_skips_pages_without_market_or_industry(monkeypatch, capsys
     monkeypatch.setattr(runner, "get_sink", lambda *a: sink)
     drafted = []
     monkeypatch.setattr(runner, "draft_lead", lambda lead, *a, **k: drafted.append(lead) or replace(
-        lead, suggested_channel="Instagram", draft_message="Pozdrav, kako Vam stižu upiti?"))
+        lead, suggested_channel="Instagram", draft_message="Pozdrav, kako Vam stižu upiti?",
+        draft_notes="no concrete detail found"))
 
     # --limit counts drafts, so the skipped pages don't use it up
     assert runner.cmd_draft_notion(_draft_notion_args(limit=1)) == 0
     assert len(drafted) == 1 and drafted[0].market == "serbia" and drafted[0].niche == "hairdresser"
+    assert sink.updates[0]["Draft Notes"]["rich_text"][0]["text"]["content"] == "no concrete detail found"
     out = capsys.readouterr().out
     assert "no Market" in out and "no Industry" in out
     assert "2 skipped, not drafted: set Market and Industry on the page" in out

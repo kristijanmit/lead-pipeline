@@ -39,6 +39,8 @@ def plan_update(lead: Lead, page: dict) -> dict | None:
         "Suggested Channel": {"select": {"name": lead.suggested_channel}},
         "Draft Message": _text(lead.draft_message[:2000]),
     }
+    if lead.draft_notes:
+        update["Draft Notes"] = _text(lead.draft_notes[:2000])
     status = (props["Status"]["select"] or {}).get("name")
     if status == "Not started" and lead.qualified:
         update["Status"] = {"select": {"name": "Queued"}}

@@ -751,3 +751,17 @@ def test_rescore_auth_failure_stops_the_batch(tmp_path):
     save_seen(sink.cache_path, {"domain:bobic.rs": {"page_id": "p", "snapshot": {}}})
     with pytest.raises(NotionAuthError):
         sink.rescore([_v4_lead()])
+
+
+def test_draft_notes_written_at_creation_and_read_back():
+    from pipeline.sinks.notion_sink import lead_from_page
+
+    props = to_notion_properties(_lead(draft_message="Pozdrav?", draft_notes="check the slogan"))
+    assert props["Draft Notes"]["rich_text"][0]["text"]["content"] == "check the slogan"
+    assert "Draft Notes" not in to_notion_properties(_lead())
+    page = _manual_page()
+    page["properties"]["Draft Notes"] = {"rich_text": [{"plain_text": "check the slogan"}]}
+    page["properties"]["Draft Message"] = {"rich_text": [{"plain_text": "old draft"}]}
+    lead = lead_from_page(page)
+    assert lead.draft_notes == "check the slogan"
+    assert lead.draft_message == ""  # never read back: an old draft must not pass for a new one

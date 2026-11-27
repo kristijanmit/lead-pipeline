@@ -162,6 +162,8 @@ def to_notion_properties(lead: Lead) -> dict:
         props["Suggested Channel"] = {"select": {"name": lead.suggested_channel}}
     if lead.draft_message:
         props["Draft Message"] = _text(lead.draft_message[:2000])
+    if lead.draft_notes:
+        props["Draft Notes"] = _text(lead.draft_notes[:2000])
     if lead.address:
         props["Address"] = _text(lead.address)
     if lead.rating is not None:
@@ -360,6 +362,9 @@ def lead_from_page(page: dict, country: str = "") -> Lead:
         audit_notes=_rich_text(props.get("Audit Notes")),
         sm_audit=_rich_text(props.get("SM Audit")),
         suggested_channel=_select_name(props.get("Suggested Channel")),
+        # Draft Message is deliberately not read: draft_lead returns a lead without
+        # contact data unchanged, and an old draft must not pass for a new one
+        draft_notes=_rich_text(props.get("Draft Notes")),
         status="scored",
     )
 
