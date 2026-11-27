@@ -35,3 +35,11 @@ def test_never_overwrites_an_existing_draft():
 
 def test_leaves_status_alone_unless_not_started():
     assert "Status" not in mod.plan_update(_lead(), _page(status="Sent"))
+
+
+def test_writes_draft_notes_when_present():
+    from dataclasses import replace
+
+    assert "Draft Notes" not in mod.plan_update(_lead(), _page())
+    u = mod.plan_update(replace(_lead(), draft_notes="check the slogan"), _page())
+    assert u["Draft Notes"]["rich_text"][0]["text"]["content"] == "check the slogan"

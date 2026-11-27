@@ -20,8 +20,8 @@ properly" means in practice.
   `outreach.industry_labels`, `--categories`, `--country`.
 - Step 2 done: shared `pipeline/channels.py` with market rules: channel order, mobile prefixes (local
   numbers normalized with the dialing code), first-touch exclusions (UAE WhatsApp), labels per market, and
-  LinkedIn as a channel. `drafting/channel.py` re-exports it. Drafting takes the lead's market. Until step 6
-  there's a counted Serbia fallback for leads/pages without a market. `en`-market leads are skipped until
+  LinkedIn as a channel. `drafting/channel.py` re-exports it. Drafting takes the lead's market (the Serbia
+  fallback for leads/pages without one was removed in step 6). `en`-market leads are skipped until
   step 7.
 - Step 3 done: shared audit core `pipeline/audit.py` (probe and Lighthouse separate, signals from the probe
   HTML: `site_reachable` + `probe_error` kind, `copyright_year` incl. "sva prava zadržana", viewport, booking,
@@ -45,7 +45,16 @@ properly" means in practice.
   tiers, reasons, confidence, per-market values); v4 changelog records D2 dropped and industry Fit removed.
 - Website links that aren't the lead's own site (TikTok, YouTube, X, Threads, Linktree, wa.me, Viber, Google Maps /
   g.page / goo.gl) now count as no website (`dedupe.NON_SITE_HOSTS`): kept as a social link, never audited.
-- Next: step 6 (Notion: Tier, Priority, Score Reasons, `--min-tier`, `--rescore`).
+- Step 6 done (branch `v2-step6-notion`): `to_notion_properties` writes `Market`, `Language`, `Niche Label`, `Tier`,
+  `Priority`, `Score Reasons` (sub-scores + reasons, one line) and prefills `Runs Ads` from `ads_tags` at page
+  creation. `score_properties` (Tier, Priority, Score Reasons, Qualified, Lead Type, Audit Notes) is all
+  `sync --rescore` writes; without `--run` it takes every run's latest v4 row and reports pages with no source.
+  `sync --min-tier` (default C). `lead_from_page` reads Market / Language / Niche Label / Tier / Priority / Score
+  Reasons. `query_draftable` follows §11.2 (no SM Audit gate, Verdict ≠ Skip, Tier empty or ≥
+  `outreach.auto_draft_min_tier`); `draft-notion --all` removed; the Serbia market fallback is gone (no market =
+  skipped). Open: you add the Notion properties and run the migration (Market = serbia, Language = sr), then
+  `sync --rescore --limit 10`.
+- Next: step 7 (drafting rule sets sr/en, examples per language, offer slot).
 
 **Done**
 - Phases 1-4: collect (OSM, Google Maps, manual CSV), enrich (contacts + Lighthouse), score, Notion sync with

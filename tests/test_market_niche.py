@@ -119,3 +119,9 @@ def test_v9_jsonl_loads_with_empty_market_fields():
     assert SCHEMA_VERSION >= 10
     lead = Lead.from_dict({"company": "A", "domain": "a.rs", "source": "osm", "schema_version": 9})
     assert (lead.market, lead.language, lead.niche, lead.niche_label) == ("", "", "", "")
+
+
+def test_auto_draft_min_tier_defaults_to_b_and_is_validated(tmp_path):
+    assert _config(tmp_path, "")["outreach"]["auto_draft_min_tier"] == "B"
+    with pytest.raises(ConfigError, match="auto_draft_min_tier must be A, B or C"):
+        _config(tmp_path, "outreach:\n  auto_draft_min_tier: D\n")

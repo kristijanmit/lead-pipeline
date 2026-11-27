@@ -236,7 +236,7 @@ Same as v1: a `followup` stage, Notion-first, dry-run unless `--yes`. SENT with 
 follow-up draft, `Follow-up date`, Status `Follow-up due`. Still nothing after the follow-up → `Dead`.
 
 **[new]** It also writes the L3 field `Outcome`, derived from the log:
-`no_reply` (Dead) · `declined` · `replied` · `meeting` · `won`. The tags `declined` / `meeting` / `won`
+`no_reply` (Dead) · `declined` · `replied` · `meeting` · `proposal` · `won` · `lost`. The tags `declined` / `meeting` / `proposal` / `won` / `lost`
 come from you, either by hand or through a `REPLY:` keyword convention in `Communication`.
 Allowed writes: Status, Suggested Channel, Draft Message, Follow-up date, Outcome. It never touches
 `Communication`, `Last Contacted`, `Chosen Channel`, `Notes`, `Verdict`, or `SM Audit`.
@@ -345,7 +345,7 @@ for comparison, then removed.
 
 `Lead.status`: `collected` → `enriched` | `enrich_failed` → `scored` | `disqualified` → `synced`.
 Notion `Status`: `Not started` → (auto draft) → `Queued` | `Draft failed` → (sent) → `Follow-up due` → `Dead`, or a reply.
-Notion `Verdict`: optional, `Skip` stops all further work on a page. Notion `Outcome`: no_reply / declined / replied / meeting / won.
+Notion `Verdict`: optional, `Skip` stops all further work on a page. Notion `Outcome`: no_reply / declined / replied / meeting / proposal / won / lost (decided 2026-11-27).
 
 ## Principles that hold across every stage
 

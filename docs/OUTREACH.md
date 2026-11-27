@@ -10,9 +10,13 @@ Nothing is ever sent: the pipeline only writes text for you to review.
     draft-notion [--limit N] [--yes]          (dry run first, then --yes)
     you: review the drafts in Notion, send by hand
 
-`draft-notion` reads pages with the `Qualified` box checked, Status `Not started` / `Queued`, an empty `Draft Message` and a filled
-`SM Audit` (your note is the gate, so no AI budget goes to leads you skipped). `--all` also drafts pages without
-a note (generic praise); `--redraft` rewrites existing drafts, e.g. after you improved a note. Drafting inside
+`draft-notion` reads pages per script_edits.md §11.2 (v2 step 6): `Qualified` checked, Status `Not started` (or blank),
+an empty `Draft Message`, `Verdict` not `Skip`, and `Tier` empty or at least `outreach.auto_draft_min_tier`
+(default `B`). An empty Tier stays eligible because hand-made and backfilled pages have none. `SM Audit` is
+optional: when present it is still the first praise source. Pages without `Market` or `Industry` are skipped and
+reported ("set Market and Industry on the page"). `--limit N` caps the pages drafted, not the pages read.
+`--redraft` also rewrites existing drafts (Status `Queued` / `Draft failed` too). Set `Verdict = Skip` on a page
+and drafting never touches it. Drafting inside
 `run` / `batch` is opt-in (`--draft`, or `draft: true` on a batch entry) and is the older flow: `draft --run`
 before `sync`. Edits you make in Notion are not copied back to the run's JSONL.
 
@@ -22,6 +26,7 @@ before `sync`. Edits you make in Notion are not copied back to the run's JSONL.
 | `Status` = Queued | qualified lead with a draft (else `Not started`) |
 | `Suggested Channel` | always for a drafted lead |
 | `Draft Message` | always for a drafted lead |
+| `Draft Notes` | the "verify before sending" note; `draft-notion` always sends it, so a redraft clears an old note |
 
 Never written: `Chosen Channel`, `Last Contacted`, `Communication`, `Notes`, `Contact Name`, `Follow-up date`.
 With `draft --run` the fields are written only when a Notion page is created (existing pages are skipped by
@@ -53,10 +58,10 @@ Phones are normalized with the market's dialing code first (`050…` in the UAE 
 the `linkedin` social link. Placeholder phones/emails are ignored. No usable contact data: no draft,
 counted as `no_contact_data` in the manifest.
 
-Until v2 step 6/7:
-- A lead or Notion page without a market is drafted under the `serbia` preset. `draft` and `draft-notion`
-  print how many did, and `draft` records it as `market_fallback` in the manifest. Removed in step 6, when
-  pages get a `Market` property.
+A lead or Notion page without a market is skipped, never guessed (counted in `skipped_market`). The Notion
+`Market` option is the preset id (`serbia`, `uae`); it is read lowercased.
+
+Until v2 step 7:
 - Leads in an `en` market (UAE) are skipped, not drafted: "English drafting arrives in step 7". They are
   counted (`skipped_market`, `market_skip_reasons` in the manifest) and printed. A lead with a market that
   isn't in config is skipped the same way. LinkedIn is in the ranking, but its two outputs (connection note,
@@ -81,9 +86,11 @@ Follow-ups and reply help are not part of the stage (Phase B).
 
 ## Settings (`config.yaml` -> `outreach`)
 `link_in_first_message`, `site_link`, `named_references`, `price_from`, `signature`, `examples_path`,
+`auto_draft_min_tier` (A/B/C, default B: the lowest Tier drafting picks up).
 Link, references and price stay off until set. The niche phrase in the prompt is the run's `niche_label` (the
-`phrase` from the niche created in `go`); pages drafted from Notion don't carry it yet and use the `Industry`
-value (the niche name) until the `Niche Label` property lands (v2 step 6).
+`phrase` from the niche created in `go`). Sync writes it to the Notion `Niche Label` property and `draft-notion`
+reads it back; a page without one falls back to `Industry` (the niche name). `Score Reasons` is read back too but
+never reaches the prompt.
 Voice references live in `config/outreach.md` (your approved messages): edit that file to change the tone.
 Layout: `## <channel>` sections (Instagram (DM), Facebook, Viber/Whatsapp, SMS / call; Viber/Whatsapp falls back to the Instagram one when it has no section of its own, and has its own prompt rules: Google Maps opener, free-example offer, niche link),
 each with `### alias | alias` niche subsections matched against the lead's industry and a `### generic` fallback.

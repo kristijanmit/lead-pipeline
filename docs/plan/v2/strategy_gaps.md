@@ -90,7 +90,7 @@ go
 | S16 | The audit script / public scanner from the website docs overlaps ~70% with `audit.py` + signals | **One shared audit core** used by enrich, an `audit-report` command (one-page audit per lead) and later the `/provera-sajta` scanner. Language of the report follows the lead's market. |
 | S17 | Per-lead `?ref=` links + UTM convention | `lead_ref` (e.g. `L042`) at sync + Notion `Ref`. UTM campaign built from market + niche, e.g. `uae-dental-w1`. |
 | S18 | 10 validation conversations recorded in Notion | `Booking Method`, `Runs Ads`, `Discovery Notes`. |
-| S19 | A/B test metrics and the decision rule (≥ 8 replies and ~2× the other arm). ~3 replies per 60 audits makes reply-based retuning a long way off | `Outcome` funnel stages (`audit_sent → replied → call → proposal → won/lost`) + `Price Challenged`. `score-report` compares **markets** (Serbia vs UAE) and niches, applies the docs' rule, and prints "not enough data" on small samples. Send/skip decisions (L2) are the main feedback early on. |
+| S19 | A/B test metrics and the decision rule (≥ 8 replies and ~2× the other arm). ~3 replies per 60 audits makes reply-based retuning a long way off | `Outcome` (decided 2026-11-27, same as PIPELINE.md: `no_reply` · `declined` · `replied` · `meeting` · `proposal` · `won` · `lost`) + `Price Challenged`. `score-report` compares **markets** (Serbia vs UAE) and niches, applies the docs' rule, and prints "not enough data" on small samples. Send/skip decisions (L2) are the main feedback early on. |
 | S21 | Cold email from onixweblab.com risks the main domain | Email is follow-up only until a separate sending domain exists. That's a per-market channel setting. |
 | S22 | Website plan: first touches by hand | Keep it in the principles. If the Instagram DM automation project is used, limit it to replies. |
 | S23 | Never mention the patient-records platform | Add its terms to both languages' banned phrases. |
@@ -104,7 +104,7 @@ Volume note: drafting is automatic, so the limit is how many drafts you can send
 3. **Audit split + signals** (incl. ads pixels, messaging links) as the **shared audit core**.
 4. Collect: Maps category, listing count, status, Maps language per market, UAE areas.
 5. **Scorer v4**: no industry Fit, niche-match check, per-market reach/review bands, per-market name-pattern gates.
-6. **Notion**: `Market`, `Language` (Industry kept), `Tier`, `Priority`, `Score Reasons`, `Verdict` (optional, Skip only), `Skip Reason`, Status `Draft failed`, `Outcome`, `Ref`, `Booking Method`, `Runs Ads`, `Discovery Notes`, `Price Challenged`. Migration (Market = Serbia, Language = sr, no Verdict migration needed), then `--rescore`.
+6. **Notion**: `Market`, `Language` (Industry kept), `Tier`, `Priority`, `Score Reasons`, `Verdict` (optional, Skip only), `Skip Reason`, Status `Draft failed`, `Outcome`, `Ref`, `Booking Method`, `Runs Ads`, `Discovery Notes`, `Price Challenged`. Migration (Market = `serbia` (the preset id), Language = sr, no Verdict migration needed), then `--rescore`. Plus `Niche Label` (text, script_edits.md §4).
 7. **Drafting rule sets** (sr, en), examples files per language (first drafts written 2026-11-26, you approve), offer slot, banned-terms update.
 8. `audit-report` command from the audit core.
 9. **Auto-drafting** (script_edits.md §11): draft at the end of every run, tier ≥ B, no approval or prompts; old draft-before-review paths replaced. D2 dropped (no "no website always outranks" cap).

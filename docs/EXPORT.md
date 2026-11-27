@@ -20,7 +20,7 @@ class Sink(Protocol):
 it isn't selected by `--sink`, it just always runs) at the end of the
 `score` stage, writing `scored.csv` alongside `scored.jsonl`. Fixed
 column set (company, domain, industry, location, country, source,
-contact info joined with `; `, lead_type, qualified, the three scores,
+contact info joined with `; `, lead_type, qualified, the scores,
 status, errors). It exists for pasting into Sheets or eyeballing a batch
 — **it is a view of the data, never the internal format**; nothing reads
 it back in. If a scoring or schema field needs to show up here, add a
@@ -29,8 +29,11 @@ surface area.
 
 ## 3. NotionSink — the outreach tracker sink
 
-`runner.py sync --run <run_id> --sink notion` reads `scored.jsonl` and
-pushes qualified, unsynced leads into the AGENCY leads Notion database.
+`runner.py sync --run <run_id> --sink notion [--min-tier C]` reads `scored.jsonl` and
+pushes unsynced leads that are qualified **and** at `--min-tier` or better (default
+`C`) into the AGENCY leads Notion database. Tier `D`, disqualified leads and rows
+scored before v4 (no tier) stay in JSONL; the manifest counts them as
+`skipped_below_min_tier` / `skipped_disqualified`.
 
 **Field mapping**: the full `Lead` → Notion property table, including
 which fields are flattened, joined, or omitted, lives in one place —
@@ -108,7 +111,27 @@ it's a deliberate, occasional reconciliation step instead.
   silently burn through the entire batch one failure at a time before the
   operator notices something's wrong.
 
-### 3.4 One-time setup
+### 3.4 `sync --rescore`
+
+`runner.py sync --sink notion --rescore [--run <run_id>] [--limit N]` updates the
+score properties (`score_properties()`: Tier, Priority, Score Reasons, Qualified,
+Lead Type, Audit Notes) on pages that **already exist**. It never creates a page
+and never writes a human field. Use it after a retune (`scoring_version++`, then
+`score --run` on the runs) so Notion catches up.
+
+- Candidates: rows with status `scored`, `disqualified` or `synced`. Re-scoring a
+  run resets synced rows to `scored`, so status alone can't say "in Notion"; the
+  sync cache decides (cache key, then the email index), never a live query.
+- With `--run`: that run's rows, and the counts go to `manifest.json` → `rescore`.
+  Without: every run's `scored.jsonl`, latest row per cache key (run ids sort by
+  time); printed only.
+- Reported, not failed: leads with no page (`no_page`), rows scored before v4
+  (`scored_before_v4` — run `score` on that run first), and, without `--run`, cache
+  entries no v4 row points at (hand-made pages, runs not re-scored).
+- `--limit` caps update attempts. At ~0.35 s per request, 1,000 pages take ~6 min:
+  run `--limit 10` first. A 401/403 stops at once, like sync.
+
+### 3.5 One-time setup
 
 Covered briefly in `README.md`'s Notion setup section — not repeated here.
 Both the integration token and the database id are secrets and live in the

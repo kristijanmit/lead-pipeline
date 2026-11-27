@@ -18,7 +18,7 @@ from support import MARKETS_YAML
 def _lead(company, domain, **kw):
     return Lead(
         company=company, domain=domain, source="osm", status="scored", qualified=True,
-        social_links={"instagram": "https://instagram.com/x"}, **kw,
+        market="serbia", language="sr", social_links={"instagram": "https://instagram.com/x"}, **kw,
     )
 
 
@@ -229,12 +229,12 @@ def test_go_rejects_unknown_source(tmp_path, monkeypatch):
 def test_go_draft_outreach_asks_scope_and_limit(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.yaml").write_text("")
-    answers = iter(["draft", "3", "all", "y"])  # prefix match, redraft, no limit, write
+    answers = iter(["draft", "2", "all", "y"])  # prefix match, redraft, no limit, write
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
     calls = []
-    monkeypatch.setattr(runner, "cmd_draft_notion", lambda a: calls.append((a.yes, a.limit, a.all, a.redraft)) or 0)
+    monkeypatch.setattr(runner, "cmd_draft_notion", lambda a: calls.append((a.yes, a.limit, a.redraft)) or 0)
     assert main(["go"]) == 0
-    assert calls == [(False, None, False, True), (True, None, False, True)]
+    assert calls == [(False, None, True), (True, None, True)]
 
 
 def test_go_single_lead_asks_which_one(tmp_path, monkeypatch):
@@ -243,7 +243,7 @@ def test_go_single_lead_asks_which_one(tmp_path, monkeypatch):
     answers = iter(["2", "1", "Salon Mira", "n"])  # scope, limit 1, company, decline write
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
     calls = []
-    monkeypatch.setattr(runner, "cmd_draft_notion", lambda a: calls.append((a.limit, a.company, a.all)) or 0)
+    monkeypatch.setattr(runner, "cmd_draft_notion", lambda a: calls.append((a.limit, a.company, a.redraft)) or 0)
     assert main(["go", "--source", "notion"]) == 0
     assert calls == [(1, "Salon Mira", True)]
     answers = iter(["1", "1", "auto", "n"])
@@ -257,7 +257,7 @@ def test_go_source_flag_skips_the_menu(tmp_path, monkeypatch):
     answers = iter(["1", "5", "n"])  # scope, limit, decline the write
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
     calls = []
-    monkeypatch.setattr(runner, "cmd_draft_notion", lambda a: calls.append((a.yes, a.limit, a.all)) or 0)
+    monkeypatch.setattr(runner, "cmd_draft_notion", lambda a: calls.append((a.yes, a.limit, a.redraft)) or 0)
     assert main(["go", "--source", "notion"]) == 0
     assert calls == [(False, 5, False)]
 
@@ -335,42 +335,76 @@ def test_run_drafts_only_with_flag(monkeypatch):
     assert [x[0] for x in log] == ["collect", "enrich", "score", "draft", "sync"]
 
 
-def test_draft_notion_overwrite_needs_redraft_flag(monkeypatch, capsys):
-    page = {"id": "p1", "properties": {
+def _notion_page(**extra):
+    props = {
         "Company": {"title": [{"plain_text": "Salon Mira"}]},
         "Industry": {"select": {"name": "hairdresser"}},
+        "Market": {"select": {"name": "serbia"}},
+        "Language": {"select": {"name": "sr"}},
         "Social Links": {"rich_text": [{"plain_text": "Instagram", "href": "https://instagram.com/mira"}]},
-        "SM Audit": {"rich_text": [{"plain_text": "nice photos"}]},
+    }
+    props.update(extra)
+    return {"id": "p1", "properties": props}
+
+
+class _FakeDraftSink:
+    def __init__(self, pages_for):
+        self.pages_for = pages_for  # redraft flag -> pages
+        self.queries, self.updates = [], []
+
+    def query_draftable(self, limit=None, redraft=False, min_tier="B", company="", page_ids=None):
+        self.queries.append((redraft, min_tier))
+        return self.pages_for(redraft)
+
+    def update_page(self, page_id, props):
+        self.updates.append(props)
+
+
+def _draft_notion_args(**extra):
+    return argparse.Namespace(**{
+        "config": "config.yaml", "limit": None, "yes": True, "redraft": False, **extra})
+
+
+def test_draft_notion_overwrite_needs_redraft_flag(monkeypatch, capsys):
+    page = _notion_page(**{
         "Draft Message": {"rich_text": [{"plain_text": "old draft"}]},
         "Status": {"select": {"name": "Queued"}},
-    }}
-    queries, updates = [], []
-
-    class FakeSink:
-        def query_draftable(self, limit, redraft, need_note, company=""):
-            queries.append((redraft, need_note))
-            return [page] if redraft else []
-
-        def update_page(self, page_id, props):
-            updates.append(props)
-
-    monkeypatch.setattr(runner, "get_sink", lambda *a: FakeSink())
+    })
+    sink = _FakeDraftSink(lambda redraft: [page] if redraft else [])
+    monkeypatch.setattr(runner, "get_sink", lambda *a: sink)
     monkeypatch.setattr(runner, "draft_lead", lambda lead, *a, **k: replace(
         lead, suggested_channel="Instagram", draft_message="Pozdrav, nova poruka?"))
-    def base(**extra):
-        return argparse.Namespace(**{
-            "config": "config.yaml", "limit": None, "yes": True, "redraft": False, "all": False, **extra})
 
-    assert runner.cmd_draft_notion(base()) == 0 and updates == []
+    assert runner.cmd_draft_notion(_draft_notion_args()) == 0 and sink.updates == []
     assert "nothing to draft" in capsys.readouterr().out
-    assert runner.cmd_draft_notion(base(redraft=True)) == 0
-    assert queries == [(False, True), (True, True)]
-    assert updates[0]["Draft Message"]["rich_text"][0]["text"]["content"] == "Pozdrav, nova poruka?"
-    assert "Status" not in updates[0]  # already Queued
+    assert runner.cmd_draft_notion(_draft_notion_args(redraft=True)) == 0
+    assert sink.queries == [(False, "B"), (True, "B")]  # min tier from outreach.auto_draft_min_tier
+    assert sink.updates[0]["Draft Message"]["rich_text"][0]["text"]["content"] == "Pozdrav, nova poruka?"
+    assert "Status" not in sink.updates[0]  # already Queued
+    assert sink.updates[0]["Draft Notes"] == {"rich_text": []}  # old note cleared on a redraft
     del page["properties"]["Status"]  # blank status counts as Not started
-    assert runner.cmd_draft_notion(base(redraft=True)) == 0
-    assert updates[1]["Status"] == {"select": {"name": "Queued"}}
+    assert runner.cmd_draft_notion(_draft_notion_args(redraft=True)) == 0
+    assert sink.updates[1]["Status"] == {"select": {"name": "Queued"}}
+    assert "overwrite" in capsys.readouterr().out
+
+
+def test_draft_notion_skips_pages_without_market_or_industry(monkeypatch, capsys):
+    no_market = _notion_page()
+    del no_market["properties"]["Market"]
+    no_industry = _notion_page()
+    del no_industry["properties"]["Industry"]
+    ok = _notion_page()
+    sink = _FakeDraftSink(lambda redraft: [no_market, no_industry, ok])
+    monkeypatch.setattr(runner, "get_sink", lambda *a: sink)
+    drafted = []
+    monkeypatch.setattr(runner, "draft_lead", lambda lead, *a, **k: drafted.append(lead) or replace(
+        lead, suggested_channel="Instagram", draft_message="Pozdrav, kako Vam stižu upiti?",
+        draft_notes="no concrete detail found"))
+
+    # --limit counts drafts, so the skipped pages don't use it up
+    assert runner.cmd_draft_notion(_draft_notion_args(limit=1)) == 0
+    assert len(drafted) == 1 and drafted[0].market == "serbia" and drafted[0].niche == "hairdresser"
+    assert sink.updates[0]["Draft Notes"]["rich_text"][0]["text"]["content"] == "no concrete detail found"
     out = capsys.readouterr().out
-    assert "overwrite" in out
-    # pages carry no Market until step 6: drafted under the Serbia fallback, and counted
-    assert "1 lead(s) had no market and used the 'serbia' market rules" in out
+    assert "no Market" in out and "no Industry" in out
+    assert "2 skipped, not drafted: set Market and Industry on the page" in out

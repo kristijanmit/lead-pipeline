@@ -68,6 +68,9 @@ DEFAULTS: dict = {
         "price_from": "",
         "signature": "Kristijan, ONIX Web Lab, onixweblab.com",
         "examples_path": "config/outreach.md",
+        # lowest Notion Tier drafting picks up (script_edits.md §11.2); a page with
+        # no Tier (hand-made, backfilled) stays eligible
+        "auto_draft_min_tier": "B",
     },
     "notion": {
         "database_id": "",
@@ -236,6 +239,8 @@ def _validate(config: dict, path: Path) -> None:
         isinstance(r, str) for r in outreach["named_references"]
     ):
         raise ConfigError(f"{path}: outreach.named_references must be a list of strings")
+    if outreach.get("auto_draft_min_tier") not in ("A", "B", "C"):
+        raise ConfigError(f"{path}: outreach.auto_draft_min_tier must be A, B or C")
     if "industry_labels" in outreach:
         raise ConfigError(
             f"{path}: outreach.industry_labels was removed — the draft phrase is the niche's "

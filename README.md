@@ -56,8 +56,9 @@ All stages run through `pipeline.runner`:
 | `enrich --run <run_id>` | Find a website for leads listed without one (guessed from the name, verified on the page), then contact scrape, then Lighthouse audit |
 | `score --run <run_id>` | Apply scoring weights from `config.yaml` |
 | `draft --run <run_id>` | Suggest a channel and draft one Serbian first message per qualified lead via the `claude` CLI (your Claude login, drafts only, never sends) — see [`docs/OUTREACH.md`](docs/OUTREACH.md) |
-| `sync --run <run_id> --sink notion` | Push scored leads to Notion (Status Queued, Suggested Channel, Draft Message) |
-| `draft-notion [--limit N] [--company NAME] [--yes] [--all] [--redraft]` | Draft for Notion pages that have an `SM Audit` note and no draft; dry run unless `--yes`. `--all` also pages without a note, `--redraft` rewrites existing drafts |
+| `sync --run <run_id> --sink notion [--min-tier C]` | Push qualified leads at tier ≥ `--min-tier` (default C) to Notion |
+| `sync --sink notion --rescore [--run <run_id>]` | Update only the score properties on pages already in Notion (see [`docs/EXPORT.md`](docs/EXPORT.md) §3.4) |
+| `draft-notion [--limit N] [--company NAME] [--yes] [--redraft]` | Draft for Notion pages with no draft yet (Verdict not Skip, Tier empty or ≥ B, Market and Industry set; `SM Audit` optional); dry run unless `--yes`. `--redraft` rewrites existing drafts |
 | `run [--draft]` | Chains collect, enrich, score and sync (`--draft` adds the draft stage before sync) |
 | `go [--source ...] [--limit N]` | Interactive: pick maps / osm / Notion drafts, answer the prompts, run |
 | `batch --file batches/<name>.yaml [--dry-run] [--pause-s N]` | Runs the listed `run` entries one after another (see below) |
@@ -91,7 +92,7 @@ Two ways in:
 .venv/bin/python -m pipeline.runner run --source maps,manual --market serbia --niche-file niche.yaml \
   --location "Beograd" --input leads_manual.csv   # combine with a scraper
 
-# 2. pages you create by hand in Notion (Source = Manual, notes in SM Audit)
+# 2. pages you create by hand in Notion (Source = Manual, Market + Industry set, notes in SM Audit optional)
 .venv/bin/python -m pipeline.runner draft-notion --limit 5   # dry run, prints drafts
 .venv/bin/python -m pipeline.runner draft-notion --yes       # writes them to Notion
 ```
