@@ -75,3 +75,13 @@ def test_v11_jsonl_loads_without_collect_details():
     again = Lead.from_dict(data)
     assert (again.maps_category, again.business_status, again.listing_count) == (
         "Dentist", "Temporarily closed", 3)
+
+
+def test_v12_jsonl_loads_without_v4_score_fields():
+    lead = Lead.from_dict({"company": "A", "domain": "a.rs", "source": "maps", "schema_version": 12,
+                           "scoring_version": 3, "total_score": 63.0})
+    assert lead.total_score == 63.0  # v3 values stay readable for one version
+    assert (lead.need_score, lead.viability_score, lead.reach_score, lead.priority, lead.tier) == (
+        None, None, None, None, None)
+    assert (lead.niche_match, lead.score_confidence, lead.disqualify_reason) == (None, None, None)
+    assert lead.score_reasons == []

@@ -76,25 +76,40 @@ DEFAULTS: dict = {
         "timeout_s": 30,
         "cache_path": "data/seen_domains.json",
     },
+    # Scorer v4 (docs/plan/v2/PIPELINE.md §3). Per-market values (channel order,
+    # review_strong, exclude_name_patterns) live on the market, not here.
     "scoring": {
-        "version": 3,
-        "reachability": {
-            "has_email": 50,
-            "has_phone": 40,
-            "has_social": 10,
+        "version": 4,
+        "gates": {
+            "chain_listing_min": 3,
+            "exclude_domains": [],
+            "exclude_categories": [],
+            "niche_mismatch": False,
         },
-        "opportunity": {
-            "no_website_score": 90,
-            "audited_score_cap": 85,
-            "no_https_bonus": 10,
-            "not_mobile_friendly_bonus": 10,
-            "lighthouse_weights": {
-                "performance": 0.40,
-                "best_practices": 0.25,
-                "accessibility": 0.20,
-                "seo": 0.15,
+        "weights": {"need": 0.6, "viability": 0.4},
+        "reach_by_rank": [100, 90, 80, 60, 40],
+        "need": {
+            "new_build": {"base": 60, "has_social": 25, "reviews_20plus": 15},
+            "dead_site_base": 50,
+            "redesign": {
+                "not_mobile": 30,
+                "no_https": 20,
+                "outdated": 20,
+                "perf_below_50": 15,
+                "no_booking_or_call": 10,
+                "seo_below_70": 5,
             },
+            "outdated_years": 4,
+            "legacy_cms": ["Joomla"],
         },
+        "viability": {
+            "no_data": 50,
+            "volume_at_strong": 40,
+            "volume_max": 60,
+            "rating_bands": [[4.5, 40], [4.0, 30], [3.5, 15]],
+            "runs_ads": 10,
+        },
+        "tiers": {"A": 65, "B": 45, "C": 25},
     },
 }
 
@@ -241,39 +256,78 @@ def _validate(config: dict, path: Path) -> None:
     if not isinstance(notion.get("cache_path"), str) or not notion["cache_path"]:
         raise ConfigError(f"{path}: notion.cache_path must be a non-empty path")
 
-    scoring = config["scoring"]
-    if not isinstance(scoring.get("version"), int) or scoring["version"] <= 0:
-        raise ConfigError(f"{path}: scoring.version must be a positive integer")
-    for section in ("reachability", "opportunity"):
+    _validate_scoring(config["scoring"], path)
+
+
+def _num(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _validate_scoring(scoring: dict, path: Path) -> None:
+    """Scorer v4 shape. A v3 block (reachability / opportunity) fails with a pointer."""
+    if "reachability" in scoring or "opportunity" in scoring or scoring.get("version") != 4:
+        raise ConfigError(
+            f"{path}: scoring v4 expected (gates, weights, reach_by_rank, need, viability, tiers) — "
+            "the v3 reachability/opportunity block was replaced, see docs/SCORING.md"
+        )
+    for section in ("gates", "weights", "need", "viability", "tiers"):
         if not isinstance(scoring.get(section), dict):
             raise ConfigError(f"{path}: scoring.{section} must be a mapping")
-    for key, value in scoring["reachability"].items():
-        if not isinstance(value, (int, float)) or value < 0:
-            raise ConfigError(f"{path}: scoring.reachability.{key} must be a non-negative number")
-    opportunity = scoring["opportunity"]
-    for key, value in opportunity.items():
-        if key == "lighthouse_weights":
-            continue
-        if not isinstance(value, (int, float)) or value < 0:
-            raise ConfigError(
-                f"{path}: scoring.opportunity.{key} must be a non-negative number"
-            )
-    # a bad audited site must never outrank "no website at all" — the
-    # strongest new-build signal in the batch (docs/SCORING.md §4.2)
-    if opportunity["audited_score_cap"] >= opportunity["no_website_score"]:
+    gates = scoring["gates"]
+    if not isinstance(gates.get("chain_listing_min"), int) or gates["chain_listing_min"] < 2:
+        raise ConfigError(f"{path}: scoring.gates.chain_listing_min must be an integer >= 2")
+    for key in ("exclude_domains", "exclude_categories"):
+        if not isinstance(gates.get(key), list) or not all(isinstance(v, str) for v in gates[key]):
+            raise ConfigError(f"{path}: scoring.gates.{key} must be a list of strings")
+    if not isinstance(gates.get("niche_mismatch"), bool):
+        raise ConfigError(f"{path}: scoring.gates.niche_mismatch must be true or false")
+
+    weights = scoring["weights"]
+    if set(weights) != {"need", "viability"} or not all(_num(v) and v >= 0 for v in weights.values()):
+        raise ConfigError(f"{path}: scoring.weights must be need and viability, non-negative numbers")
+    if abs(sum(weights.values()) - 1.0) > 0.001:
+        raise ConfigError(f"{path}: scoring.weights must sum to 1.0")
+
+    reach = scoring.get("reach_by_rank")
+    if not isinstance(reach, list) or not reach or not all(_num(v) and 0 <= v <= 100 for v in reach):
+        raise ConfigError(f"{path}: scoring.reach_by_rank must be a non-empty list of numbers 0-100")
+
+    need = scoring["need"]
+    new_build = need.get("new_build")
+    if not isinstance(new_build, dict) or set(new_build) != {"base", "has_social", "reviews_20plus"}:
+        raise ConfigError(f"{path}: scoring.need.new_build must have base, has_social, reviews_20plus")
+    from pipeline.scoring.scorer import NEED_ITEMS
+
+    redesign = need.get("redesign")
+    if not isinstance(redesign, dict) or set(redesign) != set(NEED_ITEMS):
+        raise ConfigError(f"{path}: scoring.need.redesign must have exactly {', '.join(NEED_ITEMS)}")
+    points = {**{f"new_build.{k}": v for k, v in new_build.items()},
+              **{f"redesign.{k}": v for k, v in redesign.items()},
+              "dead_site_base": need.get("dead_site_base")}
+    for key, value in points.items():
+        if not _num(value) or not 0 <= value <= 100:
+            raise ConfigError(f"{path}: scoring.need.{key} must be a number 0-100")
+    if not isinstance(need.get("outdated_years"), int) or need["outdated_years"] <= 0:
+        raise ConfigError(f"{path}: scoring.need.outdated_years must be a positive integer")
+    if not isinstance(need.get("legacy_cms"), list) or not all(isinstance(v, str) for v in need["legacy_cms"]):
+        raise ConfigError(f"{path}: scoring.need.legacy_cms must be a list of strings")
+
+    via = scoring["viability"]
+    for key in ("no_data", "volume_at_strong", "volume_max", "runs_ads"):
+        if not _num(via.get(key)) or not 0 <= via[key] <= 100:
+            raise ConfigError(f"{path}: scoring.viability.{key} must be a number 0-100")
+    bands = via.get("rating_bands")
+    if (
+        not isinstance(bands, list)
+        or not all(isinstance(b, list) and len(b) == 2 and all(_num(x) for x in b) for b in bands)
+        or [b[0] for b in bands] != sorted((b[0] for b in bands), reverse=True)
+    ):
         raise ConfigError(
-            f"{path}: scoring.opportunity.audited_score_cap must be less than "
-            "no_website_score"
+            f"{path}: scoring.viability.rating_bands must be [min_rating, points] pairs, highest rating first"
         )
-    # lighthouse_weights must sum to 1.0 — a tuning typo here would silently
-    # inflate or deflate every opportunity score in the batch
-    lighthouse_weights = opportunity.get("lighthouse_weights")
-    if not isinstance(lighthouse_weights, dict) or not lighthouse_weights:
-        raise ConfigError(f"{path}: scoring.opportunity.lighthouse_weights must be a non-empty mapping")
-    for key, value in lighthouse_weights.items():
-        if not isinstance(value, (int, float)) or value < 0:
-            raise ConfigError(
-                f"{path}: scoring.opportunity.lighthouse_weights.{key} must be a non-negative number"
-            )
-    if abs(sum(lighthouse_weights.values()) - 1.0) > 0.001:
-        raise ConfigError(f"{path}: scoring.opportunity.lighthouse_weights must sum to 1.0")
+
+    tiers = scoring["tiers"]
+    if set(tiers) != {"A", "B", "C"} or not all(_num(v) for v in tiers.values()):
+        raise ConfigError(f"{path}: scoring.tiers must give numeric A, B and C thresholds")
+    if not tiers["A"] > tiers["B"] > tiers["C"] >= 0:
+        raise ConfigError(f"{path}: scoring.tiers must descend: A > B > C >= 0")

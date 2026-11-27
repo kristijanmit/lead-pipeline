@@ -156,4 +156,4 @@ Not code: no sends until website P0 (demo, sample audit, About, review pages) is
 ## 4. Tips
 
 - Keep each step in its own session; paste the step block fresh. Long sessions drift. The kickoff prompt (§2) is only needed once; each step block points back to its rules.
-- Cleanup (remove `total_score` etc., schema 13 — v10 went to step 1, v11 to step 3, v12 to step 4) one version after step 6 is stable.
+- Cleanup (remove `total_score` etc., schema 14 — v10 went to step 1, v11 to step 3, v12 to step 4, v13 to step 5) one version after step 6 is stable.

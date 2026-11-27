@@ -30,7 +30,9 @@ from pipeline.schema import read_jsonl, write_jsonl
 from pipeline.scoring import score
 from pipeline.sinks import get_sink
 from pipeline.sinks.csv_sink import CsvSink
-from pipeline.sinks.notion_sink import _rich_text, _select_name, _text, cache_key, lead_from_page, load_rejected, load_seen
+from pipeline.sinks.notion_sink import (
+    _rich_text, _select_name, _text, cache_key, lead_from_page, load_rejected, load_seen, save_seen,
+)
 
 # find a missing website first, then contact data, then the website audit
 _ENRICH_STEPS = ("discovery", "contact", "audit")
@@ -481,12 +483,15 @@ def cmd_enrich(args: argparse.Namespace) -> int:
     return 0
 
 
+def _read_manifest(run_dir: Path) -> dict:
+    path = run_dir / "manifest.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
 def _score_market(args: argparse.Namespace, config: dict, run_dir: Path) -> Market:
     """The country gate is the run's market country, read from the manifest collect
     wrote. --market is only for runs from before markets existed (no market block)."""
-    manifest_path = run_dir / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
-    block = manifest.get("market")
+    block = _read_manifest(run_dir).get("market")
     requested = getattr(args, "market", None)
     if block:
         market = Market.from_dict(block.get("id", ""), block)
@@ -501,6 +506,31 @@ def _score_market(args: argparse.Namespace, config: dict, run_dir: Path) -> Mark
         f"run {args.run} has no market in manifest.json (collected before markets existed) — "
         "pass --market <id>"
     )
+
+
+def _score_niche(run_dir: Path) -> Niche | None:
+    """The run's niche from the manifest. Runs from before niches existed have none:
+    every lead's niche match is then "unknown" (no effect on the score)."""
+    block = _read_manifest(run_dir).get("niche")
+    return Niche.from_dict(block) if block else None
+
+
+def _update_rejected(path: str, results: list, run_id: str) -> tuple[int, int]:
+    """Disqualified keys -> rejected_domains.json (collect skips them); keys of this
+    run's leads that now pass the gates come off it. Returns (added, removed)."""
+    rejected = load_rejected(path)
+    added = removed = 0
+    for lead in results:
+        key = cache_key(lead)
+        if lead.status == "disqualified":
+            added += key not in rejected
+            rejected[key] = {"reason": lead.disqualify_reason, "run_id": run_id, "rejected_at": _now_iso()}
+        elif lead.status == "scored" and key in rejected:
+            del rejected[key]
+            removed += 1
+    if added or removed or Path(path).exists():
+        save_seen(path, rejected)
+    return added, removed
 
 
 def cmd_score(args: argparse.Namespace) -> int:
@@ -518,16 +548,19 @@ def cmd_score(args: argparse.Namespace) -> int:
     if scored_path.exists():
         previous = {lead_key(lead): lead for lead in read_jsonl(scored_path)}
 
-    weights = config["scoring"]
-    qualification = {"target_countries": [_score_market(args, config, run_dir).country]}
+    scoring = config["scoring"]
+    market = _score_market(args, config, run_dir)
+    niche = _score_niche(run_dir)
+    year = datetime.now().year
     started_at = _now_iso()
 
     results = []
+    newly_scored = []
     scored_count = pending = 0
     for lead in leads:
         # a lead enrichment never reached (status still "collected" after a
         # limited enrich run) has a domain but no audit data — scoring it
-        # would fabricate an "unreachable domain" signal for a site nobody
+        # would fabricate a "site didn't load" signal for a site nobody
         # tried. Pass it through unscored; a full enrich run picks it up.
         if lead.status not in ("enriched", "enrich_failed"):
             results.append(previous.get(lead_key(lead), lead))
@@ -538,24 +571,43 @@ def cmd_score(args: argparse.Namespace) -> int:
         if args.limit is not None and scored_count >= args.limit:
             results.append(previous.get(lead_key(lead), lead))
             continue
-        results.append(score(lead, weights, qualification))
+        scored = score(lead, scoring, market, niche, year)
+        results.append(scored)
+        newly_scored.append(scored)
         scored_count += 1
 
     write_jsonl(scored_path, results)
     CsvSink(run_dir / "scored.csv").write(results)
+    rejected_added, rejected_removed = _update_rejected(
+        config["collect"]["rejected_path"], newly_scored, args.run
+    )
 
     carried = len(leads) - scored_count - pending
     by_type: dict[str, int] = {}
+    tier_counts = {t: 0 for t in ("A", "B", "C", "D")}
+    disqualify_reasons: dict[str, int] = {}
+    niche_counts: dict[str, int] = {}
     for lead in results:
         if lead.lead_type is not None:
             by_type[lead.lead_type] = by_type.get(lead.lead_type, 0) + 1
+        if lead.tier in tier_counts:
+            tier_counts[lead.tier] += 1
+        if lead.disqualify_reason:
+            kind = lead.disqualify_reason.split(":")[0]  # "chain: 4 listings" -> "chain"
+            disqualify_reasons[kind] = disqualify_reasons.get(kind, 0) + 1
+        if lead.niche_match:
+            niche_counts[lead.niche_match] = niche_counts.get(lead.niche_match, 0) + 1
     qualified_count = sum(1 for lead in results if lead.qualified)
+    confidence_low = sum(1 for lead in results if lead.score_confidence == "low")
 
     manifest_path = run_dir / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {"run_id": args.run}
+    manifest = _read_manifest(run_dir) or {"run_id": args.run}
     manifest["stage"] = "score"
     manifest["score"] = {
-        "config_snapshot": {"scoring": weights, "qualification": qualification, "limit": args.limit},
+        "config_snapshot": {
+            "scoring": scoring, "market": market.id, "niche": niche.name if niche else None,
+            "year": year, "limit": args.limit,
+        },
         "counts": {
             "input": len(leads),
             "scored": scored_count,
@@ -563,6 +615,13 @@ def cmd_score(args: argparse.Namespace) -> int:
             "beyond_limit": carried,
             "by_lead_type": by_type,
             "qualified": qualified_count,
+            "disqualified": sum(disqualify_reasons.values()),
+            "disqualify_reasons": disqualify_reasons,
+            "tier_counts": tier_counts,
+            "confidence_low": confidence_low,
+            "niche_match": niche_counts,
+            "rejected_added": rejected_added,
+            "rejected_removed": rejected_removed,
         },
         "started_at": started_at,
         "finished_at": _now_iso(),
@@ -571,11 +630,15 @@ def cmd_score(args: argparse.Namespace) -> int:
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
-    type_summary = ", ".join(f"{t}: {n}" for t, n in sorted(by_type.items()))
+    tiers = " ".join(f"{t}:{n}" for t, n in tier_counts.items())
     print(
-        f"run {args.run}: {scored_count} scored (v{weights['version']}), "
-        f"{qualified_count} qualified — {type_summary}"
+        f"run {args.run}: {scored_count} scored (v{scoring['version']}, market {market.id}), "
+        f"{qualified_count} qualified — tiers {tiers}"
     )
+    if disqualify_reasons:
+        print("  disqualified: " + ", ".join(f"{k} {n}" for k, n in sorted(disqualify_reasons.items())))
+    if confidence_low:
+        print(f"  {confidence_low} with low-confidence Need (capped at B, needs a manual look)")
     if pending:
         print(
             f"  warning: {pending} leads still pending enrichment were passed "
@@ -583,10 +646,10 @@ def cmd_score(args: argparse.Namespace) -> int:
         )
     if carried:
         print(f"  {carried} beyond --limit kept their previous scored values")
-    ranked = [lead for lead in results if lead.total_score is not None]
-    for lead in sorted(ranked, key=lambda l: l.total_score, reverse=True)[:5]:
+    ranked = [lead for lead in results if lead.priority is not None]
+    for lead in sorted(ranked, key=lambda l: l.priority, reverse=True)[:5]:
         print(
-            f"  {lead.total_score:5.1f}  {lead.company} "
+            f"  {lead.tier} {lead.priority:5.1f}  {lead.company} "
             f"({lead.domain or 'no website'}, {lead.lead_type})"
         )
     print(f"  {run_dir}/scored.jsonl (+ scored.csv, manifest.json)")
@@ -758,11 +821,13 @@ def cmd_sync(args: argparse.Namespace) -> int:
         raise ValueError(f"no scored.jsonl in {run_dir} — run score first")
     leads = read_jsonl(scored_path)
 
-    # only scored leads go out: "synced" is already pushed, anything else is
-    # a pending pass-through row from a limited enrich/score run
+    # only scored leads go out: "synced" is already pushed, "disqualified" failed
+    # an L0 gate (never synced), anything else is a pending pass-through row from
+    # a limited enrich/score run
     to_sync = [lead for lead in leads if lead.status == "scored"]
     already_synced = sum(1 for lead in leads if lead.status == "synced")
-    not_scored = len(leads) - len(to_sync) - already_synced
+    disqualified = sum(1 for lead in leads if lead.status == "disqualified")
+    not_scored = len(leads) - len(to_sync) - already_synced - disqualified
     started_at = _now_iso()
 
     report = sink.write(to_sync, limit=args.limit)
@@ -788,6 +853,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
             "created": len(report.created),
             "already_in_notion": len(report.cached),
             "already_synced": already_synced,
+            "skipped_disqualified": disqualified,
             "skipped_not_scored": not_scored,
             "beyond_limit": report.pending,
             "failed": len(report.failed),
@@ -803,6 +869,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
         f"run {args.run}: {len(report.created)} created in Notion, "
         f"{len(report.cached)} already there (cache), {already_synced} already synced, "
         f"{len(report.failed)} failed"
+        + (f", {disqualified} disqualified (not synced)" if disqualified else "")
     )
     for lead, error in report.failed:
         print(f"  failed: {lead.company} ({lead.domain or 'no website'}): {error}")

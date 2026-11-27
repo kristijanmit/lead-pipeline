@@ -33,7 +33,17 @@ properly" means in practice.
   `en` for Serbia and UAE). UAE `maps.areas` added (approximate, verify on a map). OSM uses the `maps.areas`
   box when the location matches and prefers `name:en` in `en` markets. Maps keeps gosom's raw CSV as
   `maps_raw.csv` in the run folder. Open: check the `status` column name against one real CSV (G5).
-- Next: step 5, scorer v4.
+- Step 5 done (branch `v2-step5-scorer`): scorer v4. L0 gates (country, closed, chain, excluded category, market
+  name patterns, optional niche mismatch, no first-touch channel) set `status: disqualified` and write
+  `data/rejected_domains.json`. Niche-match check, Need (no website / dead domain / certificate error / site didn't
+  load / audited / Lighthouse failed), Viability (review volume scaled by the market's `review_strong`, rating bands,
+  runs ads), Reach (market channel order) → priority → tier A–D, `score_reasons`, `score_confidence` (low Need
+  caps at B). `audit_notes` holds facts only. D2 cap removed. Schema v13, scoring v4; the v3 score fields stay one
+  version, empty. Manifest: tier mix, disqualify reasons, low-confidence count. Open: v3/v4 top-20 comparison on
+  `2026-10-20T00-08-14` after its audit rescan (`scripts/compare_scorers.py`); SCORING.md rewrite is step 5b.
+- Website links that aren't the lead's own site (TikTok, YouTube, X, Threads, Linktree, wa.me, Viber, Google Maps /
+  g.page / goo.gl) now count as no website (`dedupe.NON_SITE_HOSTS`): kept as a social link, never audited.
+- Next: step 5b (SCORING.md), then step 6 (Notion: Tier, Priority, Score Reasons, `--min-tier`, `--rescore`).
 
 **Done**
 - Phases 1-4: collect (OSM, Google Maps, manual CSV), enrich (contacts + Lighthouse), score, Notion sync with

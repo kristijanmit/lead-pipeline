@@ -57,6 +57,7 @@ def test_sync_flips_only_created_leads(tmp_path, monkeypatch, capsys):
             _lead("Fails", "fail.rs"),
             _lead("Pending", "pending.rs", status="collected"),
             _lead("Done", "done.rs", status="synced"),
+            _lead("Gated", "gated.rs", status="disqualified", disqualify_reason="chain: 4 listings"),
         ],
         sink,
     )
@@ -69,20 +70,23 @@ def test_sync_flips_only_created_leads(tmp_path, monkeypatch, capsys):
     assert after["Fails"].status == "scored"  # a re-run retries it
     assert after["Pending"].status == "collected"
     assert after["Done"].status == "synced"
+    assert after["Gated"].status == "disqualified"  # L0 gate: never synced
 
     manifest = json.loads((run_dir / "manifest.json").read_text())
     counts = manifest["sync"]["counts"]
     assert counts == {
-        "input": 4,
+        "input": 5,
         "created": 1,
         "already_in_notion": 0,
         "already_synced": 1,
+        "skipped_disqualified": 1,
         "skipped_not_scored": 1,
         "beyond_limit": 0,
         "failed": 1,
     }
     out = capsys.readouterr().out
     assert "1 created" in out and "Fails (fail.rs): Notion API 500" in out
+    assert "1 disqualified (not synced)" in out
 
 
 def test_rerun_is_a_noop_once_synced(tmp_path, monkeypatch):
