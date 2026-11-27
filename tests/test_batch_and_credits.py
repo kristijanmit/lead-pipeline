@@ -50,7 +50,7 @@ def test_draft_stops_on_credits_keeps_finished_and_untouched(tmp_path, monkeypat
     run_dir = _setup(tmp_path, monkeypatch, [_lead("A", "a.rs"), _lead("B", "b.rs"), _lead("C", "c.rs")])
     calls = []
 
-    def fake(prompt, model, timeout_s):
+    def fake(prompt, model, timeout_s, **kw):
         calls.append(prompt)
         if len(calls) == 2:
             raise DraftBudgetError("usage limit reached")

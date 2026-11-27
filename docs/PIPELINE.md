@@ -140,7 +140,7 @@ Per page:
   Email > Call (landline). No usable contact → no draft (`no_contact_data`).
 - **Message** (`drafting/drafter.py`, one `claude -p` call, `draft.model`, ~1k tokens): Serbian, Latin,
   "Vi" form, 2–3 sentences, praise only from your note/bio, one easy question last. Voice examples from
-  `config/outreach.md`, filtered to the lead's channel and niche.
+  `config/outreach.{language}.md`, filtered to the lead's channel and niche.
 - **Validate** (`validate_message`): greeting per channel, question present, no rating / "nemate sajt" /
   price / link / emoji / Cyrillic. One retry with the problem named, then `Lead.errors`.
 - **Write**: `Suggested Channel`, `Draft Message`, `Status = Queued` (only from Not started).
@@ -167,7 +167,7 @@ Worth building only once real messages are logged.
 
 - **Reply drafts** (idea): classify the latest REPLY into send-me-more / "we have a site" / no budget /
   price, draft an answer. Needs approved price, reference and call slots in `config.yaml` `outreach`.
-- **Prompt feedback**: edits you make to drafts in Notion → new approved examples in `config/outreach.md`.
+- **Prompt feedback**: edits you make to drafts in Notion → new approved examples in `config/outreach.{language}.md`.
 - **Scoring retune** (Phase 3/6): after the first real batch, compare reply rate by `lead_type`, channel,
   industry and score band; adjust weights per docs/SCORING.md §7, bump `scoring_version`.
 
@@ -183,7 +183,7 @@ Worth building only once real messages are logged.
 | `data/batches/<name>.json` | batch progress (done / failed / paused + run id) | batch |
 | Notion database | the working list: notes, drafts, status, communication log | you + draft stages |
 | `config.yaml` | sources, grid areas, enrich timeouts, scoring weights, outreach settings | you |
-| `config/outreach.md` | approved example messages by channel and niche | you |
+| `config/outreach.{language}.md` | approved example messages by channel and niche | you |
 | `.env` | `NOTION_TOKEN`, `NOTION_DATABASE_ID` | you (never committed) |
 
 `Lead.status` lifecycle: `collected` → `enriched` | `enrich_failed` → `scored` → `synced`.

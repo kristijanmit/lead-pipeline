@@ -11,19 +11,7 @@ from the lead's data. Praise only what the operator's note or the bio says.
 
 ## Instagram (DM)
 
-Subsections: `### a | b` lists niche aliases matched against the lead's industry; `### ordinacija | stomatolog | stomatološka | zubar | klinika | estetska | dermatolog | dental | clinic
-<!-- NEW -->
-Pozdrav, naišao sam na Vaš profil i svidele su mi se slike pre i posle, lepo se vidi koliko pažnje posvećujete pacijentima. Ja sam Kristijan, pravim sajtove za lokalne firme, pa me zanima kako Vam novi pacijenti najčešće stižu?
-
-Pozdrav, naišao sam na Vaš profil i vidim da radite implante, izbeljivanje i fiksne proteze. Ja sam Kristijan, pravim sajtove za lokalne firme, pa me zanima da li Vas pacijenti pronalaze i preko Google-a, kad traže stomatologa u svom kraju, ili uglavnom stižu preko preporuke?
-
-Pozdrav, naišao sam na Vaš profil i dopada mi se što tretmane objašnjavate kratkim snimcima. Ja sam Kristijan, pravim sajtove za lokalne firme, pa me zanima da li Vam se desi da neko pita za termin u porukama, a da se razgovor izgubi?
-
-### smeštaj | apartman | apartmani | hotel | vila | sobe | stays
-<!-- NEW -->
-Pozdrav, naišao sam na Vaš profil i apartmani izgledaju zaista lepo i uredno. Ja sam Kristijan, pravim sajtove za lokalne firme, pa me zanima da li Vam gosti rezervišu i direktno ili uglavnom preko Bookinga i Airbnb-a?
-
-### generic` is the fallback.
+Subsections: `### a | b` lists niche aliases matched against the lead's industry; `### generic` is the fallback.
 Only the lead's channel section and matching niche are sent to the model.
 
 ### detailing | car detailing | auto detailing | pranje
@@ -50,6 +38,18 @@ Pozdrav, naišao sam na Vaš profil i vidim da imate dve lokacije koje rade 24/7
 
 ### shop | prodavnica | online
 Pozdrav, naišao sam na Vaš profil i deluje odlično i uliva poverenje. Ja sam Kristijan, pravim sajtove za lokalne firme, pa me zanima da li Vam online porudžbine stižu uglavnom preko Instagrama ili ih dobijate i preko sajta?
+
+### ordinacija | stomatolog | stomatološka | zubar | klinika | estetska | dermatolog | dental | clinic
+<!-- NEW -->
+Pozdrav, naišao sam na Vaš profil i svidele su mi se slike pre i posle, lepo se vidi koliko pažnje posvećujete pacijentima. Ja sam Kristijan, pravim sajtove za lokalne firme, pa me zanima kako Vam novi pacijenti najčešće stižu?
+
+Pozdrav, naišao sam na Vaš profil i vidim da radite implante, izbeljivanje i fiksne proteze. Ja sam Kristijan, pravim sajtove za lokalne firme, pa me zanima da li Vas pacijenti pronalaze i preko Google-a, kad traže stomatologa u svom kraju, ili uglavnom stižu preko preporuke?
+
+Pozdrav, naišao sam na Vaš profil i dopada mi se što tretmane objašnjavate kratkim snimcima. Ja sam Kristijan, pravim sajtove za lokalne firme, pa me zanima da li Vam se desi da neko pita za termin u porukama, a da se razgovor izgubi?
+
+### smeštaj | apartman | apartmani | hotel | vila | sobe | stays
+<!-- NEW -->
+Pozdrav, naišao sam na Vaš profil i apartmani izgledaju zaista lepo i uredno. Ja sam Kristijan, pravim sajtove za lokalne firme, pa me zanima da li Vam gosti rezervišu i direktno ili uglavnom preko Bookinga i Airbnb-a?
 
 ### generic
 Pozdrav, naišao sam na Vaš profil i svidele su mi se slike i snimci radova. Ja sam Kristijan, pravim sajtove za lokalne firme, pa me zanima da li Vas klijenti pronalaze i preko Google-a, ili uglavnom stižu preko Instagrama i preporuke?
@@ -101,7 +101,7 @@ when it is the one under the matching niche here, otherwise leave the link line 
 
 ### generic
 <!-- NEW: no niche link. A link line is added only when the run's niche has a `landing_url` and links are allowed. -->
-Pozdrav, naišao sam na [vašu firmu | vaš salon | vašu radnju] na Google mapama. Ja sam Kristijan, pravim sajtove i online zakazivanje za lokalne biznise.
+Pozdrav, naišao sam na [vašu firmu | vaš salon | vašu radnju] na Google mapama. Ja sam Kristijan, pravim sajtove za lokalne biznise.
 
 Primetio sam da imate [dobre slike radova | dosta ocena], pa me zanima da li ste razmišljali o sajtu. Imali biste bolju poziciju na Google-u, a klijenti bi mogli da zakažu termin ili pošalju poruku i kada ne stignete da se javite na telefon.
 
@@ -109,9 +109,9 @@ Da li želite da vam pošaljem primer vašeg sajta besplatno?
 
 ### ordinacija | stomatolog | stomatološka | zubar | klinika | estetska | dermatolog | dental | clinic
 <!-- NEW -->
-Pozdrav, naišao sam na vašu ordinaciju na Google mapama. Ja sam Kristijan, pravim sajtove i online zakazivanje za ordinacije.
+Pozdrav, naišao sam na vašu ordinaciju na Google mapama. Ja sam Kristijan, pravim sajtove za lokalne biznise.
 
-Primetio sam da imate dosta ocena, pa me zanima da li ste razmišljali o sajtu. Pacijenti bi mogli da zakažu termin ili vam pišu na Viber i van radnog vremena, a vi biste imali manje propuštenih poziva.
+Primetio sam da imate [dosta ocena | lepe slike radova], pa me zanima da li ste razmišljali o sajtu. Pacijenti bi mogli da zakažu termin ili vam pišu na Viber i van radnog vremena, a vi biste imali manje propuštenih poziva.
 
 Da li želite da vam pošaljem primer vašeg sajta besplatno?
 
@@ -125,7 +125,7 @@ Da li želite da vam pošaljem primer vašeg sajta besplatno?
 Ovde možete pogledati neke od primera iz oblasti građevine: https://onixweblab.com/solutions/construction
 
 ### auto servis | servis | auto | vulkanizer | detailing | car detailing | auto detailing | pranje | autopraonica | studio | shop | prodavnica
-Pozdrav, naišao sam na [vaš servis | vašu vulkanizersku radnju | vaš studio | vašu prodavnicu] na Google mapama. Ja sam Kristijan, pravim sajtove i online zakazivanje za lokalne biznise.
+Pozdrav, naišao sam na [vaš servis | vašu vulkanizersku radnju | vaš studio | vašu prodavnicu] na Google mapama. Ja sam Kristijan, pravim sajtove za lokalne biznise.
 
 Primetio sam da imate [dobre slike radova | dosta ocena], pa me zanima da li ste razmišljali o sajtu. Imali biste bolju poziciju na Google-u kao i više klijenata sa interneta, a vaši klijenti će moći da zakažu termin i pošalju poruku dok vi radite svoj posao.
 

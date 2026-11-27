@@ -61,39 +61,76 @@ counted as `no_contact_data` in the manifest.
 A lead or Notion page without a market is skipped, never guessed (counted in `skipped_market`). The Notion
 `Market` option is the preset id (`serbia`, `uae`); it is read lowercased.
 
-Until v2 step 7:
-- Leads in an `en` market (UAE) are skipped, not drafted: "English drafting arrives in step 7". They are
-  counted (`skipped_market`, `market_skip_reasons` in the manifest) and printed. A lead with a market that
-  isn't in config is skipped the same way. LinkedIn is in the ranking, but its two outputs (connection note,
-  after-accept message) arrive in step 7.
+A market whose `language` has no rule set is skipped the same way ("no drafting rules for language …").
 
-## Message rules (`pipeline/drafting/drafter.py`)
-Serbian, Latin script, capitalized "Vi" form. DM shape: "Pozdrav, naišao sam na Vaš profil (Facebook: stranicu) i
-[pohvala]. Ja sam Kristijan, pravim sajtove za lokalne firme, pa me zanima [jedno pitanje]?" Email and call
-open with "Dobar dan, ovde Kristijan". 2-3 sentences, one easy question, always last.
-- **Praise** comes only from your note (`SM Audit`) or the bio; your wording sets the strength. No note: the
-  plain "sviđa mi se kako radite" plus a `draft_notes` hint to add a concrete detail. Nothing is invented.
-- **Never**: Google rating or review count, "nemate sajt" / "nisam uspeo da pronađem", criticism of an existing
-  site, Lighthouse numbers, "pravim i unapređujem", price, offer, link, named client, emoji, exclamation marks.
-- **Exception, friendly warning**: a concrete checkable problem stated in your note or the audit notes (dead
-  bio link, "My WordPress") goes before the question; `draft_notes` says to verify it before sending.
-- **Question** is picked by business type: open, Google with a concrete service, price/term, has-a-site, or a
-  bio angle (school, self-service wash, shop). A non-detailing business does not get the detailing template.
-Code re-checks the hard rules (`validate_message`: greeting per channel, a question present, no rating/banned
-phrases/emoji/Cyrillic) and retries once with the problem named; a second failure goes to `Lead.errors`.
-`draft_notes` carries a "verify before sending" line, printed by the `draft` command.
-Follow-ups and reply help are not part of the stage (Phase B).
+## Rule sets per language (`pipeline/drafting/rules_sr.py`, `rules_en.py`)
+The market's `language` picks the rule set: system prompt, prompt rules, banned phrases, greeting per channel,
+script check. `pipeline/drafting/rules.py` holds the shared `Rules` type and the validator. The validator
+(`validate_message(message, channel, rules)`) re-checks the hard rules and retries once, naming the problem. A
+second failure goes to `Lead.errors`.
+
+Common to both languages:
+- **Praise** comes only from your note (`SM Audit`) or the bio, and your wording sets the strength. With no
+  note, the plain line is used ("sviđa mi se kako radite" / "I like the way you present your services"), plus a
+  `draft_notes` hint to add a concrete detail. Nothing is invented.
+- **Never**: Google rating, reviews or stars; "you don't have a website" / "couldn't find"; criticism of an
+  existing site; Lighthouse numbers; price; a named client; emoji; "!"; an unfilled `{slot}` from the examples.
+- **Exception, friendly warning**: a concrete, checkable problem from your note or the audit notes goes before
+  the question, and `draft_notes` says to verify it.
+- **Question** (niche-neutral): the niche's own `question` from `go`, when the run has one (`draft --run` reads it
+  from the manifest). Otherwise one picked from the examples' Questions section and adapted to the business.
+  Notion pages carry no niche definition, so `draft-notion` always uses the Questions list.
+- **Sender line**, word for word: sr "pravim sajtove za lokalne firme" (Viber: "…za lokalne biznise"); en "I build
+  websites for local businesses" or "…for clinics". The validator checks the clause after "Ja sam / ovde / I'm /
+  this is Kristijan," and rejects anything added to it (e.g. "i online zakazivanje", "and booking systems").
+- **Patient-records platform**: never mentioned. `rules.PLATFORM_TERMS` (patient records, medical records,
+  EHR, EMR, karton pacijenta, elektronski karton, medicinska dokumentacija, evidencija pacijenata…) is matched as
+  whole words, in both languages and on every channel.
+
+Serbian (`sr`): Latin script with diacritics, capitalized "Vi" form. The DM shape is "Pozdrav, naišao sam na
+Vaš profil (Facebook: stranicu) i [pohvala]. Ja sam Kristijan, pravim sajtove za lokalne firme, pa me zanima
+[jedno pitanje]?". Email and Call open with "Dobar dan". Banned: "bez obaveze", "besplatno", "ove nedelje",
+"lighthouse", "seo", "nisam uspeo/pronašao", "nemate sajt", "unapređujem", "zvezdic…", "recenzij…", "ocen…".
+`Viber/Whatsapp` (Serbia's mobile label) has its own format: Google Maps opener, free-example offer, may cite
+"dosta ocena", niche link line, and a redesign variant for leads with a site. A review claim ("dosta ocena",
+"recenzije") is allowed only when `review_count` ≥ the market's `review_strong` (Serbia 50). Below that, the
+prompt says to praise photos or work, or nothing, and the validator rejects any review mention, on Viber too.
+
+English (`en`, UAE): "Hi" for DMs and LinkedIn, "Hello" for Email and Call. Latin script only (no Cyrillic or
+Arabic). Exactly one question, and no link: the Email signature line is exempt, and links are allowed when
+`link_in_first_message` is on. Banned (whole word): free, no obligation, this week, Lighthouse, SEO, AI,
+automation, couldn't find, don't have a website, rating, review, stars, Dear Sir, hope this finds you,
+hope you're well.
+
+**LinkedIn** has two outputs, both stored in `Draft Message`:
+
+    Connection note:
+    <≤300 characters, no pitch, no question needed>
+
+    After accept:
+    <DM-shaped message, one question last>
+
+**`outreach.first_offer`**: `question` (default) or `audit`. With `audit`, an Instagram first message ends with
+an offer of a one-page note with three concrete improvements, phrased as a question. It uses the `## Instagram
+(DM) with audit offer` examples, and "free" stays banned, so the work is described, never priced. Other channels
+keep the question. Leave it on `question` until website P0 (sample audit, About, review page) is live.
 
 ## Settings (`config.yaml` -> `outreach`)
-`link_in_first_message`, `site_link`, `named_references`, `price_from`, `signature`, `examples_path`,
+`link_in_first_message`, `site_link`, `named_references`, `price_from`, `signature`, `examples_path`
+(default `config/outreach.{language}.md`; must contain `{language}`), `first_offer` (`question` / `audit`),
 `auto_draft_min_tier` (A/B/C, default B: the lowest Tier drafting picks up).
-Link, references and price stay off until set. The niche phrase in the prompt is the run's `niche_label` (the
+Link, references and price stay off until set. With links on, the run niche's `landing_url` replaces `site_link`. The niche phrase in the prompt is the run's `niche_label` (the
 `phrase` from the niche created in `go`). Sync writes it to the Notion `Niche Label` property and `draft-notion`
 reads it back; a page without one falls back to `Industry` (the niche name). `Score Reasons` is read back too but
 never reaches the prompt.
-Voice references live in `config/outreach.md` (your approved messages): edit that file to change the tone.
-Layout: `## <channel>` sections (Instagram (DM), Facebook, Viber/Whatsapp, SMS / call; Viber/Whatsapp falls back to the Instagram one when it has no section of its own, and has its own prompt rules: Google Maps opener, free-example offer, niche link),
-each with `### alias | alias` niche subsections matched against the lead's industry and a `### generic` fallback.
+Voice references live in `config/outreach.{language}.md`, one file per drafting language (`outreach.sr.md`,
+`outreach.en.md`). They hold your approved messages; edit them to change the tone. A missing file prints a
+warning, and drafts run without examples. HTML comments (`<!-- -->`) are stripped before the model sees the file.
+Layout: `## <channel>` sections (Instagram (DM), Facebook, LinkedIn, Email, Viber/Whatsapp, SMS / call or Call; Viber/Whatsapp falls back to the Instagram one when it has no section of its own, and has its own prompt rules: Google Maps opener, free-example offer, niche link),
+each with `### alias | alias` niche subsections matched against the lead's niche name, and a fallback
+subsection with a `generic` alias. LinkedIn always keeps its `### connection note` subsection, and its after-accept
+subsections are `### after accept | <niche aliases>` / `### after accept | generic`. `… with audit offer` sections are
+used only with `first_offer: audit`.
 `## Viber/Whatsapp (redesign)` is used for leads that already have a site. `## Instagram (DM) with a friendly warning` and `## Questions...` ride along for every DM. Only the lead's
 channel and niche are sent to the model; a file without these headings is sent whole. To add a niche, add a
 `### name | alias` subsection with 2-3 approved messages.
