@@ -529,28 +529,34 @@ class NotionSink:
         writes) so email matching and new-info diffing keep working after
         a refresh."""
         seen: dict = {}
+        for page in self.query_pages():
+            snapshot = _snapshot_from_properties(page.get("properties", {}))
+            if snapshot["domain"]:
+                key = f"domain:{snapshot['domain']}"
+            elif snapshot["company"]:
+                key = f"company:{snapshot['company'].lower()}"
+            else:
+                continue  # untitled page — nothing to key on
+            seen.setdefault(
+                key, {"page_id": page["id"], "synced_at": None, "snapshot": snapshot}
+            )
+        save_seen(self.cache_path, seen)
+        return len(seen)
+
+    def query_pages(self) -> list[dict]:
+        """Every page in the database, oldest first, read only (refresh_cache,
+        score-report). One paginated query, 100 pages per request."""
+        pages: list[dict] = []
         cursor = None
         while True:
             payload: dict = {"page_size": 100}
             if cursor:
                 payload["start_cursor"] = cursor
             data = self._post(f"{API_BASE}/databases/{self.database_id}/query", payload)
-            for page in data.get("results", []):
-                snapshot = _snapshot_from_properties(page.get("properties", {}))
-                if snapshot["domain"]:
-                    key = f"domain:{snapshot['domain']}"
-                elif snapshot["company"]:
-                    key = f"company:{snapshot['company'].lower()}"
-                else:
-                    continue  # untitled page — nothing to key on
-                seen.setdefault(
-                    key, {"page_id": page["id"], "synced_at": None, "snapshot": snapshot}
-                )
+            pages += data.get("results", [])
             if not data.get("has_more"):
-                break
+                return pages
             cursor = data.get("next_cursor")
-        save_seen(self.cache_path, seen)
-        return len(seen)
 
     def query_draftable(
         self, limit: int | None = None, redraft: bool = False, min_tier: str = "B",

@@ -80,8 +80,8 @@ place is a check that the lead really is in the niche:
 | niche has no `accepted_categories`, lead has no `maps_category` (OSM, manual), or the run has no niche (old run) | `unknown` | none |
 | `maps_category` is not in the list | `mismatch` | L0 gate if `gates.niche_mismatch: true`; otherwise reason line "niche mismatch: X" and tier capped at C |
 
-Which niches work is learned across runs in `score-report` (step 10: send
-rate and outcomes by niche), not in the weights.
+Which niches work is learned across runs in `score-report` (send rate,
+replies and the A/B rule by niche, §11), not in the weights.
 
 ## 4. Which Need branch applies — `audit_case()` and `lead_type`
 
@@ -267,7 +267,9 @@ shared across markets.
 
 ## 11. Retuning
 
-Calibration replaces guesswork (PIPELINE.md §7; `score-report` is step 10):
+Calibration replaces guesswork (PIPELINE.md §7). `python -m pipeline.runner score-report
+[--market X] [--niche Y] [--min-band N]` prints the tables below from Notion + JSONL (read only);
+groups under `score_report.min_band` (30) are marked "not enough data":
 
 - **L1 vs L2** (after ~50 drafts): send/skip rate by tier, `lead_type`,
   niche, market; `Skip Reason` counts. Healthy: skip rate rises A → C. A
@@ -275,8 +277,19 @@ Calibration replaces guesswork (PIPELINE.md §7; `score-report` is step 10):
   `chain_listing_min`). If skip rate doesn't rise as tier drops, a sub-score
   weight is wrong.
 - **L1 vs L3** (after ~30+ sends per band): reply and meeting rate by tier,
-  sub-score band, channel, niche. If most drafts get sent but replies are
-  low, the message is the problem, not the score.
+  market, channel, niche (sub-score bands: not in the report yet). Channel is
+  the one on the latest `· SENT · <channel> ·` line in `Communication`. If most
+  drafts get sent but replies are low, the message is the problem, not the score.
+- **A/B rule** (strategy_gaps.md S19), for markets and for niches: the best arm
+  by reply rate wins only with ≥ `ab_min_replies` (8) replies and
+  ~`ab_ratio`× (2×) the runner-up's rate, and both arms at `min_band`+ sends;
+  otherwise "not enough data" or "no clear difference".
+- How pages count: **sent** = Status Sent / Follow-up due / Replied / Closed,
+  `Last Contacted`, a SENT line or `Outcome` (Status Dead only next to one of
+  the last three; sent beats `Verdict = Skip`). **Skipped** = `Verdict = Skip`,
+  not sent. **Pending** = drafted, no decision (shown, not in rates). **Replied**
+  = any `Outcome` but `no_reply`, Status Replied / Closed, or a REPLY line.
+  **Meeting** = `Outcome` meeting / proposal / won.
 - Don't retune on fewer than ~30 leads per band. Change one thing at a time,
   bump `scoring.version`, re-run `score`, then `sync --rescore` (step 6) so
   existing Notion pages update.

@@ -48,7 +48,8 @@ Never written: `Chosen Channel`, `Last Contacted`, `Communication`, `Notes`, `Co
 back to the JSONL.
 
 **Feedback without a review step** (§11.6): sent as is = good; edited before sending = keep the edit; not worth
-sending = `Verdict = Skip` + `Skip Reason`. `score-report` (step 10) reads send/skip rates by tier, niche and market.
+sending = `Verdict = Skip` + `Skip Reason`. `score-report` reads send/skip rates by tier, niche and market (docs/SCORING.md §11). Log every send as
+`YYYY-MM-DD · SENT · channel · text` in `Communication`: the reply tables take the channel from that line.
 
 ## Catch-up (`draft-notion`)
     python -m pipeline.runner draft-notion [--limit N] [--company X] [--redraft] [--dry-run] [--yes]

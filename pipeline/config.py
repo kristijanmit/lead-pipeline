@@ -82,6 +82,14 @@ DEFAULTS: dict = {
         # no Tier (hand-made, backfilled) stays eligible
         "auto_draft_min_tier": "B",
     },
+    # score-report (docs/plan/v2/PIPELINE.md §7, strategy_gaps.md S19): groups under
+    # min_band decided pages / sends are flagged "not enough data"; the A/B rule
+    # needs ab_min_replies replies and ~ab_ratio x the other arm's reply rate
+    "score_report": {
+        "min_band": 30,
+        "ab_min_replies": 8,
+        "ab_ratio": 2.0,
+    },
     "notion": {
         "database_id": "",
         "api_version": "2022-06-28",
@@ -279,6 +287,13 @@ def _validate(config: dict, path: Path) -> None:
         raise ConfigError(f"{path}: notion.timeout_s must be a positive integer")
     if not isinstance(notion.get("cache_path"), str) or not notion["cache_path"]:
         raise ConfigError(f"{path}: notion.cache_path must be a non-empty path")
+
+    report = config["score_report"]
+    for key in ("min_band", "ab_min_replies"):
+        if not isinstance(report.get(key), int) or isinstance(report.get(key), bool) or report[key] < 1:
+            raise ConfigError(f"{path}: score_report.{key} must be a positive integer")
+    if not _num(report.get("ab_ratio")) or report["ab_ratio"] <= 1:
+        raise ConfigError(f"{path}: score_report.ab_ratio must be a number above 1, e.g. 2.0")
 
     _validate_scoring(config["scoring"], path)
 

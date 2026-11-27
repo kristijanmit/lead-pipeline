@@ -82,6 +82,15 @@ enrich:
     binary: lighthouse
     timeout_s: 120     # per-site cap; slow sites fail into Lead.errors, not hang the batch
 
+# score-report (docs/plan/v2/PIPELINE.md §7): groups under min_band decided
+# pages (send/skip) or sends (replies) print as "not enough data"; the A/B rule
+# (strategy_gaps.md S19) needs ab_min_replies replies and ~ab_ratio x the other
+# arm's reply rate before it names a winner.
+score_report:
+  min_band: 30
+  ab_min_replies: 8
+  ab_ratio: 2.0
+
 # Phase 4 — Notion sync. The integration token and database id are secrets
 # and live in the gitignored .env as NOTION_TOKEN / NOTION_DATABASE_ID (see
 # README setup), never here.

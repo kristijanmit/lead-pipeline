@@ -7,7 +7,7 @@ website audit → score for outreach priority → land in Notion.
 ## Current state
 
 Phases 1-4 (collect, enrich, score, Notion sync) and automatic outreach drafting (after sync) are built and in use.
-Not built yet: follow-ups / Dead tracking (Phase B) and the feedback loop. docs/ROADMAP.md has the
+Not built yet: follow-ups / Dead tracking (Phase B); the feedback loop is only the `score-report` tables (no automatic retune). docs/ROADMAP.md has the
 current Done / To do / Ideas list at the top — keep it updated when work ships. Build new stages into
 the target module structure (`pipeline/collectors/`, `pipeline/enrichers/`, `pipeline/drafting/`, etc.),
 not as standalone scripts.
@@ -34,6 +34,7 @@ All stages run through one CLI entrypoint (`pipeline/runner.py`):
 - `python -m pipeline.runner audit-report --run <run_id> [--domain X] [--min-tier C] [--rescan] [--force]` — one-page audit per qualified lead (top 3 Need items, "what already works") in the market's language, from the stored audit (`--rescan`: fresh, via `pipeline/audit.py`); writes `reports/<domain>.md` + `.html` in the run folder, keeps a hand-edited .md unless `--force`; skips no-site / dead / fine sites; docs/OUTREACH.md
 - `python -m pipeline.runner sync --run <run_id> --sink notion [--min-tier C]` — push qualified leads at tier ≥ `--min-tier` (default C) to Notion
 - `python -m pipeline.runner sync --sink notion --rescore [--run <run_id>] [--limit N]` — update only the score properties (Tier, Priority, Score Reasons, Qualified, Lead Type, Audit Notes) on existing pages; without `--run`, the latest v4 row of every run; see docs/EXPORT.md §3.4
+- `python -m pipeline.runner score-report [--market <id>] [--niche <name>] [--min-band N]` — read-only calibration tables from Notion + the latest JSONL row per page: send/skip rate by tier / lead_type / market / niche / confidence, `Skip Reason` counts, reply/meeting rate by tier / market / niche / channel (channel from the latest `· SENT ·` line in Communication), the A/B rule for markets and niches; "not enough data" under `score_report.min_band` (30); docs/SCORING.md §11
 - `python -m pipeline.runner go [--source ...] [--limit N] [--yes]` — interactive: pick Lead Gen / Draft Outreach, then prompts (Lead Gen: market (preset or new), niche (created, or copied from an earlier run), source, OSM tags if osm, location; Draft Outreach: page scope, limit), then runs (Lead Gen ends with the automatic draft step; `--yes` skips the Start? confirm)
 - Maps leads: depth >1 is broken, so a location in `maps.areas` (or `--bbox`) runs in grid mode automatically; `--no-grid` disables — see docs/COLLECTION.md §3
 - `python -m pipeline.runner batch --file batches/<name>.yaml [--dry-run] [--pause-s N]` — runs the listed `run` entries one after another (each entry needs `market` and a full `niche` block; all are validated before the first runs); one failure doesn't stop the rest; running out of AI credits doesn't either (later entries sync without drafting, exit 3; `draft-notion` drafts the rest later). Finished entries are recorded in `data/batches/<name>.json`

@@ -94,7 +94,16 @@ properly" means in practice.
   Follow-up after the first real run (Šabac): HTML decoded by the page's own charset (`audit.html_text`); one
   shared `audit.SiteClient` per enrich run (contact reuses the probe's homepage, `enrich.same_domain_delay_s` 1.5 s
   between requests to one site, a 429 waits Retry-After ≤ 10 s and retries once) after MIS Dental answered 429.
-- Next: step 10 (`score-report`). Cleanup of the v3 score fields is now schema 15.
+- Step 10 done (branch `v2-step10-score-report`): `score-report` (read only) reads every Notion page plus the
+  latest JSONL row per page (G16, via the sync cache) and prints: send / skip rate by tier, lead_type, market,
+  niche and confidence, with the A → C skip-rate check; `Skip Reason` counts; reply / meeting rate by tier, market,
+  niche and channel (channel = latest `· SENT · <channel> ·` line in Communication, Suggested Channel only as a
+  counted fallback); the A/B rule (S19: ≥ 8 replies and ~2× the other arm's reply rate) for markets and niches.
+  Groups under `score_report.min_band` (30) print `*` / "not enough data". Sent = Status Sent / Follow-up due /
+  Replied / Closed, Last Contacted, a SENT line or Outcome; Status Dead counts only next to one of the last three;
+  sent beats `Verdict = Skip`. No schema or scoring bump. Not built: reply rate by sub-score band (PIPELINE.md §7
+  L3). Open: run it after ~50 drafts.
+- Next: step 11 (go-live gate, not code). Cleanup of the v3 score fields is now schema 15.
 
 **Done**
 - Phases 1-4: collect (OSM, Google Maps, manual CSV), enrich (contacts + Lighthouse), score, Notion sync with
