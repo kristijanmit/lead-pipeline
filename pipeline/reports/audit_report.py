@@ -1,6 +1,6 @@
 """One-page audit report per lead (v2 step 8, strategy_gaps.md S16).
 
-The "one-page note with three concrete things to improve" that the audit-offer first
+The "one-page note with concrete suggestions" (at most 3) that the audit-offer first
 message promises. Built from the shared audit core's fields on a Lead (stored in the run,
 or fresh via `audit-report --rescan`), in the lead's market language. Pure: no I/O, the
 caller passes the date, config and wording.

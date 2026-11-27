@@ -140,7 +140,7 @@ channel and niche are sent to the model; a file without these headings is sent w
 `### name | alias` subsection with 2-3 approved messages.
 
 ## Audit report (`audit-report`, `pipeline/reports/`)
-The one-page note with three concrete improvements that the audit-offer message promises (v2 step 8).
+The one-page note with concrete suggestions (at most 3) that the audit-offer message promises (v2 step 8).
 
     python -m pipeline.runner audit-report --run <run_id> [--domain X] [--min-tier C] [--limit N] [--rescan] [--force]
 
