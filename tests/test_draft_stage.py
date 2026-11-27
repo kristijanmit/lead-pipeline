@@ -12,6 +12,8 @@ from support import MARKETS_YAML
 def _lead(company, domain, **kw):
     kw.setdefault("status", "scored")
     kw.setdefault("qualified", True)
+    kw.setdefault("market", "serbia")
+    kw.setdefault("language", "sr")
     kw.setdefault("social_links", {"instagram": "https://instagram.com/x"})
     return Lead(company=company, domain=domain, source="osm", **kw)
 
@@ -56,21 +58,22 @@ def test_only_qualified_scored_undrafted_leads_are_drafted(tmp_path, monkeypatch
     counts = json.loads((run_dir / "manifest.json").read_text())["draft"]["counts"]
     assert counts == {
         "input": 4, "drafted": 1, "failed": 0, "no_contact_data": 0, "skipped": 3,
-        "skipped_market": 0, "market_fallback": 1,
+        "skipped_market": 0,
     }
 
 
-def test_lead_without_market_uses_serbia_fallback_and_is_counted(tmp_path, monkeypatch, capsys):
+def test_lead_without_market_is_skipped_not_guessed(tmp_path, monkeypatch, capsys):
     run_dir = _make_run(tmp_path, monkeypatch, [
-        _lead("Old", "old.rs", social_links={}, contact_phones=["069 111 2233"]),
-        _lead("New", "new.rs", market="serbia", language="sr"),
+        _lead("Old", "old.rs", market="", language=""),
+        _lead("New", "new.rs"),
     ])
-    _fake(monkeypatch)
+    calls = _fake(monkeypatch)
     assert main(["draft", "--run", "r"]) == 0
     by = {l.company: l for l in read_jsonl(run_dir / "scored.jsonl")}
-    assert by["Old"].suggested_channel == "Viber/Whatsapp"  # Serbian mobile rules applied
-    assert json.loads((run_dir / "manifest.json").read_text())["draft"]["counts"]["market_fallback"] == 1
-    assert "1 lead(s) had no market and used the 'serbia' market rules" in capsys.readouterr().out
+    assert by["Old"].draft_message == "" and by["New"].draft_message
+    assert len(calls) == 1
+    assert json.loads((run_dir / "manifest.json").read_text())["draft"]["counts"]["skipped_market"] == 1
+    assert "1 skipped, not drafted: no market" in capsys.readouterr().out
 
 
 def test_english_market_lead_is_skipped_never_drafted_in_serbian(tmp_path, monkeypatch, capsys):
@@ -86,7 +89,7 @@ def test_english_market_lead_is_skipped_never_drafted_in_serbian(tmp_path, monke
     assert by["Dubai Smile"].suggested_channel == ""
     assert by["Beograd"].draft_message
     draft = json.loads((run_dir / "manifest.json").read_text())["draft"]
-    assert draft["counts"]["skipped_market"] == 1 and draft["counts"]["market_fallback"] == 0
+    assert draft["counts"]["skipped_market"] == 1
     assert draft["market_skip_reasons"] == {"English drafting arrives in step 7": 1}
     assert "1 skipped, not drafted: English drafting arrives in step 7" in capsys.readouterr().out
 

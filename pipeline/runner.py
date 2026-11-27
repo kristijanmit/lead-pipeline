@@ -31,8 +31,11 @@ from pipeline.scoring import score
 from pipeline.sinks import get_sink
 from pipeline.sinks.csv_sink import CsvSink
 from pipeline.sinks.notion_sink import (
-    _rich_text, _select_name, _text, cache_key, lead_from_page, load_rejected, load_seen, save_seen,
+    _email_index, _rich_text, _select_name, _text, cache_key, lead_from_page, load_rejected,
+    load_seen, match_cache_key, save_seen,
 )
+
+_TIER_ORDER = ("A", "B", "C", "D")
 
 # find a missing website first, then contact data, then the website audit
 _ENRICH_STEPS = ("discovery", "contact", "audit")
@@ -57,43 +60,27 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-# TODO(step 6): drop this fallback. Notion pages get a Market property then, and
-# draft-notion skips pages without one; until then pages and pre-v2 runs carry no
-# market, and they were all collected in Serbia. Every use is counted and printed.
-_DRAFT_FALLBACK_MARKET = "serbia"
-
-
 class _DraftMarkets:
     """The market each lead is drafted under (channel rules, language), loaded once
-    per id. A lead without a market uses the Serbia fallback above."""
+    per id. A lead or page without a market is skipped, never guessed."""
 
     def __init__(self, config: dict):
         self.config = config
         self.loaded: dict[str, Market | str] = {}
-        self.fallbacks = 0
 
     def resolve(self, lead) -> tuple[Market | None, str]:
         """(market, skip reason). A reason means: don't draft this lead now."""
-        market_id = lead.market
-        if not market_id:
-            market_id = _DRAFT_FALLBACK_MARKET
-            self.fallbacks += 1
-        if market_id not in self.loaded:
+        if not lead.market:
+            return None, "no market (set Market on the page, or score a run collected with one)"
+        if lead.market not in self.loaded:
             try:
-                self.loaded[market_id] = load_market(self.config, market_id)
+                self.loaded[lead.market] = load_market(self.config, lead.market)
             except ValueError as e:
-                self.loaded[market_id] = str(e)
-        market = self.loaded[market_id]
+                self.loaded[lead.market] = str(e)
+        market = self.loaded[lead.market]
         if isinstance(market, str):
             return None, market
         return market, language_skip_reason(market)
-
-    def print_fallbacks(self) -> None:
-        if self.fallbacks:
-            print(
-                f"  {self.fallbacks} lead(s) had no market and used the "
-                f"{_DRAFT_FALLBACK_MARKET!r} market rules (fallback until step 6)"
-            )
 
 
 def _print_market_skips(skips: dict[str, int]) -> None:
@@ -714,7 +701,7 @@ def cmd_draft(args: argparse.Namespace) -> int:
         "counts": {
             "input": len(leads), "drafted": drafted, "failed": failed,
             "no_contact_data": no_contact, "skipped": skipped,
-            "skipped_market": sum(market_skips.values()), "market_fallback": markets.fallbacks,
+            "skipped_market": sum(market_skips.values()),
         },
         "market_skip_reasons": market_skips,
         "stopped_out_of_credits": bool(out_of_credits),
@@ -730,7 +717,6 @@ def cmd_draft(args: argparse.Namespace) -> int:
         f"{no_contact} without contact data, {skipped} skipped"
     )
     _print_market_skips(market_skips)
-    markets.print_fallbacks()
     for lead in results:
         if lead.errors and lead.errors[-1].startswith("draft:") and not lead.draft_message:
             print(f"  failed: {lead.company}: {lead.errors[-1]}")
@@ -744,10 +730,13 @@ def cmd_draft(args: argparse.Namespace) -> int:
 
 
 def cmd_draft_notion(args: argparse.Namespace) -> int:
-    """Draft for Notion pages (hand-made or synced) that have an SM Audit note and
-    no draft yet: the page is the input, so no run dir. Dry run unless --yes.
-    --redraft also rewrites existing drafts, --all also drafts pages without a
-    note. Status -> Queued only from "Not started"."""
+    """Draft for Notion pages (hand-made or synced) per script_edits.md §11.2: no
+    draft yet, Qualified, Status Not started, Verdict not Skip, Tier empty or at
+    least outreach.auto_draft_min_tier. SM Audit is optional (the first praise
+    source when present). Pages without Market or Industry are skipped and
+    reported. The page is the input, so no run dir. Dry run unless --yes.
+    --redraft also rewrites existing drafts. Status -> Queued only from
+    "Not started" / blank. --limit caps the pages drafted, not the pages read."""
     config = load_config(args.config)
     sink = get_sink("notion", config)
     outreach, draft_cfg = config["outreach"], config["draft"]
@@ -755,18 +744,28 @@ def cmd_draft_notion(args: argparse.Namespace) -> int:
 
     redraft = getattr(args, "redraft", False)
     pages = sink.query_draftable(
-        args.limit, redraft=redraft, need_note=not getattr(args, "all", False),
+        redraft=redraft, min_tier=outreach["auto_draft_min_tier"],
         company=getattr(args, "company", "") or "",
     )
     if not pages:
-        print("nothing to draft: add an SM Audit note to a page with Status Not started / Queued "
-              "(--all drafts pages without a note, --redraft rewrites existing drafts)")
+        print("nothing to draft: no page with Status Not started, an empty Draft Message, "
+              f"Verdict not Skip and Tier {outreach['auto_draft_min_tier']} or better "
+              "(--redraft rewrites existing drafts)")
         return 0
     drafted = failed = no_contact = 0
     markets = _DraftMarkets(config)
     market_skips: dict[str, int] = {}
     for page in pages:
+        if args.limit is not None and drafted + failed + no_contact >= args.limit:
+            break
+        props = page.get("properties", {})
         lead = lead_from_page(page)
+        missing = [name for name in ("Market", "Industry") if not _select_name(props.get(name))]
+        if missing:
+            reason = "set Market and Industry on the page"
+            market_skips[reason] = market_skips.get(reason, 0) + 1
+            print(f"  skipped: {lead.company}: no {' / '.join(missing)}")
+            continue
         market, reason = markets.resolve(lead)
         if reason:
             market_skips[reason] = market_skips.get(reason, 0) + 1
@@ -782,7 +781,7 @@ def cmd_draft_notion(args: argparse.Namespace) -> int:
                 print(f"  no contact data (add an Instagram link, phone or email): {lead.company}")
             continue
         drafted += 1
-        had_draft = bool(_rich_text(page["properties"].get("Draft Message")))
+        had_draft = bool(_rich_text(props.get("Draft Message")))
         verb = "overwrite" if had_draft else "write"
         print(f"  {verb if args.yes else 'would ' + verb}: {lead.company} -> {out.suggested_channel}")
         print(f"    {out.draft_message}")
@@ -793,14 +792,86 @@ def cmd_draft_notion(args: argparse.Namespace) -> int:
                 "Suggested Channel": {"select": {"name": out.suggested_channel}},
                 "Draft Message": _text(out.draft_message[:2000]),
             }
-            if _select_name(page["properties"].get("Status")) in ("Not started", ""):
+            if _select_name(props.get("Status")) in ("Not started", ""):
                 update["Status"] = {"select": {"name": "Queued"}}
             sink.update_page(page["id"], update)
     print(f"{drafted} drafted, {failed} failed, {no_contact} without contact data")
     _print_market_skips(market_skips)
-    markets.print_fallbacks()
     if drafted and not args.yes:
         print("dry run — pass --yes to write to Notion")
+    return 0
+
+
+def _rescore_leads(run_id: str | None) -> tuple[list, int]:
+    """Leads whose score fields --rescore pushes, plus how many rows were skipped
+    for being scored before v4. With a run: that run's scored.jsonl. Without:
+    every run, the latest row per cache key (run ids sort by time)."""
+    if run_id:
+        paths = [RUNS_DIR / run_id / "scored.jsonl"]
+        if not paths[0].exists():
+            raise ValueError(f"no scored.jsonl in {RUNS_DIR / run_id} — run score first")
+    else:
+        paths = sorted(RUNS_DIR.glob("*/scored.jsonl"))
+    latest: dict[str, object] = {}
+    for path in paths:
+        for lead in read_jsonl(path):
+            if lead.status in ("scored", "disqualified", "synced"):
+                latest[cache_key(lead)] = lead  # later runs overwrite earlier ones
+    leads, old = [], 0
+    for lead in latest.values():
+        if lead.scoring_version < 4 or (lead.qualified and lead.tier is None):
+            old += 1
+        else:
+            leads.append(lead)
+    return leads, old
+
+
+def _cmd_rescore(args: argparse.Namespace, config: dict, sink) -> int:
+    """sync --rescore: update only the score properties (Tier, Priority, Score
+    Reasons, Qualified, Lead Type, Audit Notes) on pages that already exist. Human
+    fields are never written. Pages with no JSONL row are reported (all-runs mode)."""
+    started_at = _now_iso()
+    leads, old = _rescore_leads(args.run)
+    report = sink.rescore(leads, limit=args.limit)
+    no_source = None
+    if not args.run:
+        # a cache entry no v4 row points at: hand-made page, or a run not re-scored
+        seen = load_seen(sink.cache_path)
+        index = _email_index(seen)
+        pointed = {match_cache_key(lead, seen, index) for lead in leads}
+        no_source = sum(1 for key in seen if key not in pointed)
+
+    counts = {
+        "candidates": len(leads),
+        "updated": len(report.updated),
+        "no_page": len(report.no_page),
+        "scored_before_v4": old,
+        "beyond_limit": report.pending,
+        "failed": len(report.failed),
+    }
+    if args.run:
+        run_dir = RUNS_DIR / args.run
+        manifest = _read_manifest(run_dir) or {"run_id": args.run}
+        manifest["rescore"] = {
+            "config_snapshot": {"sink": args.sink, "limit": args.limit},
+            "counts": counts, "started_at": started_at, "finished_at": _now_iso(),
+        }
+        (run_dir / "manifest.json").write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+    scope = f"run {args.run}" if args.run else "all runs"
+    print(
+        f"rescore ({scope}): {counts['updated']} pages updated, {counts['no_page']} leads with no "
+        f"Notion page, {counts['failed']} failed"
+    )
+    for lead, error in report.failed:
+        print(f"  failed: {lead.company} ({lead.domain or 'no website'}): {error}")
+    if old:
+        print(f"  {old} rows scored before v4 skipped — run `score --run <id>` on those runs first")
+    if no_source:
+        print(f"  {no_source} Notion pages have no v4 JSONL row (hand-made, or run not re-scored): not updated")
+    if report.pending:
+        print(f"  {report.pending} beyond --limit left for the next run")
     return 0
 
 
@@ -813,21 +884,29 @@ def cmd_sync(args: argparse.Namespace) -> int:
         print(f"cache rebuilt from Notion: {count} entries -> {sink.cache_path}")
         return 0
 
+    if getattr(args, "rescore", False):
+        return _cmd_rescore(args, config, sink)
+
     if not args.run:
-        raise ValueError("--run is required (unless using --refresh-cache)")
+        raise ValueError("--run is required (unless using --refresh-cache or --rescore)")
     run_dir = RUNS_DIR / args.run
     scored_path = run_dir / "scored.jsonl"
     if not scored_path.exists():
         raise ValueError(f"no scored.jsonl in {run_dir} — run score first")
     leads = read_jsonl(scored_path)
 
-    # only scored leads go out: "synced" is already pushed, "disqualified" failed
-    # an L0 gate (never synced), anything else is a pending pass-through row from
-    # a limited enrich/score run
-    to_sync = [lead for lead in leads if lead.status == "scored"]
+    # only scored, qualified leads at or above --min-tier go out: "synced" is already
+    # pushed, "disqualified" failed an L0 gate (never synced), a tier below the
+    # minimum (or no tier: scored before v4) stays in JSONL, anything else is a
+    # pending pass-through row from a limited enrich/score run
+    min_tier = getattr(args, "min_tier", None) or "C"
+    allowed = set(_TIER_ORDER[: _TIER_ORDER.index(min_tier) + 1])
+    scored = [lead for lead in leads if lead.status == "scored"]
+    to_sync = [lead for lead in scored if lead.qualified and lead.tier in allowed]
+    below_tier = len(scored) - len(to_sync)
     already_synced = sum(1 for lead in leads if lead.status == "synced")
     disqualified = sum(1 for lead in leads if lead.status == "disqualified")
-    not_scored = len(leads) - len(to_sync) - already_synced - disqualified
+    not_scored = len(leads) - len(scored) - already_synced - disqualified
     started_at = _now_iso()
 
     report = sink.write(to_sync, limit=args.limit)
@@ -847,13 +926,16 @@ def cmd_sync(args: argparse.Namespace) -> int:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {"run_id": args.run}
     manifest["stage"] = "sync"
     manifest["sync"] = {
-        "config_snapshot": {"sink": args.sink, "notion": config["notion"], "limit": args.limit},
+        "config_snapshot": {
+            "sink": args.sink, "notion": config["notion"], "limit": args.limit, "min_tier": min_tier,
+        },
         "counts": {
             "input": len(leads),
             "created": len(report.created),
             "already_in_notion": len(report.cached),
             "already_synced": already_synced,
             "skipped_disqualified": disqualified,
+            "skipped_below_min_tier": below_tier,
             "skipped_not_scored": not_scored,
             "beyond_limit": report.pending,
             "failed": len(report.failed),
@@ -870,6 +952,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
         f"{len(report.cached)} already there (cache), {already_synced} already synced, "
         f"{len(report.failed)} failed"
         + (f", {disqualified} disqualified (not synced)" if disqualified else "")
+        + (f", {below_tier} below tier {min_tier} or unscored by v4 (not synced)" if below_tier else "")
     )
     for lead, error in report.failed:
         print(f"  failed: {lead.company} ({lead.domain or 'no website'}): {error}")
@@ -1079,8 +1162,7 @@ def _ask(question: str, default: str = "") -> str:
 
 _GO_MODES = ("Lead Gen", "Draft Outreach", "Both")
 _DRAFT_SCOPES = (
-    "Only pages with an SM Audit note",
-    "Also pages without a note (generic praise)",
+    "Pages with no draft yet",
     "Redraft pages that already have a draft",
 )
 
@@ -1110,7 +1192,7 @@ def _go_draft_outreach(args: argparse.Namespace) -> int:
     # dry run first; writing needs an explicit yes, same as `draft-notion`
     base = dict(
         config=args.config, limit=limit, yes=False, company=company,
-        all=scope == _DRAFT_SCOPES[1], redraft=scope == _DRAFT_SCOPES[2],
+        redraft=scope == _DRAFT_SCOPES[1],
     )
     code = cmd_draft_notion(argparse.Namespace(**base))
     if code != 0 or _ask("Write these drafts to Notion? (y/n)", "n").lower() not in ("y", "yes"):
@@ -1348,16 +1430,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     dn_cmd = sub.add_parser(
         "draft-notion",
-        help="draft for Notion pages with an SM Audit note and no draft yet",
+        help="draft for Notion pages with no draft yet (Tier >= outreach.auto_draft_min_tier, Verdict not Skip)",
     )
     dn_cmd.add_argument(
         "--company", help="draft only pages whose Company contains this text"
     )
     dn_cmd.add_argument(
         "--redraft", action="store_true", help="also rewrite pages that already have a draft"
-    )
-    dn_cmd.add_argument(
-        "--all", action="store_true", help="also draft pages without an SM Audit note"
     )
     dn_cmd.add_argument("--limit", type=int, help="draft at most N pages")
     dn_cmd.add_argument("--yes", action="store_true", help="write to Notion (default: dry run)")
@@ -1370,6 +1449,15 @@ def build_parser() -> argparse.ArgumentParser:
     sync_cmd.add_argument("--sink", required=True, help='sink name, e.g. "notion"')
     sync_cmd.add_argument(
         "--limit", type=int, help="create at most N pages — dry-run"
+    )
+    sync_cmd.add_argument(
+        "--min-tier", choices=("A", "B", "C"), default="C",
+        help="sync only qualified leads at this tier or better (default C; D stays in JSONL)",
+    )
+    sync_cmd.add_argument(
+        "--rescore", action="store_true",
+        help="update only the score properties on pages already in Notion "
+        "(this --run, or the latest v4 row of every run)",
     )
     sync_cmd.add_argument(
         "--refresh-cache",

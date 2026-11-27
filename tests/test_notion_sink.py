@@ -564,17 +564,190 @@ def _draftable_sink(monkeypatch):
     return sink, sent
 
 
-def test_query_draftable_filters(monkeypatch):
+def _conditions(payload):
+    return payload["filter"]["and"]
+
+
+def _or_values(condition):
+    return [(c["property"], c["select"]) for c in condition["or"]]
+
+
+def test_query_draftable_filter_follows_auto_draft_eligibility(monkeypatch):
     sink, sent = _draftable_sink(monkeypatch)
-
-    def props(payload):
-        return [c.get("property") for c in payload["filter"]["and"]]
-
     sink.query_draftable()
-    assert props(sent[-1]) == [None, "Qualified", "Draft Message", "SM Audit"]  # first is the Status "or"
+    status, qualified, verdict, tier, draft = _conditions(sent[-1])
+    assert _or_values(status) == [("Status", {"equals": "Not started"}), ("Status", {"is_empty": True})]
+    assert qualified == {"property": "Qualified", "checkbox": {"equals": True}}
+    # an empty Verdict must pass: Skip is the only value that stops a page
+    assert _or_values(verdict) == [("Verdict", {"is_empty": True}), ("Verdict", {"does_not_equal": "Skip"})]
+    # empty Tier (hand-made / backfilled page) stays eligible; default minimum B
+    assert _or_values(tier) == [
+        ("Tier", {"is_empty": True}), ("Tier", {"equals": "A"}), ("Tier", {"equals": "B"}),
+    ]
+    assert draft == {"property": "Draft Message", "rich_text": {"is_empty": True}}
+    assert "SM Audit" not in json.dumps(sent[-1])  # the note is optional now
+
+
+def test_query_draftable_options(monkeypatch):
+    sink, sent = _draftable_sink(monkeypatch)
+    sink.query_draftable(min_tier="C")
+    assert [v for _, v in _or_values(_conditions(sent[-1])[3])][-1] == {"equals": "C"}
     sink.query_draftable(redraft=True)
-    assert props(sent[-1]) == [None, "Qualified", "SM Audit"]
-    sink.query_draftable(need_note=False)
-    assert props(sent[-1]) == [None, "Qualified", "Draft Message"]
+    conditions = _conditions(sent[-1])
+    assert "Draft Message" not in json.dumps(conditions)
+    assert ("Status", {"equals": "Queued"}) in _or_values(conditions[0])
+    assert ("Status", {"equals": "Draft failed"}) in _or_values(conditions[0])
     sink.query_draftable(company="Mira")
-    assert props(sent[-1]) == [None, "Qualified", "Draft Message", "SM Audit", "Company"]
+    assert _conditions(sent[-1])[-1] == {"property": "Company", "title": {"contains": "Mira"}}
+
+
+def test_query_draftable_scopes_to_page_ids(monkeypatch):
+    sink, sent = _draftable_sink(monkeypatch)
+    monkeypatch.setattr(sink, "_post", lambda url, payload: {"results": [{"id": "a"}, {"id": "b"}]})
+    assert [p["id"] for p in sink.query_draftable(page_ids={"b"})] == ["b"]
+
+
+# --- v2 step 6: market / niche / score properties, --rescore ---
+
+
+def _v4_lead(**overrides):
+    base = dict(
+        market="serbia", language="sr", industry="dental clinic", niche="dental clinic",
+        niche_label="stomatološke ordinacije", qualified=True, lead_type="redesign",
+        need_score=70.0, viability_score=55.5, reach_score=100, priority=64.2, tier="B",
+        score_reasons=["niche match", "no HTTPS", "best channel: Instagram"],
+        score_confidence="high", audit_notes="WordPress site, no HTTPS.",
+    )
+    base.update(overrides)
+    return _lead(**base)
+
+
+def test_to_notion_properties_writes_market_niche_and_scores():
+    props = to_notion_properties(_v4_lead())
+    assert props["Market"] == {"select": {"name": "serbia"}}
+    assert props["Language"] == {"select": {"name": "sr"}}
+    assert props["Industry"] == {"select": {"name": "dental clinic"}}
+    assert props["Niche Label"]["rich_text"][0]["text"]["content"] == "stomatološke ordinacije"
+    assert props["Tier"] == {"select": {"name": "B"}}
+    assert props["Priority"] == {"number": 64.2}
+    assert props["Score Reasons"]["rich_text"][0]["text"]["content"] == (
+        "Need 70 · Viability 55.5 · Reach 100 · niche match · no HTTPS · best channel: Instagram"
+    )
+    for absent in ("Market", "Language", "Niche Label", "Tier", "Priority", "Score Reasons", "Runs Ads"):
+        assert absent not in to_notion_properties(_lead())
+
+
+def test_disqualified_lead_score_reasons_have_no_subscores():
+    lead = _v4_lead(qualified=False, need_score=None, viability_score=None, reach_score=None,
+                    priority=None, tier=None, score_reasons=["disqualified: chain: 4 listings"])
+    props = to_notion_properties(lead)
+    assert props["Score Reasons"]["rich_text"][0]["text"]["content"] == "disqualified: chain: 4 listings"
+    assert "Tier" not in props and "Priority" not in props
+
+
+@pytest.mark.parametrize("ads_tags, expected", [(["meta_pixel"], True), ([], False)])
+def test_runs_ads_prefilled_from_ads_tags_at_creation(ads_tags, expected):
+    assert to_notion_properties(_lead(ads_tags=ads_tags))["Runs Ads"] == {"checkbox": expected}
+
+
+def test_score_properties_touch_only_score_fields():
+    from pipeline.sinks.notion_sink import SCORE_PROPERTIES, score_properties
+
+    props = score_properties(_v4_lead(ads_tags=["gtm"], sm_audit="note", draft_message="hi",
+                                      suggested_channel="Instagram"))
+    assert tuple(props) == SCORE_PROPERTIES
+    for human in ("Verdict", "Skip Reason", "SM Audit", "Status", "Communication", "Draft Message",
+                  "Draft Notes", "Suggested Channel", "Chosen Channel", "Runs Ads", "Outcome",
+                  "Booking Method", "Discovery Notes", "Price Challenged", "Market", "Language"):
+        assert human not in props
+    assert props["Audit Notes"]["rich_text"][0]["text"]["content"] == "WordPress site, no HTTPS."
+
+
+def test_score_properties_clear_tier_of_a_newly_disqualified_lead():
+    from pipeline.sinks.notion_sink import score_properties
+
+    props = score_properties(_v4_lead(qualified=False, tier=None, priority=None, need_score=None,
+                                      viability_score=None, reach_score=None, lead_type=None,
+                                      score_reasons=[], audit_notes=""))
+    assert props["Tier"] == {"select": None} and props["Priority"] == {"number": None}
+    assert props["Qualified"] == {"checkbox": False} and props["Lead Type"] == {"select": None}
+    assert props["Score Reasons"] == {"rich_text": []} and props["Audit Notes"] == {"rich_text": []}
+
+
+def test_lead_from_page_reads_market_niche_and_scores():
+    from pipeline.sinks.notion_sink import lead_from_page
+
+    page = {"id": "p1", "properties": to_notion_properties(_v4_lead())}
+    # Notion returns rich text with plain_text; mirror that
+    for name in ("Niche Label", "Score Reasons", "Audit Notes"):
+        page["properties"][name] = {"rich_text": [
+            {"plain_text": t["text"]["content"]} for t in page["properties"][name]["rich_text"]
+        ]}
+    page["properties"]["Market"] = {"select": {"name": "Serbia"}}  # option name casing doesn't matter
+    lead = lead_from_page(page)
+    assert (lead.market, lead.language, lead.industry, lead.niche) == ("serbia", "sr", "dental clinic", "dental clinic")
+    assert lead.niche_label == "stomatološke ordinacije"
+    assert (lead.tier, lead.priority) == ("B", 64.2)
+    assert lead.score_reasons == ["niche match", "no HTTPS", "best channel: Instagram"]
+
+
+def test_lead_from_page_without_new_properties_is_blank():
+    from pipeline.sinks.notion_sink import lead_from_page
+
+    lead = lead_from_page(_manual_page())
+    assert (lead.market, lead.language, lead.niche_label, lead.tier, lead.priority) == ("", "", "", None, None)
+    assert lead.niche == "hairdresser" and lead.score_reasons == []
+
+
+class PatchSession(FakeSession):
+    def __init__(self, patch_codes=()):
+        super().__init__([])
+        self.patch_codes = list(patch_codes)
+        self.patches = []
+
+    def patch(self, url, headers=None, json=None, timeout=None):
+        self.patches.append({"url": url, "json": json})
+        return FakeResponse(self.patch_codes.pop(0) if self.patch_codes else 200)
+
+
+def test_rescore_updates_cached_pages_and_reports_the_rest(tmp_path):
+    sink, _ = _sink(tmp_path, [])
+    session = PatchSession(patch_codes=[200, 500])
+    sink.session = session
+    save_seen(sink.cache_path, {
+        "domain:bobic.rs": {"page_id": "page-1", "snapshot": {"emails": []}},
+        "domain:old.rs": {"page_id": "page-2", "snapshot": {"emails": ["office@mira.rs"]}},
+        "domain:fail.rs": {"page_id": "page-3", "snapshot": {"emails": []}},
+    })
+    report = sink.rescore([
+        _v4_lead(),
+        _v4_lead(company="Mira", domain="mira.rs", contact_emails=["office@mira.rs"]),  # email match
+        _v4_lead(company="New", domain="new.rs"),  # never synced
+    ])
+    assert [l.company for l in report.updated] == ["Zubar Bobić"]
+    assert [l.company for l, _ in report.failed] == ["Mira"]
+    assert [l.company for l in report.no_page] == ["New"]
+    assert [c["url"].rsplit("/", 1)[-1] for c in session.patches] == ["page-1", "page-2"]
+    assert set(session.patches[0]["json"]["properties"]) == {
+        "Tier", "Priority", "Score Reasons", "Qualified", "Lead Type", "Audit Notes",
+    }
+    assert "Runs Ads" not in session.patches[0]["json"]["properties"]  # manual value kept
+
+
+def test_rescore_limit_caps_updates(tmp_path):
+    sink, _ = _sink(tmp_path, [])
+    sink.session = PatchSession()
+    save_seen(sink.cache_path, {
+        "domain:a.rs": {"page_id": "pa", "snapshot": {}},
+        "domain:b.rs": {"page_id": "pb", "snapshot": {}},
+    })
+    report = sink.rescore([_v4_lead(domain="a.rs"), _v4_lead(domain="b.rs")], limit=1)
+    assert len(report.updated) == 1 and report.pending == 1
+
+
+def test_rescore_auth_failure_stops_the_batch(tmp_path):
+    sink, _ = _sink(tmp_path, [])
+    sink.session = PatchSession(patch_codes=[401])
+    save_seen(sink.cache_path, {"domain:bobic.rs": {"page_id": "p", "snapshot": {}}})
+    with pytest.raises(NotionAuthError):
+        sink.rescore([_v4_lead()])

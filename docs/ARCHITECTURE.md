@@ -268,12 +268,29 @@ has to flatten a few `Lead` fields deliberately rather than fail on them:
 | `lighthouse`                                            | `Lighthouse` (Rich text)        | One property, one `Label: value` line each in fixed order (`Performance`, `Accessibility`, `Best Practices`, `SEO`); categories missing from the audit are skipped |
 | `reachability_score`                                    | `Reachability Score` (Number)   | Only sent when not `None` (a lead that failed the qualification filters gets no score at all — SCORING.md §1)                                              |
 | `opportunity_score`                                     | `Opportunity Score` (Number)    | Only sent when not `None` — an `unclear` lead_type leaves this blank rather than guessing which formula applies (SCORING.md §3)                            |
-| `qualified`                                              | `Qualified` (Checkbox)          | Always sent — industry + country filters passed AND `reachability_score > 0` (SCORING.md §1-2)                                                             |
+| `qualified`                                              | `Qualified` (Checkbox)          | Always sent — passed every L0 gate (scorer v4, SCORING.md)                                                                                                |
+| `market`, `language`                                    | `Market`, `Language` (Select)   | Preset id (`serbia` / `uae`) and `sr` / `en`; only sent when set. `lead_from_page` reads Market lowercased                                                 |
+| `industry` (= `niche`)                                  | `Industry` (Select)             | The niche name created in `go`; there is no separate Niche property. Read back into both `industry` and `niche`                                         |
+| `niche_label`                                           | `Niche Label` (Rich text)       | The niche's draft phrase; read back by `draft-notion` (falls back to `Industry`)                                                                         |
+| `tier`, `priority`                                      | `Tier` (Select A–D), `Priority` (Number) | Scorer v4; only sent when set                                                                                                                    |
+| `need_score`, `viability_score`, `reach_score`, `score_reasons` | `Score Reasons` (Rich text) | One line: `Need 70 · Viability 55.5 · Reach 100 · <reasons>` (no sub-score columns, G13). Never passed to drafting                                    |
+| `ads_tags`                                              | `Runs Ads` (Checkbox)           | Page creation only: checked if any tag was found. Not in `score_properties`, so `--rescore` never overwrites your manual value                          |
 | `schema_version`, `scoring_version`, `run_id`, `errors` | _(none)_                        | Deliberately not synced — Notion is a sink for humans to act on, not the source of truth; this bookkeeping stays in the JSONL manifest where it's queryable |
 
 This mapping lives in one function (`to_notion_properties(lead: Lead) -> dict`)
 in `notion_sink.py` — if the `Lead` schema grows again, this is the one place
 that needs a matching update, not every call site.
+
+`score_properties(lead)` is the subset `sync --rescore` writes to existing pages:
+`Tier`, `Priority`, `Score Reasons`, `Qualified`, `Lead Type`, `Audit Notes`
+(`SCORE_PROPERTIES`). Unlike page creation it sends empty values as clears, so a
+lead the new formula disqualifies loses its old Tier. It never contains a field you
+edit by hand (`Verdict`, `Skip Reason`, `SM Audit`, `Status`, `Communication`,
+drafts, `Runs Ads`, `Outcome`, …) — a test enforces that.
+
+Properties only you write (the pipeline never sets them): `Verdict` (only `Skip`
+is used), `Skip Reason`, `Outcome`, `Ref` (empty until S17), `Booking Method`,
+`Discovery Notes`, `Price Challenged`, and `Runs Ads` after page creation.
 
 ## 7. Stage interfaces
 

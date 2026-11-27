@@ -360,7 +360,7 @@ figure { margin: 0; }
       points: [["Runs", "Each entry of the file's runs: list, one after another, pausing between them."], ["Failure", "One failing run does not stop the rest."], ["Credits", "Running out of AI credits pauses the batch. State is saved in data/batches/<name>.json; re-run to resume at draft."]] },
     { id: "notion", name: "Hand-made leads", hint: "draft-notion",
       cmd: "python -m pipeline.runner draft-notion --limit 1   # dry run\npython -m pipeline.runner draft-notion --yes       # writes",
-      points: [["Input", "Notion pages with Source = Manual, an empty Draft Message, and your notes in SM Audit."], ["Writes", "Suggested Channel and Draft Message. Status becomes Queued only from Not started."], ["Skips", "No run folder, no collect/enrich/score/sync, never overwrites a draft."]] }
+      points: [["Input", "Notion pages with an empty Draft Message, Market and Industry set, Verdict not Skip, Tier empty or B+. Your SM Audit note is optional."], ["Writes", "Suggested Channel and Draft Message. Status becomes Queued only from Not started."], ["Skips", "No run folder, no collect/enrich/score/sync, never overwrites a draft."]] }
   ];
 
   /* ---------- static diagram ---------- */

@@ -47,12 +47,30 @@ class NotionAuthError(RuntimeError):
     """401/403 from Notion — the whole batch would fail, so stop at once."""
 
 
+_TIERS = ("A", "B", "C", "D")
+
+# properties `sync --rescore` may write — score output only, never a field the
+# operator edits (Verdict, SM Audit, Status, Communication, drafts, Runs Ads…)
+SCORE_PROPERTIES = ("Tier", "Priority", "Score Reasons", "Qualified", "Lead Type", "Audit Notes")
+
+_SUBSCORE_RE = re.compile(r"^(Need|Viability|Reach) -?\d")
+
+
 @dataclass
 class SyncReport:
     created: list[Lead] = field(default_factory=list)
     cached: list[Lead] = field(default_factory=list)  # already in Notion
     failed: list[tuple[Lead, str]] = field(default_factory=list)
     pending: int = 0  # beyond --limit, untouched
+
+
+@dataclass
+class RescoreReport:
+    updated: list[Lead] = field(default_factory=list)
+    no_page: list[Lead] = field(default_factory=list)  # not in the sync cache
+    failed: list[tuple[Lead, str]] = field(default_factory=list)
+    pending: int = 0  # beyond --limit, untouched
+    matched_keys: set[str] = field(default_factory=set)  # cache keys reached
 
 
 def _text(content: str) -> dict:
@@ -79,6 +97,33 @@ def select_name(value: str, city_only: bool = False) -> str:
     return value.replace(",", " ").strip()[:100]
 
 
+def score_reasons_text(lead: Lead) -> str:
+    """Notion `Score Reasons`: the sub-scores, then the scorer's reasons, one line."""
+    parts = [
+        f"{label} {value:g}"
+        for label, value in (
+            ("Need", lead.need_score), ("Viability", lead.viability_score), ("Reach", lead.reach_score),
+        )
+        if value is not None
+    ]
+    return " · ".join(parts + list(lead.score_reasons))[:2000]
+
+
+def score_properties(lead: Lead) -> dict:
+    """The only properties `sync --rescore` writes (SCORE_PROPERTIES). Unlike
+    to_notion_properties(), empty values are sent as clears: a lead the new
+    formula disqualifies must lose its old Tier and Priority."""
+    reasons = score_reasons_text(lead)
+    return {
+        "Tier": {"select": {"name": lead.tier} if lead.tier else None},
+        "Priority": {"number": lead.priority},
+        "Score Reasons": _text(reasons) if reasons else {"rich_text": []},
+        "Qualified": {"checkbox": lead.qualified},
+        "Lead Type": {"select": {"name": lead.lead_type} if lead.lead_type else None},
+        "Audit Notes": _text(lead.audit_notes[:2000]) if lead.audit_notes else {"rich_text": []},
+    }
+
+
 def to_notion_properties(lead: Lead) -> dict:
     """The single §6.1 mapping point. None/empty fields are omitted rather
     than sent as blanks — a checkbox can't say "unknown", so HTTPS/Mobile
@@ -92,6 +137,12 @@ def to_notion_properties(lead: Lead) -> dict:
         "Status": {"select": {"name": "Queued" if lead.qualified and lead.draft_message else "Not started"}},
         "Qualified": {"checkbox": lead.qualified},
     }
+    if lead.market:
+        props["Market"] = {"select": {"name": select_name(lead.market)}}
+    if lead.language:
+        props["Language"] = {"select": {"name": select_name(lead.language)}}
+    if lead.niche_label:
+        props["Niche Label"] = _text(lead.niche_label)
     location = select_name(lead.location, city_only=True)
     if location:
         props["Location"] = {"select": {"name": location}}
@@ -145,6 +196,17 @@ def to_notion_properties(lead: Lead) -> dict:
         props["Total Score"] = {"number": lead.total_score}
     if lead.lead_type:
         props["Lead Type"] = {"select": {"name": lead.lead_type}}
+    if lead.tier:
+        props["Tier"] = {"select": {"name": lead.tier}}
+    if lead.priority is not None:
+        props["Priority"] = {"number": lead.priority}
+    reasons = score_reasons_text(lead)
+    if reasons:
+        props["Score Reasons"] = _text(reasons)
+    # page creation only: Runs Ads is not in SCORE_PROPERTIES, so --rescore never
+    # overwrites what the operator set by hand after a call
+    if lead.ads_tags is not None:
+        props["Runs Ads"] = {"checkbox": bool(lead.ads_tags)}
     return props
 
 
@@ -261,17 +323,33 @@ def _select_name(prop: dict | None) -> str:
 def lead_from_page(page: dict, country: str = "") -> Lead:
     """Notion page (hand-made or synced) -> Lead, for `draft-notion`. Reverse of
     to_notion_properties() for the fields drafting needs. qualified is True:
-    the operator chose to draft it."""
+    the operator chose to draft it. Market is read as the preset id (lowercased,
+    so an option named "Serbia" works too); Industry fills industry and niche.
+    Score Reasons is read back without the sub-score items and never reaches
+    the prompt. Verdict isn't read: query_draftable already drops Skip pages."""
     props = page.get("properties", {})
     snap = _snapshot_from_properties(props)
     source_name = _select_name(props.get("Source"))
+    industry = _select_name(props.get("Industry"))
+    priority = (props.get("Priority") or {}).get("number")
+    reasons = [
+        r.strip() for r in _rich_text(props.get("Score Reasons")).split(" · ")
+        if r.strip() and not _SUBSCORE_RE.match(r.strip())
+    ]
     return Lead(
         company=snap["company"],
         domain=snap["domain"],
         source=next((k for k, v in _SOURCE_OPTIONS.items() if v == source_name), "manual"),
-        industry=_select_name(props.get("Industry")) or "other",
+        industry=industry or "other",
         location=_select_name(props.get("Location")),
         country=country,
+        market=_select_name(props.get("Market")).strip().lower(),
+        language=_select_name(props.get("Language")).strip().lower(),
+        niche=industry,
+        niche_label=_rich_text(props.get("Niche Label")).strip(),
+        tier=_select_name(props.get("Tier")) or None,
+        priority=priority,
+        score_reasons=reasons,
         contact_emails=snap["emails"],
         contact_phones=snap["phones"],
         social_links=snap["socials"],
@@ -284,6 +362,15 @@ def lead_from_page(page: dict, country: str = "") -> Lead:
         suggested_channel=_select_name(props.get("Suggested Channel")),
         status="scored",
     )
+
+
+def match_cache_key(lead: Lead, seen: dict, email_index: dict[str, str]) -> str | None:
+    """The seen_domains.json key a lead belongs to: its own key, else the key of
+    an entry sharing one of its emails. None = not in Notion (as far as the cache knows)."""
+    key = cache_key(lead)
+    if key in seen:
+        return key
+    return next((email_index[e] for e in email_keys(lead) if e in email_index), None)
 
 
 def load_seen(path: str | Path) -> dict:
@@ -355,9 +442,7 @@ class NotionSink:
         attempts = 0
         for lead in leads:
             key = cache_key(lead)
-            match_key = key if key in seen else next(
-                (email_index[e] for e in email_keys(lead) if e in email_index), None
-            )
+            match_key = match_cache_key(lead, seen, email_index)
             if match_key is not None:
                 entry = seen[match_key]
                 new_info = _new_info(entry.get("snapshot", {}), lead)
@@ -402,6 +487,35 @@ class NotionSink:
             report.created.append(lead)
         return report
 
+    def rescore(self, leads: list[Lead], limit: int | None = None) -> RescoreReport:
+        """Push the current score fields (score_properties() only) to the pages these
+        leads already have. The page comes from the cache (key, then email index),
+        never a live query; a lead with no cache entry is reported, not created.
+        limit caps update attempts, like write()."""
+        seen = load_seen(self.cache_path)
+        email_index = _email_index(seen)
+        report = RescoreReport()
+        attempts = 0
+        for lead in leads:
+            key = match_cache_key(lead, seen, email_index)
+            if key is None:
+                report.no_page.append(lead)
+                continue
+            if limit is not None and attempts >= limit:
+                report.pending += 1
+                continue
+            attempts += 1
+            try:
+                self.update_page(seen[key]["page_id"], score_properties(lead))
+            except NotionAuthError:
+                raise
+            except Exception as e:
+                report.failed.append((lead, str(e)))
+                continue
+            report.updated.append(lead)
+            report.matched_keys.add(key)
+        return report
+
     def refresh_cache(self) -> int:
         """Rebuild seen_domains.json from what's actually in Notion — the
         periodic refresh from docs/ARCHITECTURE.md §9. Replaces the cache: Notion
@@ -434,24 +548,41 @@ class NotionSink:
         return len(seen)
 
     def query_draftable(
-        self, limit: int | None = None, redraft: bool = False, need_note: bool = True,
-        company: str = "",
+        self, limit: int | None = None, redraft: bool = False, min_tier: str = "B",
+        company: str = "", page_ids: set[str] | None = None,
     ) -> list[dict]:
-        """Pages still to be worked (Status Not started / blank / Queued) with the
-        Qualified box checked, oldest first.
-        Default: an empty Draft Message and a filled SM Audit — the operator's note
-        is the gate. redraft also returns pages that already have a draft;
-        need_note=False also returns pages without a note; company keeps only pages
-        whose Company contains that text (case-insensitive)."""
-        conditions: list[dict] = [{"or": [
+        """Pages drafting may pick up (script_edits.md §11.2), oldest first:
+        Qualified checked, Status Not started or blank, Draft Message empty, Verdict
+        not Skip, Tier empty or at least min_tier. An empty Tier stays eligible: a
+        hand-made or backfilled page has none. SM Audit is optional. Market and
+        Industry are checked by the caller, so a page missing them is reported
+        instead of silently left out.
+        redraft also returns pages that already have a draft (Status Queued or
+        Draft failed too); company keeps only pages whose Company contains that
+        text; page_ids keeps only those pages (one run's pages)."""
+        tiers = _TIERS[: _TIERS.index(min_tier) + 1]
+        statuses = [
             {"property": "Status", "select": {"equals": "Not started"}},
-            {"property": "Status", "select": {"equals": "Queued"}},
             {"property": "Status", "select": {"is_empty": True}},
-        ]}, {"property": "Qualified", "checkbox": {"equals": True}}]
+        ]
+        if redraft:
+            statuses += [
+                {"property": "Status", "select": {"equals": "Queued"}},
+                {"property": "Status", "select": {"equals": "Draft failed"}},
+            ]
+        conditions: list[dict] = [
+            {"or": statuses},
+            {"property": "Qualified", "checkbox": {"equals": True}},
+            {"or": [
+                {"property": "Verdict", "select": {"is_empty": True}},
+                {"property": "Verdict", "select": {"does_not_equal": "Skip"}},
+            ]},
+            {"or": [{"property": "Tier", "select": {"is_empty": True}}] + [
+                {"property": "Tier", "select": {"equals": t}} for t in tiers
+            ]},
+        ]
         if not redraft:
             conditions.append({"property": "Draft Message", "rich_text": {"is_empty": True}})
-        if need_note:
-            conditions.append({"property": "SM Audit", "rich_text": {"is_not_empty": True}})
         if company:
             conditions.append({"property": "Company", "title": {"contains": company}})
         flt = {"and": conditions}
@@ -462,7 +593,9 @@ class NotionSink:
             if cursor:
                 payload["start_cursor"] = cursor
             data = self._post(f"{API_BASE}/databases/{self.database_id}/query", payload)
-            pages += data.get("results", [])
+            pages += [
+                p for p in data.get("results", []) if page_ids is None or p.get("id") in page_ids
+            ]
             if not data.get("has_more") or (limit is not None and len(pages) >= limit):
                 break
             cursor = data.get("next_cursor")
@@ -473,6 +606,11 @@ class NotionSink:
             f"{API_BASE}/pages/{page_id}",
             headers=self._headers, json={"properties": properties}, timeout=self.timeout_s,
         )
+        if response.status_code in (401, 403):
+            raise NotionAuthError(
+                f"Notion auth failed ({response.status_code}) — check NOTION_TOKEN "
+                "and that the integration is connected to the database"
+            )
         if response.status_code >= 400:
             raise RuntimeError(f"Notion API {response.status_code}: {response.text[:200]}")
         time.sleep(self.delay_s)
