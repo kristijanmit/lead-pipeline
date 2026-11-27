@@ -23,7 +23,7 @@ import subprocess
 from dataclasses import dataclass, field
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, UnicodeDammit
 
 USER_AGENT = "agency-lead-pipeline/0.1 (single-operator lead tool)"
 
@@ -169,6 +169,15 @@ def classify_probe_error(error: Exception) -> str:
     return "other"
 
 
+def html_text(response) -> str:
+    """Decode an HTML response. Without a charset in the Content-Type header,
+    requests falls back to ISO-8859-1 and UTF-8 "ć" / "Š" turn into "Ä\x87" / "Å ";
+    then the page's own <meta charset> (else a UTF-8-first guess) decides."""
+    if "charset" in response.headers.get("Content-Type", "").lower():
+        return response.text
+    return UnicodeDammit(response.content, is_html=True).unicode_markup or ""
+
+
 def probe(domain: str, timeout_s: float) -> tuple[str, str, bool]:
     """One GET for the working homepage URL, https first -> (url, html, https).
     https means "the https:// URL works". Raises ProbeError with the most
@@ -179,7 +188,7 @@ def probe(domain: str, timeout_s: float) -> tuple[str, str, bool]:
         try:
             response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=timeout_s)
             response.raise_for_status()
-            return str(response.url), response.text, is_https
+            return str(response.url), html_text(response), is_https
         except requests.RequestException as e:
             failures.append((classify_probe_error(e), f"{scheme}: {e}"))
     kind, _ = min(failures, key=lambda f: _ALIVENESS.index(f[0]))

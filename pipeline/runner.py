@@ -23,6 +23,7 @@ from pipeline.collectors.maps import RAW_CSV_NAME, grid_cell_count
 from pipeline.config import ConfigError, load_config
 from pipeline.dedupe import dedupe_leads, is_social_domain, lead_key, normalize_domain
 from pipeline.drafting import DraftBudgetError, draft_lead, examples_path, language_skip_reason, load_examples
+from pipeline.drafting.drafter import INVALID_PREFIX
 from pipeline.enrichers import apply_enrichers, get_enricher
 from pipeline.enrichers.audit import apply_audit
 from pipeline.market import Market, load_market, market_from_prompts, market_yaml
@@ -34,7 +35,7 @@ from pipeline.scoring import score
 from pipeline.sinks import get_sink
 from pipeline.sinks.csv_sink import CsvSink
 from pipeline.sinks.notion_sink import (
-    _email_index, _rich_text, _select_name, _text, cache_key, lead_from_page, load_rejected,
+    NotionAuthError, _email_index, _rich_text, _select_name, _text, cache_key, lead_from_page, load_rejected,
     load_seen, match_cache_key, save_seen,
 )
 
@@ -46,17 +47,9 @@ _ENRICH_STEPS = ("discovery", "contact", "audit")
 RUNS_DIR = Path("data/runs")
 BATCHES_DIR = Path("data/batches")
 
-# exit code for "out of AI credits / usage limit" — `run` stops before sync (draft
-# fields are only written when a Notion page is created) and `batch` pauses
+# exit code for "out of AI credits / usage limit": drafting stopped, the run's
+# collect/enrich/score/sync are done and the undrafted pages wait for draft-notion
 EXIT_OUT_OF_CREDITS = 3
-
-
-def _out_of_credits_message(detail: str) -> str:
-    return (
-        "drafting stopped: the claude CLI reports no credits / usage limit left "
-        f"({detail}). Finished drafts are saved. Once credits are back, resume with "
-        "`draft --run <run_id>` (skips leads that already have a draft), then `sync`."
-    )
 
 
 def _now_iso() -> str:
@@ -812,109 +805,230 @@ def cmd_audit_report(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_draft(args: argparse.Namespace) -> int:
-    """Suggest a channel and draft ONE first message per qualified, scored lead
-    that has none yet (docs/OUTREACH.md). Drafts are for human review — nothing
-    is sent. Re-runs skip leads that already have a draft, so a failed lead is
-    retried and the rest are not."""
+class _DraftTally:
+    """Counts for one drafting pass (auto step or draft-notion)."""
+
+    def __init__(self):
+        self.drafted = self.failed = self.errored = self.no_contact = self.undrafted = 0
+        self.skips: dict[str, int] = {}
+        self.out_of_credits = ""
+
+    def skip(self, reason: str) -> None:
+        self.skips[reason] = self.skips.get(reason, 0) + 1
+
+    def counts(self) -> dict:
+        return {
+            "drafted": self.drafted, "draft_failed": self.failed, "error": self.errored,
+            "no_contact_data": self.no_contact, "skipped": sum(self.skips.values()),
+            "undrafted_out_of_credits": self.undrafted,
+        }
+
+    def summary(self) -> str:
+        return (
+            f"{self.drafted} drafted, {self.failed} draft failed, {self.errored} errors (retried next time), "
+            f"{self.no_contact} without contact data"
+        )
+
+    def report(self) -> None:
+        _print_market_skips(self.skips)
+        if self.out_of_credits:
+            print(
+                f"  drafting stopped, out of AI credits ({self.out_of_credits}): {self.undrafted} pages "
+                "undrafted. Their Draft Message is empty, so `draft-notion` (or a later run) drafts them "
+                "once credits are back.",
+                file=sys.stderr,
+            )
+
+
+def _draft_page(sink, page: dict, lead, market: Market, ctx: dict, tally: _DraftTally, write: bool):
+    """Draft one Notion page from `lead` and (when `write`) update that page. Never
+    raises for a per-page problem (script_edits.md §11.4): a message that fails
+    validation sets Status "Draft failed" with the reason in Draft Notes; a CLI or
+    Notion error goes to Draft Notes / the report and leaves the page eligible.
+    DraftBudgetError (out of credits) and NotionAuthError propagate. Returns the
+    drafted lead."""
+    props = page.get("properties", {})
+    out = draft_lead(
+        lead, ctx["outreach"], ctx["draft_cfg"], market, variant=tally.drafted + tally.failed,
+        examples=ctx["examples"].get(market.language), niche=ctx.get("niche"), need_cfg=ctx["need_cfg"],
+    )
+    update: dict = {}
+    if out.draft_message:
+        tally.drafted += 1
+        had_draft = bool(_rich_text(props.get("Draft Message")))
+        verb = "overwrite" if had_draft else "write"
+        print(f"  {verb if write else 'would ' + verb}: {lead.company} -> {out.suggested_channel}")
+        print(f"    {out.draft_message}")
+        if out.draft_notes:
+            print(f"    verify before sending: {out.draft_notes}")
+        update = {
+            "Suggested Channel": {"select": {"name": out.suggested_channel}},
+            "Draft Message": _text(out.draft_message[:2000]),
+            # always sent: a redraft must not leave the old draft's note behind
+            "Draft Notes": _text(out.draft_notes[:2000]) if out.draft_notes else {"rich_text": []},
+        }
+        if _select_name(props.get("Status")) in ("Not started", "", "Draft failed"):
+            update["Status"] = {"select": {"name": "Queued"}}
+    elif out.errors != lead.errors:
+        error = out.errors[-1]
+        if error.startswith(INVALID_PREFIX):
+            tally.failed += 1
+            print(f"  draft failed: {lead.company}: {error}")
+            update = {
+                "Status": {"select": {"name": "Draft failed"}},
+                "Draft Notes": _text(f"Draft failed validation: {error[len(INVALID_PREFIX):]}"[:2000]),
+            }
+        else:
+            tally.errored += 1
+            print(f"  error: {lead.company}: {error}")
+            update = {"Draft Notes": _text(f"Draft error, retried next run: {error}"[:2000])}
+    else:
+        tally.no_contact += 1
+        print(f"  no contact data (add an Instagram link, phone or email): {lead.company}")
+    if write and update:
+        try:
+            sink.update_page(page["id"], update)
+        except NotionAuthError:
+            raise
+        except Exception as e:  # one page failing to save never stops the rest
+            tally.errored += 1
+            print(f"  error: {lead.company}: Notion update failed: {e}", file=sys.stderr)
+    return out
+
+
+def _draft_context(config: dict, niche: Niche | None = None) -> dict:
+    return {
+        "outreach": config["outreach"], "draft_cfg": config["draft"], "need_cfg": config["scoring"]["need"],
+        "examples": _Examples(config["outreach"]), "niche": niche,
+    }
+
+
+def _with_page_fields(lead, page: dict):
+    """The JSONL lead, plus what the operator may have set on the page since sync:
+    SM Audit (first praise source) and a hand-picked Suggested Channel."""
+    props = page.get("properties", {})
+    return replace(
+        lead,
+        sm_audit=_rich_text(props.get("SM Audit")) or lead.sm_audit,
+        suggested_channel=_select_name(props.get("Suggested Channel")) or lead.suggested_channel,
+        qualified=True,
+    )
+
+
+def _auto_draft(args: argparse.Namespace) -> int:
+    """The draft step at the end of run / batch / go (script_edits.md §11): this
+    run's pages in Notion that are still draftable (query_draftable, Tier >=
+    outreach.auto_draft_min_tier), drafted from the run's JSONL lead (it carries
+    niche_label and profile_facts) and written to the page. No prompt, no approval.
+    Per-page failures never stop it; running out of credits stops drafting, leaves
+    the rest undrafted (draft-notion or a later run picks them up) and returns
+    EXIT_OUT_OF_CREDITS. --limit caps the pages drafted."""
     config = load_config(args.config)
+    outreach = config["outreach"]
+    if not outreach["auto_draft"]:
+        print("drafting: outreach.auto_draft is off — draft later with `draft-notion`")
+        return 0
     run_dir = RUNS_DIR / args.run
     scored_path = run_dir / "scored.jsonl"
-    if not scored_path.exists():
-        raise ValueError(f"no scored.jsonl in {run_dir} — run score first")
     leads = read_jsonl(scored_path)
-    started_at = _now_iso()
-
-    outreach, draft_cfg = config["outreach"], config["draft"]
-    examples = _Examples(outreach)
-    manifest_path = run_dir / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {"run_id": args.run}
-    # the run's niche supplies the niche question and landing URL (runs before markets have none)
-    niche = Niche.from_dict(manifest["niche"]) if manifest.get("niche") else None
-    drafted = failed = skipped = no_contact = 0
-    markets = _DraftMarkets(config)
-    market_skips: dict[str, int] = {}
-    results = []
-    out_of_credits = ""
-    for lead in leads:
-        statuses = ("scored", "synced") if args.include_synced else ("scored",)
-        eligible = lead.status in statuses and lead.qualified and not lead.draft_message
-        if not eligible or (args.limit is not None and drafted + failed >= args.limit):
-            skipped += 1
-            results.append(lead)
+    sink = get_sink(getattr(args, "sink", "notion") or "notion", config)
+    seen = load_seen(sink.cache_path)
+    index = _email_index(seen)
+    by_page: dict[str, int] = {}
+    for i, lead in enumerate(leads):
+        if lead.status != "synced":
             continue
+        key = match_cache_key(lead, seen, index)
+        if key and seen[key].get("page_id"):
+            by_page.setdefault(seen[key]["page_id"], i)
+    started_at = _now_iso()
+    tally = _DraftTally()
+    manifest = _read_manifest(run_dir) or {"run_id": args.run}
+    min_tier = outreach["auto_draft_min_tier"]
+    if not by_page:
+        print(f"run {args.run}: nothing to draft (no page synced in this run)")
+        pages = []
+    else:
+        try:
+            pages = sink.query_draftable(min_tier=min_tier, page_ids=set(by_page))
+        except NotionAuthError:
+            raise
+        except Exception as e:  # Notion down: the pages stay draftable for draft-notion
+            print(f"  drafting skipped, Notion query failed: {e} — run `draft-notion` later", file=sys.stderr)
+            pages = []
+    ctx = _draft_context(config, _score_niche(run_dir))
+    markets = _DraftMarkets(config)
+    limit = getattr(args, "limit", None)
+    for n, page in enumerate(pages):
+        if limit is not None and tally.drafted + tally.failed + tally.errored >= limit:
+            break
+        i = by_page[page["id"]]
+        lead = _with_page_fields(leads[i], page)
         market, reason = markets.resolve(lead)
         if reason:
-            market_skips[reason] = market_skips.get(reason, 0) + 1
-            results.append(lead)
+            tally.skip(reason)
             continue
         try:
-            out = draft_lead(
-                lead, outreach, draft_cfg, market, variant=drafted + failed,
-                examples=examples.get(market.language), niche=niche, need_cfg=config["scoring"]["need"],
-            )
+            out = _draft_page(sink, page, lead, market, ctx, tally, write=True)
         except DraftBudgetError as e:
-            out_of_credits = str(e)
+            tally.out_of_credits = str(e)
+            tally.undrafted = len(pages) - n
             break
-        if out.draft_message:
-            drafted += 1
-        elif out.errors != lead.errors:
-            failed += 1
-        else:
-            no_contact += 1
-        results.append(out)
-        write_jsonl(scored_path, results + leads[len(results):])  # incremental: a crash keeps finished drafts
-
-    results = results + leads[len(results):]  # untouched leads after an early stop
-    write_jsonl(scored_path, results)
-    CsvSink(run_dir / "scored.csv").write(results)
+        leads[i] = replace(out, sm_audit=leads[i].sm_audit, qualified=leads[i].qualified)
+    write_jsonl(scored_path, leads)
+    CsvSink(run_dir / "scored.csv").write(leads)
 
     manifest["stage"] = "draft"
     manifest["draft"] = {
-        "config_snapshot": {"draft": draft_cfg, "limit": args.limit},
-        "counts": {
-            "input": len(leads), "drafted": drafted, "failed": failed,
-            "no_contact_data": no_contact, "skipped": skipped,
-            "skipped_market": sum(market_skips.values()),
-        },
-        "market_skip_reasons": market_skips,
-        "stopped_out_of_credits": bool(out_of_credits),
+        "config_snapshot": {"draft": config["draft"], "min_tier": min_tier, "limit": limit},
+        "counts": {"run_pages": len(by_page), "draftable": len(pages), **tally.counts()},
+        "market_skip_reasons": tally.skips,
+        "stopped_out_of_credits": bool(tally.out_of_credits),
         "started_at": started_at,
         "finished_at": _now_iso(),
     }
-    manifest_path.write_text(
+    (run_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
+    print(f"run {args.run} drafting (Tier {min_tier}+, {len(pages)} draftable pages): {tally.summary()}")
+    tally.report()
+    return EXIT_OUT_OF_CREDITS if tally.out_of_credits else 0
 
-    print(
-        f"run {args.run}: {drafted} drafted, {failed} failed, "
-        f"{no_contact} without contact data, {skipped} skipped"
-    )
-    _print_market_skips(market_skips)
-    for lead in results:
-        if lead.errors and lead.errors[-1].startswith("draft:") and not lead.draft_message:
-            print(f"  failed: {lead.company}: {lead.errors[-1]}")
-        elif lead.draft_notes:
-            print(f"  verify before sending: {lead.company}: {lead.draft_notes}")
-    print(f"  {scored_path} (+ scored.csv, manifest.json)")
-    if out_of_credits:
-        print(_out_of_credits_message(out_of_credits), file=sys.stderr)
-        return EXIT_OUT_OF_CREDITS
-    return 0
+
+def _jsonl_by_page(sink) -> tuple[dict[str, object], dict[str, Niche | None]]:
+    """page_id -> latest JSONL lead (via the sync cache, like --rescore), and run_id
+    -> that run's niche. draft-notion drafts from these when it can, so pages a run
+    left undrafted keep their profile_facts, niche_label and niche question."""
+    seen = load_seen(sink.cache_path)
+    index = _email_index(seen)
+    rows: dict[str, object] = {}
+    niches: dict[str, Niche | None] = {}
+    for path in sorted(RUNS_DIR.glob("*/scored.jsonl")):  # run ids sort by time: later wins
+        for lead in read_jsonl(path):
+            if lead.status != "synced":
+                continue
+            key = match_cache_key(lead, seen, index)
+            if key and seen[key].get("page_id"):
+                rows[seen[key]["page_id"]] = lead
+    for lead in rows.values():
+        if lead.run_id not in niches:
+            niches[lead.run_id] = _score_niche(RUNS_DIR / lead.run_id) if lead.run_id else None
+    return rows, niches
 
 
 def cmd_draft_notion(args: argparse.Namespace) -> int:
-    """Draft for Notion pages (hand-made or synced) per script_edits.md §11.2: no
-    draft yet, Qualified, Status Not started, Verdict not Skip, Tier empty or at
-    least outreach.auto_draft_min_tier. SM Audit is optional (the first praise
-    source when present). Pages without Market or Industry are skipped and
-    reported. The page is the input, so no run dir. Dry run unless --yes.
-    --redraft also rewrites existing drafts. Status -> Queued only from
-    "Not started" / blank. --limit caps the pages drafted, not the pages read."""
+    """Catch-up drafting for Notion pages per script_edits.md §11.2: no draft yet,
+    Qualified, Status Not started, Verdict not Skip, Tier empty or at least
+    outreach.auto_draft_min_tier. SM Audit is optional (the first praise source).
+    Pages without Market or Industry are skipped and reported. A page synced by a
+    run is drafted from its JSONL row (profile_facts, niche); a hand-made page from
+    the page itself. Writes when outreach.auto_draft is on (--dry-run previews);
+    with auto_draft off it is a dry run unless --yes. --redraft also rewrites
+    existing drafts. Per-page failures never stop it. --limit caps the pages drafted."""
     config = load_config(args.config)
     sink = get_sink("notion", config)
-    outreach, draft_cfg = config["outreach"], config["draft"]
-    examples = _Examples(outreach)
+    outreach = config["outreach"]
+    write = not getattr(args, "dry_run", False) and (outreach["auto_draft"] or getattr(args, "yes", False))
 
     redraft = getattr(args, "redraft", False)
     pages = sink.query_draftable(
@@ -926,60 +1040,40 @@ def cmd_draft_notion(args: argparse.Namespace) -> int:
               f"Verdict not Skip and Tier {outreach['auto_draft_min_tier']} or better "
               "(--redraft rewrites existing drafts)")
         return 0
-    drafted = failed = no_contact = 0
+    rows, niches = _jsonl_by_page(sink)
+    tally = _DraftTally()
     markets = _DraftMarkets(config)
-    market_skips: dict[str, int] = {}
-    for page in pages:
-        if args.limit is not None and drafted + failed + no_contact >= args.limit:
+    contexts: dict[str, dict] = {}
+    for n, page in enumerate(pages):
+        if args.limit is not None and tally.drafted + tally.failed + tally.errored + tally.no_contact >= args.limit:
             break
         props = page.get("properties", {})
-        lead = lead_from_page(page)
+        row = rows.get(page.get("id", ""))
+        lead = _with_page_fields(row, page) if row is not None else lead_from_page(page)
         missing = [name for name in ("Market", "Industry") if not _select_name(props.get(name))]
         if missing:
-            reason = "set Market and Industry on the page"
-            market_skips[reason] = market_skips.get(reason, 0) + 1
+            tally.skip("set Market and Industry on the page")
             print(f"  skipped: {lead.company}: no {' / '.join(missing)}")
             continue
         market, reason = markets.resolve(lead)
         if reason:
-            market_skips[reason] = market_skips.get(reason, 0) + 1
+            tally.skip(reason)
             print(f"  skipped: {lead.company}: {reason}")
             continue
-        # a page has no niche definition: the question comes from the examples' Questions list
-        out = draft_lead(
-            lead, outreach, draft_cfg, market, variant=drafted + failed, examples=examples.get(market.language),
-            need_cfg=config["scoring"]["need"],
-        )
-        if not out.draft_message:
-            if out.errors != lead.errors:
-                failed += 1
-                print(f"  failed: {lead.company}: {out.errors[-1]}")
-            else:
-                no_contact += 1
-                print(f"  no contact data (add an Instagram link, phone or email): {lead.company}")
-            continue
-        drafted += 1
-        had_draft = bool(_rich_text(props.get("Draft Message")))
-        verb = "overwrite" if had_draft else "write"
-        print(f"  {verb if args.yes else 'would ' + verb}: {lead.company} -> {out.suggested_channel}")
-        print(f"    {out.draft_message}")
-        if out.draft_notes:
-            print(f"    verify before sending: {out.draft_notes}")
-        if args.yes:
-            update = {
-                "Suggested Channel": {"select": {"name": out.suggested_channel}},
-                "Draft Message": _text(out.draft_message[:2000]),
-                # always sent: a redraft must not leave the old draft's note behind
-                "Draft Notes": _text(out.draft_notes[:2000]) if out.draft_notes else {"rich_text": []},
-            }
-            if _select_name(props.get("Status")) in ("Not started", ""):
-                update["Status"] = {"select": {"name": "Queued"}}
-            sink.update_page(page["id"], update)
-    print(f"{drafted} drafted, {failed} failed, {no_contact} without contact data")
-    _print_market_skips(market_skips)
-    if drafted and not args.yes:
-        print("dry run — pass --yes to write to Notion")
-    return 0
+        run_id = row.run_id if row is not None else ""
+        if run_id not in contexts:
+            contexts[run_id] = _draft_context(config, niches.get(run_id))
+        try:
+            _draft_page(sink, page, lead, market, contexts[run_id], tally, write=write)
+        except DraftBudgetError as e:
+            tally.out_of_credits = str(e)
+            tally.undrafted = len(pages) - n
+            break
+    print(tally.summary())
+    tally.report()
+    if tally.drafted and not write:
+        print("dry run — nothing written" + ("" if outreach["auto_draft"] else " (pass --yes to write)"))
+    return EXIT_OUT_OF_CREDITS if tally.out_of_credits else 0
 
 
 def _rescore_leads(run_id: str | None) -> tuple[list, int]:
@@ -1148,26 +1242,23 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    """collect -> enrich -> score -> sync, chained via the shared args namespace
-    (collect stamps args.run for the later stages to read). Drafting is opt-in
-    (--draft): the usual flow syncs first, you add SM Audit notes in Notion, then
-    `draft-notion` writes the drafts."""
-    args.include_synced = False
+    """collect -> enrich -> score -> sync -> draft, chained via the shared args
+    namespace (collect stamps args.run for the later stages to read). Never
+    prompts. Drafting (script_edits.md §11) is automatic: this run's pages at
+    Tier >= outreach.auto_draft_min_tier; running out of credits returns
+    EXIT_OUT_OF_CREDITS after everything else is done."""
     # build the sink first: a missing NOTION_TOKEN/database id should fail now,
-    # not after collect/enrich/draft have spent time and AI credits
+    # not after collect/enrich have spent time
     get_sink(args.sink, load_config(args.config))
-    stages = (cmd_collect, cmd_enrich, cmd_score) + (
-        (cmd_draft,) if getattr(args, "draft", False) else ()
-    ) + (cmd_sync,)
-    for stage in stages:
+    for stage in (cmd_collect, cmd_enrich, cmd_score, cmd_sync):
         code = stage(args)
         if code != 0:
             return code
         print()
-    return 0
+    return _auto_draft(args)
 
 
-_BATCH_KEYS = {"source", "market", "niche", "location", "input", "limit", "sink", "include_seen", "no_draft", "draft", "bbox", "grid"}
+_BATCH_KEYS = {"source", "market", "niche", "location", "input", "limit", "sink", "include_seen", "bbox", "grid"}
 
 
 def _batch_market(entry: dict, config: dict) -> Market:
@@ -1223,11 +1314,9 @@ def _run_args(base: argparse.Namespace, entry: dict) -> argparse.Namespace:
         limit=entry.get("limit"),
         sink=entry.get("sink", "notion"),
         include_seen=bool(entry.get("include_seen", False)),
-        draft=bool(entry.get("draft", False)),
         bbox=entry.get("bbox"),
         no_grid=entry.get("grid") is False,
         refresh_cache=False,
-        include_synced=False,
         run=None,
     )
 
@@ -1249,12 +1338,13 @@ def _describe(entry: dict) -> str:
 
 
 def cmd_batch(args: argparse.Namespace) -> int:
-    """Run the entries of a batch file one after another (strictly sequential).
+    """Run the entries of a batch file one after another (strictly sequential),
+    each as `run` would: collect -> enrich -> score -> sync -> draft. Never prompts.
 
-    One entry failing doesn't stop the rest. Running out of AI credits does:
-    every later draft would fail the same way, so the batch pauses there and
-    the next invocation resumes that entry at draft (its collect/enrich/score
-    are already done), then carries on. Finished entries are recorded in
+    One entry failing doesn't stop the rest. Running out of AI credits doesn't
+    either: that entry finishes undrafted, later entries still collect, enrich,
+    score and sync but skip drafting (every call would fail the same way); their
+    pages stay draftable for `draft-notion`. Finished entries are recorded in
     data/batches/<name>.json and skipped on re-runs."""
     batch_path = Path(args.file)
     entries = _load_batch(batch_path, load_config(args.config))
@@ -1272,32 +1362,30 @@ def cmd_batch(args: argparse.Namespace) -> int:
     print(f"batch {batch_path.name}: {len(todo)} to run, {len(entries) - len(todo)} already done")
     if args.dry_run:
         for i, entry in enumerate(todo, 1):
-            paused = state.get(key(entry), {}).get("status") == "paused"
-            print(f"  [{i}] {_describe(entry)}" + ("  (resumes at draft)" if paused else ""))
+            print(f"  [{i}] {_describe(entry)}")
         return 0
 
     summary: list[tuple[str, str]] = []
     problems = 0
+    out_of_credits = False
     for i, entry in enumerate(todo, 1):
-        entry_state = state.get(key(entry), {})
         run_args = _run_args(args, entry)
-        resuming = entry_state.get("status") == "paused" and entry_state.get("run_id")
-        print(f"[{i}/{len(todo)}] {_describe(entry)}" + (f"  (resuming run {entry_state['run_id']})" if resuming else ""))
+        print(f"[{i}/{len(todo)}] {_describe(entry)}")
+        note = ""
         try:
-            if resuming:
-                run_args.run = entry_state["run_id"]
-                stages = (cmd_draft, cmd_sync)
-            else:
-                stages = (cmd_collect, cmd_enrich, cmd_score) + (
-                    () if entry.get("no_draft")
-                    else (cmd_draft, cmd_sync) if entry.get("draft") else (cmd_sync,)
-                )
             code = 0
-            for stage in stages:
+            for stage in (cmd_collect, cmd_enrich, cmd_score, cmd_sync):
                 code = stage(run_args)
                 if code != 0:
                     break
                 print()
+            if code == 0 and out_of_credits:
+                note = ", not drafted (out of AI credits earlier in this batch)"
+                print(f"drafting skipped{note[len(', not drafted'):]}: run `draft-notion` once credits are back")
+            elif code == 0:
+                if _auto_draft(run_args) == EXIT_OUT_OF_CREDITS:
+                    out_of_credits = True
+                    note = ", drafting stopped (out of AI credits)"
         except (ConfigError, ValueError, RuntimeError) as e:
             print(f"  error: {e}", file=sys.stderr)
             state[key(entry)] = {"status": "failed", "run_id": run_args.run, "error": str(e)}
@@ -1305,22 +1393,10 @@ def cmd_batch(args: argparse.Namespace) -> int:
             summary.append((_describe(entry), f"FAILED: {e}"))
             problems += 1
             continue
-        if code == EXIT_OUT_OF_CREDITS:
-            state[key(entry)] = {"status": "paused", "run_id": run_args.run}
-            save()
-            summary.append((_describe(entry), "PAUSED: out of AI credits"))
-            problems += 1
-            print(
-                f"batch paused at run {run_args.run}: out of AI credits. Nothing after this entry "
-                f"was started. Re-run `batch --file {args.file}` once credits are back — it resumes "
-                "this entry at draft, then continues.",
-                file=sys.stderr,
-            )
-            break
         status = "done" if code == 0 else "failed"
         state[key(entry)] = {"status": status, "run_id": run_args.run}
         save()
-        summary.append((_describe(entry), f"run {run_args.run}: {status}"))
+        summary.append((_describe(entry), f"run {run_args.run}: {status}{note}"))
         problems += status == "failed"
         if i < len(todo) and args.pause_s:
             time.sleep(args.pause_s)  # courtesy between runs (Maps / Notion rate limits)
@@ -1328,6 +1404,10 @@ def cmd_batch(args: argparse.Namespace) -> int:
     print("\nbatch summary:")
     for desc, result in summary:
         print(f"  {desc} -> {result}")
+    if out_of_credits:
+        print("out of AI credits: undrafted pages stay draftable — run `draft-notion` once credits are back",
+              file=sys.stderr)
+        return EXIT_OUT_OF_CREDITS if not problems else 1
     return 1 if problems else 0
 
 
@@ -1340,7 +1420,7 @@ def _ask(question: str, default: str = "") -> str:
         print("  required — please enter a value")
 
 
-_GO_MODES = ("Lead Gen", "Draft Outreach", "Both")
+_GO_MODES = ("Lead Gen", "Draft Outreach")
 _DRAFT_SCOPES = (
     "Pages with no draft yet",
     "Redraft pages that already have a draft",
@@ -1362,6 +1442,9 @@ def _ask_choice(question: str, options: tuple[str, ...], default: str) -> str:
 
 
 def _go_draft_outreach(args: argparse.Namespace) -> int:
+    """draft-notion with the scope and limit asked here. Writes straight away when
+    outreach.auto_draft is on (no approval step, script_edits.md §11); with it off,
+    a dry run first and a yes/no before writing (unless go --yes)."""
     scope = _ask_choice("Which Notion pages?", _DRAFT_SCOPES, "1")
     raw = _ask("How many at most (a number, or 'all')", str(args.limit) if args.limit else "5")
     limit = None if raw.lower() == "all" else int(raw)
@@ -1369,11 +1452,12 @@ def _go_draft_outreach(args: argparse.Namespace) -> int:
     if limit == 1:
         company = _ask("Which lead (company name, or auto for the next one)", "auto")
         company = "" if company.lower() == "auto" else company
-    # dry run first; writing needs an explicit yes, same as `draft-notion`
     base = dict(
-        config=args.config, limit=limit, yes=False, company=company,
-        redraft=scope == _DRAFT_SCOPES[1],
+        config=args.config, limit=limit, yes=bool(getattr(args, "yes", False)), dry_run=False,
+        company=company, redraft=scope == _DRAFT_SCOPES[1],
     )
+    if load_config(args.config)["outreach"]["auto_draft"] or base["yes"]:
+        return cmd_draft_notion(argparse.Namespace(**base))
     code = cmd_draft_notion(argparse.Namespace(**base))
     if code != 0 or _ask("Write these drafts to Notion? (y/n)", "n").lower() not in ("y", "yes"):
         return code
@@ -1460,11 +1544,11 @@ def _go_osm_tags(niche: Niche) -> Niche:
 
 def cmd_go(args: argparse.Namespace) -> int:
     """Interactive entry point: pick what to run, answer the prompts, run it.
-    Lead Gen = collect -> enrich -> score -> sync; Draft Outreach = draft-notion;
-    Both = Lead Gen with the draft stage before sync (no notes, no pauses).
-    Lead Gen asks for the market (preset or new), creates the niche (or copies
-    one from an earlier run — never preselected), then source and location.
-    --source maps/osm/notion skips the menu."""
+    Lead Gen = collect -> enrich -> score -> sync -> draft (automatic, like `run`);
+    Draft Outreach = draft-notion. Lead Gen asks for the market (preset or new),
+    creates the niche (or copies one from an earlier run — never preselected),
+    then source and location, and runs without another prompt after the summary
+    confirm (--yes skips that too). --source maps/osm/notion skips the menu."""
     config = load_config(args.config)
     source = (args.source or "").lower()
     if source == "notion":
@@ -1494,16 +1578,16 @@ def cmd_go(args: argparse.Namespace) -> int:
         f"\n  niche: {niche.name} — \"{niche.phrase}\"\n  source: {source} ({', '.join(terms)})"
         f"\n  location: {location}"
     )
-    if mode == "Both":
-        print("  drafts are made right away, without SM Audit notes (generic praise);"
-              " add notes later and redraft with Draft Outreach")
+    outreach = config["outreach"]
+    if outreach["auto_draft"]:
+        print(f"  drafts: automatic after sync, Tier {outreach['auto_draft_min_tier']} and better")
     bbox = resolve_bbox({"location": location}, config["maps"]["areas"])
     if bbox and source == "maps":
         cells = grid_cell_count(parse_bbox(bbox), config["maps"]["grid_cell_km"])
         print(f"  grid: ~{cells} cells x {len(terms)} search terms (longer run, many more leads)")
     elif bbox:
         print(f"  area: box {bbox} from maps.areas (not an area-name lookup)")
-    if _ask("Start? (y/n)", "y").lower() not in ("y", "yes"):
+    if not getattr(args, "yes", False) and _ask("Start? (y/n)", "y").lower() not in ("y", "yes"):
         print("cancelled")
         return 0
     print()
@@ -1520,7 +1604,6 @@ def cmd_go(args: argparse.Namespace) -> int:
             limit=args.limit,
             sink="notion",
             include_seen=False,
-            draft=mode == "Both",
             bbox=None,
             no_grid=False,
             refresh_cache=False,
@@ -1613,23 +1696,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ar_cmd.set_defaults(func=cmd_audit_report)
 
-    draft_cmd = sub.add_parser(
-        "draft", help="draft outreach copy for qualified scored leads (via the claude CLI)"
-    )
-    draft_cmd.add_argument("--run", required=True, help="run id under data/runs/")
-    draft_cmd.add_argument(
-        "--limit", type=int, help="draft at most N leads — dry-run"
-    )
-    draft_cmd.add_argument(
-        "--include-synced",
-        action="store_true",
-        help="also draft leads already pushed to Notion (to backfill existing pages)",
-    )
-    draft_cmd.set_defaults(func=cmd_draft)
-
     dn_cmd = sub.add_parser(
         "draft-notion",
-        help="draft for Notion pages with no draft yet (Tier >= outreach.auto_draft_min_tier, Verdict not Skip)",
+        help="catch-up drafting for Notion pages with no draft yet (Tier >= outreach.auto_draft_min_tier, "
+        "Verdict not Skip); writes when outreach.auto_draft is on",
     )
     dn_cmd.add_argument(
         "--company", help="draft only pages whose Company contains this text"
@@ -1638,7 +1708,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--redraft", action="store_true", help="also rewrite pages that already have a draft"
     )
     dn_cmd.add_argument("--limit", type=int, help="draft at most N pages")
-    dn_cmd.add_argument("--yes", action="store_true", help="write to Notion (default: dry run)")
+    dn_cmd.add_argument("--dry-run", action="store_true", help="print the drafts, write nothing")
+    dn_cmd.add_argument(
+        "--yes", action="store_true", help="write even when outreach.auto_draft is off (default then: dry run)"
+    )
     dn_cmd.set_defaults(func=cmd_draft_notion)
 
     sync_cmd = sub.add_parser(
@@ -1666,7 +1739,7 @@ def build_parser() -> argparse.ArgumentParser:
     sync_cmd.set_defaults(func=cmd_sync)
 
     run_cmd = sub.add_parser(
-        "run", help="collect, enrich, score, and sync in one go"
+        "run", help="collect, enrich, score, sync and draft in one go (never prompts)"
     )
     run_cmd.add_argument(
         "--source",
@@ -1697,11 +1770,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="keep leads already in the Notion cache (default: skip them after collect)",
     )
     run_cmd.add_argument(
-        "--draft",
-        action="store_true",
-        help="also draft messages before sync (default: sync only, draft later with draft-notion)",
-    )
-    run_cmd.add_argument(
         "--bbox",
         help='maps grid area "minLat,minLon,maxLat,maxLon" (default: maps.areas entry for --location)',
     )
@@ -1715,6 +1783,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     go_cmd.add_argument("--source", help="skip the menu: maps / osm (Lead Gen) or notion (Draft Outreach)")
     go_cmd.add_argument("--limit", type=int, help="dry-run: cap leads at N")
+    go_cmd.add_argument("--yes", action="store_true", help="skip the final Start? confirmation")
     go_cmd.set_defaults(func=cmd_go)
 
     batch_cmd = sub.add_parser(
@@ -1736,9 +1805,6 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except DraftBudgetError as e:  # draft-notion; cmd_draft handles its own
-        print(_out_of_credits_message(str(e)), file=sys.stderr)
-        return EXIT_OUT_OF_CREDITS
     except (ConfigError, ValueError, RuntimeError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

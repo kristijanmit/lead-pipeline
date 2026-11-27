@@ -106,7 +106,7 @@ A single canonical record flows through every stage. Defined once in
 ```python
 @dataclass
 class Lead:
-    schema_version: int = 12       # bump whenever fields are added/changed (pipeline/schema.py is authoritative)
+    schema_version: int = 14       # bump whenever fields are added/changed (pipeline/schema.py is authoritative)
 
     # identity — set at collection, never changes after
     company: str
@@ -125,11 +125,15 @@ class Lead:
     maps_category: str | None = None    # gosom's raw category text; None for OSM/manual
     business_status: str | None = None  # gosom's raw status text, e.g. "Permanently closed"
     listing_count: int | None = None    # distinct listings on this key, highest per source (dedupe.py)
+    maps_description: str | None = None # v14 — gosom's `descriptions` column; feeds profile_facts
 
     # contact enrichment (Phase 2, step 1)
     contact_emails: list[str] = field(default_factory=list)   # info@, sales@, etc — don't collapse to one
     contact_phones: list[str] = field(default_factory=list)   # same rule as emails — keep every number (v3)
     social_links: dict[str, str] = field(default_factory=dict)  # {"linkedin": "...", ...}
+    site_text: str = ""            # short homepage summary (title, meta, headings) for drafting
+    profile_facts: list[str] = field(default_factory=list)  # v14 — ≤ 5 praise-able facts
+                                   # (enrichers/profile.py); the drafter's source when SM Audit is empty
 
     # website audit (Phase 2, step 2)
     https: bool | None = None
@@ -280,6 +284,7 @@ has to flatten a few `Lead` fields deliberately rather than fail on them:
 | `need_score`, `viability_score`, `reach_score`, `score_reasons` | `Score Reasons` (Rich text) | One line: `Need 70 · Viability 55.5 · Reach 100 · <reasons>` (no sub-score columns, G13). Never passed to drafting                                    |
 | `draft_notes`                                           | `Draft Notes` (Rich text)       | The drafter's "verify before sending" note; only sent when set. Read back by `lead_from_page` (`Draft Message` is not read back) |
 | `ads_tags`                                              | `Runs Ads` (Checkbox)           | Page creation only: checked if any tag was found. Not in `score_properties`, so `--rescore` never overwrites your manual value                          |
+| `site_text`, `profile_facts`, `maps_description`      | _(none)_                        | Drafting inputs, not synced: the draft step and `draft-notion` read them from the run's JSONL row (joined to the page via the sync cache) |
 | `schema_version`, `scoring_version`, `run_id`, `errors` | _(none)_                        | Deliberately not synced — Notion is a sink for humans to act on, not the source of truth; this bookkeeping stays in the JSONL manifest where it's queryable |
 
 This mapping lives in one function (`to_notion_properties(lead: Lead) -> dict`)

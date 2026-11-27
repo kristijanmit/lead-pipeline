@@ -26,12 +26,13 @@ from pathlib import Path
 from pipeline.drafting import rules_en, rules_sr
 from pipeline.drafting.channel import suggest_channel
 from pipeline.drafting.rules import MAX_CHARS, Rules, validate_connection_note, validate_message
+from pipeline.enrichers.profile import build_profile_facts
 from pipeline.market import Market
 from pipeline.niche import Niche
 from pipeline.schema import Lead
 from pipeline.scoring.scorer import need_items
 
-__all__ = ["MAX_CHARS", "RULE_SETS", "build_prompt", "draft_lead", "rules_for", "select_examples", "validate_message"]
+__all__ = ["INVALID_PREFIX", "MAX_CHARS", "NO_DETAIL_NOTE", "RULE_SETS", "build_prompt", "draft_lead", "profile_facts_for", "rules_for", "select_examples", "validate_message"]
 
 # one rule set per drafting language (script_edits.md §9.2); the market picks it
 RULE_SETS: dict[str, Rules] = {"sr": rules_sr.RULES, "en": rules_en.RULES}
@@ -82,6 +83,19 @@ _LINKEDIN_SCHEMA = {
         "verify_note": {"type": "string"},
     },
 }
+
+
+# verify_note when the praise fell back to the plain line (script_edits.md §11.3)
+NO_DETAIL_NOTE = "no concrete detail found"
+# Lead.errors prefix for a message that failed validation after its one retry; the
+# runner marks the page "Draft failed" for these, and only these (a CLI error is retried)
+INVALID_PREFIX = "draft: invalid: "
+
+
+def profile_facts_for(lead: Lead) -> list[str]:
+    """The lead's profile_facts; leads enriched before schema v14 get what the Lead
+    alone gives (Maps description and category)."""
+    return lead.profile_facts or build_profile_facts(lead)
 
 
 def rules_for(language: str) -> Rules:
@@ -217,6 +231,13 @@ def build_prompt(
             "The operator's note is first-hand and trusted: base the praise on it, and do not mention "
             "that a note or audit exists."
         )
+    else:
+        rules_list.append(
+            "There is no operator's note: take the one praise point from the profile facts (pick the most "
+            "concrete one: a service, a specialty, a description in their own words) and name that fact in "
+            f'verify_note. If no fact gives anything concrete, use the plain "{rules.plain_praise}" and put '
+            f'"{NO_DETAIL_NOTE}" in verify_note. Never invent a detail the facts do not state.'
+        )
     link = (niche.landing_url if niche and niche.landing_url else "") or outreach["site_link"]
     if channel == "Viber/Whatsapp":
         pass  # the Viber rules already say which link, if any, to use
@@ -232,6 +253,7 @@ def build_prompt(
     else:
         rules_list.append('Do NOT name any past client or portfolio site; if relevant describe past work by industry only. No testimonials.')
 
+    facts = "\n".join(f"  - {f}" for f in profile_facts_for(lead)) or "  none"
     if channel == "LinkedIn":
         rules_list.append(rules.connection_note_rule)
         outputs = (
@@ -248,12 +270,14 @@ def build_prompt(
         f"- Website: {lead.domain or 'none found'}\n"
         f"- Instagram: {socials.get('instagram', '')}  Facebook: {socials.get('facebook', '')}\n"
         f"- Audit notes (for a friendly warning only, never for criticism): {lead.audit_notes or 'none'}\n"
-        f"- Operator's note (written by the sender; the only source of praise, base the "
+        f"- Operator's note (written by the sender; the first source of praise, base the "
         f"concrete point on it): {lead.sm_audit or 'none'}\n"
+        f"- Profile facts (from their website and Google Maps listing; the praise source when there is "
+        f"no operator's note):\n{facts}\n"
         f"- Homepage text:\n{lead.site_text or '(not available)'}\n\n"
         "RULES:\n" + "\n".join(f"{i}. {r}" for i, r in enumerate(rules_list, 1)) + "\n\n"
         f"{outputs}: one sentence listing any claim "
-        "taken from the homepage text, bio or audit that the sender should double-check before "
+        "taken from the profile facts, homepage text, bio or audit that the sender should double-check before "
         "sending, or an empty string if every fact is from the structured data above.\n\n"
         "VOICE REFERENCES (tone and structure only, never copy):\n" + examples
     )
@@ -342,7 +366,8 @@ def draft_lead(
 ) -> Lead:
     """Return a new Lead with suggested_channel/draft_message/draft_notes filled.
     No usable contact data -> returned unchanged. A failure lands in Lead.errors instead
-    of raising, so one bad call doesn't halt the batch — except DraftBudgetError
+    of raising, so one bad call doesn't halt the batch (a message that still fails
+    validation after its retry is prefixed INVALID_PREFIX) — except DraftBudgetError
     (out of credits), which propagates. The channel follows `market`'s rules, the rule
     set its language; `examples` is that language's examples file. `niche` (the run's
     definition) supplies the niche question and landing URL when known. A market
@@ -372,12 +397,14 @@ def draft_lead(
             retry = prompt + "\n\nYour previous attempt was rejected: " + "; ".join(problems) + ". Fix it."
             raw = _call_claude(retry, draft_cfg["model"], draft_cfg["timeout_s"], **call)
             problems = _problems(raw, channel, rules, outreach, cite_reviews)
-        if problems:
-            raise RuntimeError("; ".join(problems))
     except DraftBudgetError:
         raise
     except Exception as e:
         return replace(lead, suggested_channel=channel, errors=[*lead.errors, f"draft: {e}"])
+    if problems:
+        return replace(
+            lead, suggested_channel=channel, errors=[*lead.errors, INVALID_PREFIX + "; ".join(problems)]
+        )
     return replace(
         lead,
         suggested_channel=channel,

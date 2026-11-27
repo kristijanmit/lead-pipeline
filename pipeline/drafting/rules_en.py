@@ -54,9 +54,9 @@ def prompt_rules(
         + ' Never use the words "free", "AI", "automation" or "SEO".',
         "Plain international English, Latin script only (even if the business name is in Arabic script: "
         "use its English or transliterated name).",
-        "Praise only what the operator's note or the bio says (photos, videos, before/after, a concrete "
+        "Praise only what the operator's note (first) or the profile facts say (photos, videos, before/after, a concrete "
         "treatment or service, a slogan). The operator's own wording sets the strength. If there is no note and "
-        f'nothing concrete, use the plain "{PLAIN_PRAISE}" and put "a concrete detail would be better" in '
+        f'nothing concrete, use the plain "{PLAIN_PRAISE}" and put "no concrete detail found" in '
         "verify_note. Never invent details.",
         "Never mention the Google rating, reviews or stars. Never write that you could not find their site or "
         "that they have none; a gap in the website is surfaced only through the question. Never criticize the "

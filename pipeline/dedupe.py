@@ -148,7 +148,7 @@ def _merge_duplicate(kept: Lead, dup: Lead) -> Lead:
     `kept` already has is overwritten, except profile_url, where the Google
     Maps listing beats an OSM object page."""
     updates: dict = {}
-    for name in ("address", "rating", "review_count", "profile_url"):
+    for name in ("address", "rating", "review_count", "profile_url", "maps_description"):
         if getattr(kept, name) in ("", None):
             updates[name] = getattr(dup, name)
     if dup.source == "maps" and dup.profile_url and kept.source != "maps":

@@ -1,48 +1,82 @@
 # Outreach drafting
 
-The `draft` stage replaces the former `draft-outreach` Notion skill for steps 0-2 (queue, channel, first
-message). Follow-ups, Follow-up due flags and Dead tracking (skill step 3) are **not** built yet (Phase B).
-Nothing is ever sent: the pipeline only writes text for you to review.
+Drafting replaces the former `draft-outreach` Notion skill for steps 0-2 (queue, channel, first message).
+Follow-ups, Follow-up due flags and Dead tracking (skill step 3) are **not** built yet (Phase B).
+Nothing is ever sent: the pipeline only writes text for you to review and send.
 
-## Workflow
-    collect -> enrich -> score -> sync        (`run` / `batch` stop here; no drafting)
-    you: open Notion, add an `SM Audit` note to the leads worth contacting
-    draft-notion [--limit N] [--yes]          (dry run first, then --yes)
-    you: review the drafts in Notion, send by hand
+## Workflow (automatic, script_edits.md §11, v2 step 9)
+    run / batch / go (Lead Gen):  collect -> enrich -> score -> sync -> draft
+                                  draft = this run's pages at Tier >= outreach.auto_draft_min_tier (B)
+    you: open Notion, send (edit if needed), or set Verdict = Skip + Skip Reason
+    draft-notion                  catch-up: pages left undrafted, hand-made pages, --redraft
 
-`draft-notion` reads pages per script_edits.md §11.2 (v2 step 6): `Qualified` checked, Status `Not started` (or blank),
-an empty `Draft Message`, `Verdict` not `Skip`, and `Tier` empty or at least `outreach.auto_draft_min_tier`
-(default `B`). An empty Tier stays eligible because hand-made and backfilled pages have none. `SM Audit` is
-optional: when present it is still the first praise source. Pages without `Market` or `Industry` are skipped and
-reported ("set Market and Industry on the page"). `--limit N` caps the pages drafted, not the pages read.
-`--redraft` also rewrites existing drafts (Status `Queued` / `Draft failed` too). Set `Verdict = Skip` on a page
-and drafting never touches it. Drafting inside
-`run` / `batch` is opt-in (`--draft`, or `draft: true` on a batch entry) and is the older flow: `draft --run`
-before `sync`. Edits you make in Notion are not copied back to the run's JSONL.
+No approval step, no prompt and no required note. `run` and `batch` never ask anything; `go` asks only what defines
+the run (market, niche, source, location) plus one Start? confirm, which `go --yes` skips.
+
+The draft step runs after sync and writes to the existing page with `update_page`. It drafts from the run's JSONL
+lead (it carries `niche_label`, `profile_facts` and the run's niche question), joined to its page by `page_id` from
+the sync cache, with `SM Audit` and a hand-set `Suggested Channel` taken from the page. Which pages: the run's synced
+leads whose page passes the eligibility filter below. `--limit N` caps the pages drafted.
+
+**Eligibility** (§11.2, `NotionSink.query_draftable`): `Qualified` checked, Status `Not started` (or blank), an empty
+`Draft Message`, `Verdict` not `Skip`, `Tier` empty or at least `outreach.auto_draft_min_tier` (default `B`), and
+`Market` + `Industry` set. An empty Tier stays eligible (hand-made pages have none). `SM Audit` is optional; when
+present it is the first praise source. Set `Verdict = Skip` and drafting never touches the page.
+
+**Never stop, never ask** (§11.4):
+| Situation | What happens |
+| --- | --- |
+| message fails validation after one retry | Status `Draft failed`, reason in `Draft Notes`, next page drafted. `--redraft` picks it up again |
+| claude CLI error / Notion write error on one page | reason in `Draft Notes` (and `Lead.errors`), Status unchanged so the page stays eligible, next page drafted |
+| out of AI credits | drafting stops; the report says "N pages undrafted"; `run` exits 3 after sync. `batch` finishes later entries (collect → sync) without drafting and exits 3. No resume state: the pages keep an empty Draft Message, so `draft-notion` drafts them |
+| page / lead without a market, or a language with no rule set | skipped and counted, never guessed |
+| no usable contact data | no draft, counted as `no_contact_data` |
+
+`outreach.auto_draft: false` turns the draft step off; `draft-notion` then runs dry unless `--yes`.
 
 ## What it writes (Notion)
 | Property | Written when |
 | --- | --- |
-| `Status` = Queued | qualified lead with a draft (else `Not started`) |
-| `Suggested Channel` | always for a drafted lead |
-| `Draft Message` | always for a drafted lead |
-| `Draft Notes` | the "verify before sending" note; `draft-notion` always sends it, so a redraft clears an old note |
+| `Status` = Queued | a draft was written (from `Not started`, blank or `Draft failed`) |
+| `Status` = Draft failed | the message failed validation after its retry |
+| `Suggested Channel` | a draft was written |
+| `Draft Message` | a draft was written |
+| `Draft Notes` | the "verify before sending" note (always sent, so a redraft clears an old note), or the failure reason |
 
-Never written: `Chosen Channel`, `Last Contacted`, `Communication`, `Notes`, `Contact Name`, `Follow-up date`.
-With `draft --run` the fields are written only when a Notion page is created (existing pages are skipped by
-the dedupe cache), so run it before `sync`. `draft-notion` updates existing pages directly.
+Never written: `Chosen Channel`, `Last Contacted`, `Communication`, `Notes`, `Contact Name`, `Follow-up date`,
+`Verdict`, `Skip Reason`. The draft is also stored on the run's JSONL lead. Edits you make in Notion are not copied
+back to the JSONL.
 
-## Notion pages (`draft-notion`)
-Works for synced and hand-made pages alike. For leads found by hand (e.g. an Instagram page, no website): create the Notion page yourself with
-`Company`, `Industry`, `Location`, `Social Links` (the Instagram URL as a link), `SM Audit` (your notes, a
-rich_text column you add by hand), and `Source` = Manual. Then:
+**Feedback without a review step** (§11.6): sent as is = good; edited before sending = keep the edit; not worth
+sending = `Verdict = Skip` + `Skip Reason`. `score-report` (step 10) reads send/skip rates by tier, niche and market.
 
-    python -m pipeline.runner draft-notion --limit 1        # dry run, prints the draft
-    python -m pipeline.runner draft-notion --yes            # writes it
+## Catch-up (`draft-notion`)
+    python -m pipeline.runner draft-notion [--limit N] [--company X] [--redraft] [--dry-run] [--yes]
 
-It drafts every eligible page (see Workflow), writes `Suggested Channel` + `Draft Message`, and sets
-`Status` = Queued only from `Not started`. It overwrites a draft only with `--redraft`. The `SM Audit` text is
-passed to the prompt as first-hand context, plus `Audit Notes`, `CMS`, `Lead Type`, `Industry` and contacts. It does not touch `seen_domains.json` or the run dirs.
+Drafts every eligible page in the database: pages a run left undrafted (credits out, Notion error), hand-made pages,
+and with `--redraft` pages that already have a draft (Status `Queued` / `Draft failed` too). Writes by default when
+`outreach.auto_draft` is on; `--dry-run` only prints. Pages without `Market` or `Industry` are skipped and reported
+("set Market and Industry on the page"). `--limit N` caps the pages drafted, not the pages read.
+
+A page synced by a run is drafted from its latest JSONL row (page_id → sync cache key → newest `scored.jsonl` row),
+so it keeps `profile_facts`, `niche_label` and the run's niche question; `SM Audit` comes from the page. A page with
+no row (hand-made, or a cache rebuilt from Notion) is drafted from the page itself: create it with `Company`,
+`Industry`, `Market`, `Location`, `Social Links` (the Instagram URL as a link), `SM Audit` (optional) and
+`Source` = Manual. It does not touch `seen_domains.json` or the run dirs.
+
+## Praise source (`profile_facts`, §11.3)
+In this order: your `SM Audit` note → `profile_facts` → the plain line ("sviđa mi se kako radite" / "I like the way
+you present your services") with `Draft Notes` "no concrete detail found". Nothing is invented.
+
+`profile_facts` (schema v14) is built in enrich by `pipeline/enrichers/profile.py` (pure, no extra request) from the
+homepage HTML the contact step already fetched and the Maps fields collect kept, most praise-worthy first: Maps
+description (gosom's `descriptions` column, `Lead.maps_description`), site meta description, services named in
+h1–h3 headings, site title, Maps category. Generic headings (kontakt, o nama, usluge, početna, contact, about, home,
+services, cookies/kolačići, menu/meni…), the bare company name and duplicates are dropped; at most 5 facts of ~80
+characters each, labelled ("Named on the website: Implantologija"). Leads enriched before v14 get what the Lead alone
+gives (Maps description and category) at draft time. A fact the draft relies on is named in `Draft Notes` to check.
+Not used yet: OSM tags (e.g. `healthcare:speciality`) and a Maps photo count (gosom's `images` column was empty in
+the real CSV and is a scraped sample, not Google's count). Instagram bios stay out (login wall, ToS).
 
 ## Channel (`pipeline/channels.py`, pure; re-exported by `pipeline/drafting/channel.py`)
 The lead's market (config.yaml `markets:`) decides the order, what counts as a mobile number and which
@@ -67,19 +101,19 @@ A market whose `language` has no rule set is skipped the same way ("no drafting 
 The market's `language` picks the rule set: system prompt, prompt rules, banned phrases, greeting per channel,
 script check. `pipeline/drafting/rules.py` holds the shared `Rules` type and the validator. The validator
 (`validate_message(message, channel, rules)`) re-checks the hard rules and retries once, naming the problem. A
-second failure goes to `Lead.errors`.
+second failure goes to `Lead.errors` (prefix `draft: invalid:`) and sets the page's Status to `Draft failed`.
 
 Common to both languages:
-- **Praise** comes only from your note (`SM Audit`) or the bio, and your wording sets the strength. With no
-  note, the plain line is used ("sviđa mi se kako radite" / "I like the way you present your services"), plus a
-  `draft_notes` hint to add a concrete detail. Nothing is invented.
+- **Praise** comes from your note (`SM Audit`) first, then `profile_facts`, and your wording sets the strength.
+  With neither, the plain line is used ("sviđa mi se kako radite" / "I like the way you present your services"),
+  plus `draft_notes` "no concrete detail found". Nothing is invented.
 - **Never**: Google rating, reviews or stars; "you don't have a website" / "couldn't find"; criticism of an
   existing site; Lighthouse numbers; price; a named client; emoji; "!"; an unfilled `{slot}` from the examples.
 - **Exception, friendly warning**: a concrete, checkable problem from your note or the audit notes goes before
   the question, and `draft_notes` says to verify it.
-- **Question** (niche-neutral): the niche's own `question` from `go`, when the run has one (`draft --run` reads it
-  from the manifest). Otherwise one picked from the examples' Questions section and adapted to the business.
-  Notion pages carry no niche definition, so `draft-notion` always uses the Questions list.
+- **Question** (niche-neutral): the niche's own `question` from `go`, when the run has one (read from the run's
+  manifest, also by `draft-notion` for pages with a JSONL row). Otherwise one picked from the examples' Questions
+  section and adapted to the business; hand-made pages always use the Questions list.
 - **Sender line**, word for word: sr "pravim sajtove za lokalne firme" (Viber: "…za lokalne biznise"); en "I build
   websites for local businesses" or "…for clinics". The validator checks the clause after "Ja sam / ovde / I'm /
   this is Kristijan," and rejects anything added to it (e.g. "i online zakazivanje", "and booking systems").
@@ -116,13 +150,14 @@ an offer of a one-page note with concrete suggestions, phrased as a question. It
 keep the question, and so does every lead without an audited site that answered: only `lead_type` redesign /
 unclear with `site_reachable` and at least one Need item (`scorer.need_items`, niche `need_overrides` applied; the
 items the audit report lists) gets the offer (`drafter.offer_for`); new_build, dead-domain, certificate-error,
-didn't-load and "site looks fine" leads keep the question. Notion pages don't carry `site_reachable`, so `draft-notion` drafts always use
-the question. Leave it on `question` until website P0 (sample audit, About, review page) is live.
+didn't-load and "site looks fine" leads keep the question. Hand-made Notion pages don't carry `site_reachable`, so
+their drafts always use the question. Leave it on `question` until website P0 (sample audit, About, review page) is live.
 
 ## Settings (`config.yaml` -> `outreach`)
 `link_in_first_message`, `site_link`, `named_references`, `price_from`, `signature`, `examples_path`
 (default `config/outreach.{language}.md`; must contain `{language}`), `first_offer` (`question` / `audit`),
-`auto_draft_min_tier` (A/B/C, default B: the lowest Tier drafting picks up).
+`auto_draft` (default true: draft step in run/batch/go, `draft-notion` writes without `--yes`),
+`auto_draft_min_tier` (A/B/C, default B: the lowest Tier drafting picks up; A = fewer, safer drafts, C = more volume).
 Link, references and price stay off until set. With links on, the run niche's `landing_url` replaces `site_link`. The niche phrase in the prompt is the run's `niche_label` (the
 `phrase` from the niche created in `go`). Sync writes it to the Notion `Niche Label` property and `draft-notion`
 reads it back; a page without one falls back to `Industry` (the niche name). `Score Reasons` is read back too but

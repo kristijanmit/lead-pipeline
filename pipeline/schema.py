@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Iterable
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 SCORING_VERSION = 5
 
 
@@ -55,6 +55,9 @@ class Lead:
     maps_category: str | None = None
     business_status: str | None = None
     listing_count: int | None = None
+    # v14 — gosom's `descriptions` column (the owner's Maps description), None for
+    # OSM/manual leads and listings without one. Feeds profile_facts.
+    maps_description: str | None = None
 
     # contact enrichment (Phase 2, step 1)
     contact_emails: list[str] = field(default_factory=list)  # keep every address found
@@ -117,6 +120,11 @@ class Lead:
     draft_message: str = ""
     draft_notes: str = ""
     site_text: str = ""
+    # v14 — short, checkable facts the drafter may praise when there is no SM Audit
+    # (script_edits.md §11.3): site title / description / services named on the site,
+    # Maps description and category. Built in enrich (enrichers/profile.py), at most
+    # 5 of ~80 chars. v13 JSONL loads as [] (the drafter rebuilds what it can).
+    profile_facts: list[str] = field(default_factory=list)
 
     # v9 — the operator's own social-media audit of the lead (hand-written in Notion's
     # "SM Audit" column); the draft prompt treats it as the primary context.

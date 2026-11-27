@@ -72,6 +72,9 @@ DEFAULTS: dict = {
         # last sentence of a first message: "question" (default) or "audit" (offer a
         # one-page audit note, Instagram only). Keep "question" until website P0 is live.
         "first_offer": "question",
+        # draft automatically at the end of run / batch / go, and let draft-notion write
+        # without --yes (script_edits.md §11); false = drafting only via draft-notion --yes
+        "auto_draft": True,
         # lowest Notion Tier drafting picks up (script_edits.md §11.2); a page with
         # no Tier (hand-made, backfilled) stays eligible
         "auto_draft_min_tier": "B",
@@ -234,7 +237,7 @@ def _validate(config: dict, path: Path) -> None:
         raise ConfigError(f"{path}: draft.timeout_s must be a positive integer")
 
     outreach = config["outreach"]
-    for key in ("link_in_first_message",):
+    for key in ("link_in_first_message", "auto_draft"):
         if not isinstance(outreach.get(key), bool):
             raise ConfigError(f"{path}: outreach.{key} must be true or false")
     for key in ("site_link", "price_from", "signature", "examples_path"):

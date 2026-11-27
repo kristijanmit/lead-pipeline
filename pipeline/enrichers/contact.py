@@ -18,8 +18,10 @@ from urllib.robotparser import RobotFileParser
 import requests
 from bs4 import BeautifulSoup
 
+from pipeline.audit import html_text
 from pipeline.dedupe import SOCIAL_HOSTS, normalize_domain, phone_key
 from pipeline.enrichers.base import register
+from pipeline.enrichers.profile import build_profile_facts
 from pipeline.schema import Lead
 
 _USER_AGENT = "agency-lead-pipeline/0.1 (single-operator lead tool)"
@@ -182,12 +184,17 @@ class ContactEnricher:
 
     def enrich(self, lead: Lead) -> Lead:
         if not lead.domain:
-            return lead  # no website is data, not an error
+            # no website is data, not an error; the Maps fields may still give facts
+            facts = lead.profile_facts or build_profile_facts(lead)
+            return replace(lead, profile_facts=facts) if facts != lead.profile_facts else lead
 
         try:
             page_url, html = self._fetch_homepage(lead.domain)
         except RobotsDisallowedError as e:
-            return replace(lead, errors=[*lead.errors, f"contact: {e}"])
+            return replace(
+                lead, errors=[*lead.errors, f"contact: {e}"],
+                profile_facts=lead.profile_facts or build_profile_facts(lead),
+            )
 
         pages = [html]
         errors = list(lead.errors)
@@ -216,6 +223,7 @@ class ContactEnricher:
             contact_phones=_merge_unique(lead.contact_phones, phones, phone_key),
             social_links={**socials, **lead.social_links},
             site_text=lead.site_text or extract_site_text(html),
+            profile_facts=lead.profile_facts or build_profile_facts(lead, html),
             errors=errors,
         )
 
@@ -239,7 +247,7 @@ class ContactEnricher:
             url, headers={"User-Agent": _USER_AGENT}, timeout=self.timeout_s
         )
         response.raise_for_status()
-        return str(response.url), response.text
+        return str(response.url), html_text(response)
 
     def _robots_for(self, url: str) -> RobotFileParser | None:
         # robots.txt lives at the host root — not at a dedup key, which keeps

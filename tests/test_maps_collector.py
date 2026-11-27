@@ -76,6 +76,20 @@ def test_parse_results_without_status_column(tmp_path):
     assert (lead.maps_category, lead.business_status) == (None, None)
 
 
+def test_parse_results_keeps_the_maps_description(tmp_path):
+    # gosom's column is `descriptions` (checked against a real 36-column Serbia CSV)
+    csv_path = tmp_path / "raw.csv"
+    csv_path.write_text(
+        "input_id,title,category,descriptions,images\n"
+        "dentist,A,Dentist,  Porodična ordinacija od 1998.  ,[]\n"
+        "dentist,B,Dentist,,[]\n",
+        encoding="utf-8",
+    )
+    by = {lead.company: lead for lead in parse_results_csv(csv_path, {"dentist"})}
+    assert by["A"].maps_description == "Porodična ordinacija od 1998."
+    assert by["B"].maps_description is None
+
+
 def test_split_emails_strips_leading_slashes_and_dedupes():
     # seen live on "In Dental": scraper pulled emails out of a "//foo@bar"
     # JS comment line, leaving a stray leading "//" that must not be kept

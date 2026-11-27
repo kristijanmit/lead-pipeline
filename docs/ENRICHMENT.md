@@ -67,6 +67,22 @@ Extraction rules, in order of what's tried first:
   property, and following those would attribute someone else's contact
   info to this lead.
 
+Pages are decoded with `audit.html_text()` (contact and the audit probe alike): without a charset in the
+`Content-Type` header, the page's own `<meta charset>` decides, not requests' ISO-8859-1 fallback, which turned
+"Isailović u Šapcu" into "IsailoviÄ\x87 u Å apcu".
+
+### `profile_facts` (schema v14)
+
+The contact step also builds `profile_facts` with `pipeline/enrichers/profile.py` (pure, fixture-tested): short,
+labelled facts the drafter may praise when there is no `SM Audit` note (script_edits.md §11.3). Sources, most
+praise-worthy first: the Maps description (`maps_description`, gosom's `descriptions` column, kept at collect), the
+homepage meta description, services named in h1–h3 headings, the page title, the Maps category. Generic headings
+(kontakt, o nama, usluge, početna, contact, about, home, services, cookies/kolačići, menu/meni…), the bare company
+name and duplicates are dropped, as are headings whose first part is generic ("O nama – Brand") or that open
+with a pitch ("Zašto odabrati …", "Welcome to …"); at most 5 facts of ~80 characters each. No extra request: it uses the homepage
+HTML already fetched. Leads without a website (or blocked by robots.txt) get the Maps facts only; the drafter rebuilds
+those for leads enriched before v14.
+
 Whatever the collector already found (`lead.contact_emails`,
 `contact_phones`, `social_links`) is merged with what this step finds,
 collector-provided values winning ties (`_merge_unique`: first occurrence

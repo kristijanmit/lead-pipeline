@@ -41,10 +41,10 @@ Nothing is ever sent by the pipeline. Every outward message is a human action.
 
 | Command | What it chains | Use when |
 | --- | --- | --- |
-| `go` | interactive menu: **Lead Gen** (1→4; asks market, niche, source, location), **Draft Outreach** (5), **Both** (1→3, draft, 4 — no notes) | day-to-day |
-| `run --source … --market … --niche-file … --location …` | 1 → 2 → 3 → 4 (`--draft` adds the old draft-before-sync step) | one scripted run |
+| `go [--yes]` | interactive menu: **Lead Gen** (1→5; asks market, niche, source, location), **Draft Outreach** (5 as catch-up) | day-to-day |
+| `run --source … --market … --niche-file … --location …` | 1 → 2 → 3 → 4 → 5, never prompts | one scripted run |
 | `batch --file batches/<name>.yaml` | `run` per entry, sequential, `--pause-s` between | several cities / niches |
-| individual stages (`collect`, `enrich`, `score`, `sync`, `draft`, `draft-notion`) | one stage | debugging, re-running a step |
+| individual stages (`collect`, `enrich`, `score`, `sync`, `draft-notion`) | one stage | debugging, re-running a step |
 
 - Every command takes `--limit N`: dry-run on a few leads before spending rate limits or AI credits.
 - `run` builds the sink first, so a missing `NOTION_TOKEN` fails before collect/enrich spend time.
@@ -87,7 +87,7 @@ details (`address`, `rating`, `review_count`, `profile_url` — Maps gives all, 
 | Step | Module | Adds |
 | --- | --- | --- |
 | `discovery` | `enrichers/discovery.py` | no website? guess `name.rs/.com/.co.rs` (hyphenated too); adopt only if the page shows a known phone or the full company name. The lead then continues as a normal site lead |
-| `contact` | `enrichers/contact.py` | homepage + at most one contact page, **robots.txt checked before every fetch**. `contact_emails` (all of them, never collapsed), `contact_phones`, `social_links`, `site_text` (short homepage summary for drafting) |
+| `contact` | `enrichers/contact.py` | homepage + at most one contact page, **robots.txt checked before every fetch**. `contact_emails` (all of them, never collapsed), `contact_phones`, `social_links`, `site_text` (short homepage summary for drafting), `profile_facts` (≤ 5 praise-able facts from the homepage + Maps description/category, `enrichers/profile.py`) |
 | `audit` | `enrichers/audit.py` over the shared core `pipeline/audit.py` | probe first: `site_reachable` / `probe_error`, HTTPS, CMS and signals from the homepage HTML (`copyright_year`, `has_viewport_meta`, `has_booking`, `has_click_to_call`, `has_messaging_link`, `ads_tags`); then Lighthouse CLI scores and `mobile_friendly`, one attempt, a failure keeps the probe fields. `audit_notes`. `enrich --only audit --rescan` re-audits an enriched run |
 
 Output: `enriched.jsonl` (`enriched` or `enrich_failed`). Retry once, then fail into data.
@@ -123,32 +123,27 @@ formula changes.
   JSONL.
 - Synced leads flip to `status: synced`. Existing pages are not updated (cache hit = skip).
 
-## 5. Draft first messages **[built]** — docs/OUTREACH.md
+## 5. Draft first messages **[built, automatic]** — docs/OUTREACH.md
 
-The human gate sits between 4 and 5:
+No human gate: drafting runs right after sync in `run` / `batch` / `go` (script_edits.md §11).
 
-1. **You** open Notion, look at qualified leads, write an `SM Audit` note on the ones worth contacting
-   (what you actually liked on their profile, anything broken).
-2. `draft-notion --limit 1` (dry run, prints), then `draft-notion --yes`.
-
-Eligible page: `Qualified` ✓, Status `Not started`/`Queued` (blank counts as Not started), empty
-`Draft Message`, filled `SM Audit`. `--all` drops the note requirement (generic praise); `--redraft`
-overwrites; `--company X` targets one page.
-
-Per page:
-- **Channel** (`drafting/channel.py`, pure): Instagram > Facebook > Viber/WhatsApp (Serbian mobile) >
-  Email > Call (landline). No usable contact → no draft (`no_contact_data`).
-- **Message** (`drafting/drafter.py`, one `claude -p` call, `draft.model`, ~1k tokens): Serbian, Latin,
-  "Vi" form, 2–3 sentences, praise only from your note/bio, one easy question last. Voice examples from
+- **Which pages**: this run's synced pages that are still draftable: `Qualified` ✓, Status `Not started` (blank
+  counts), empty `Draft Message`, `Verdict` ≠ `Skip`, `Tier` ≥ `outreach.auto_draft_min_tier` (B), Market and
+  Industry set. `SM Audit` optional. Drafted from the run's JSONL lead (niche_label, profile_facts, niche question).
+- **Channel** (`pipeline/channels.py`, pure): the market's order and first-touch exclusions. No usable contact →
+  no draft (`no_contact_data`).
+- **Message** (`drafting/drafter.py`, one `claude -p` call, `draft.model`, ~1k tokens): the market language's
+  rule set; praise from SM Audit → `profile_facts` → the plain line; one easy question last. Voice examples from
   `config/outreach.{language}.md`, filtered to the lead's channel and niche.
-- **Validate** (`validate_message`): greeting per channel, question present, no rating / "nemate sajt" /
-  price / link / emoji / Cyrillic. One retry with the problem named, then `Lead.errors`.
-- **Write**: `Suggested Channel`, `Draft Message`, `Status = Queued` (only from Not started).
-  `draft_notes` ("verify before sending") are printed.
-- Out of AI credits → stops cleanly, exit 3, finished drafts kept.
+- **Validate** (`validate_message`): one retry with the problem named, then Status `Draft failed` + reason in
+  `Draft Notes`.
+- **Write** (`update_page`): `Suggested Channel`, `Draft Message`, `Draft Notes`, `Status = Queued`.
+- A CLI / Notion error on one page goes to `Draft Notes` and the run continues. Out of AI credits → drafting stops,
+  "N pages undrafted", exit 3 after sync; `draft-notion` picks them up later.
 
-Then **you** review, edit, choose the channel (`Chosen Channel`), send by hand, and log:
+Then **you** send by hand (edit if needed) or set `Verdict = Skip` + `Skip Reason`, and log:
 `Communication`: `YYYY-MM-DD · SENT · channel · text` / `YYYY-MM-DD · REPLY · text`, plus `Last Contacted`.
+`draft-notion` is the catch-up: undrafted pages, hand-made pages, `--redraft`.
 
 ## 6. Follow-ups **[planned — Phase B]**
 
@@ -161,7 +156,7 @@ Worth building only once real messages are logged.
 - On the next run, still no reply after the follow-up: Status → `Dead`.
 - Allowed writes only: Status (Queued / Follow-up due / Dead), Suggested Channel, Draft Message,
   Follow-up date. Never `Communication`, `Last Contacted`, `Chosen Channel`, `Notes`.
-- Same dry-run-unless-`--yes`, `--limit`, credit-limit pause behaviour as `draft-notion`.
+- Same `--dry-run`, `--limit` and out-of-credits behaviour as `draft-notion`.
 
 ## 7. Replies and feedback loop **[planned / idea]**
 
