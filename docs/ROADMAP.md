@@ -66,6 +66,9 @@ properly" means in practice.
   ("Connection note:" / "After accept:"). `en` leads are drafted now. The validator also enforces the
   approved sender line per language and allows Viber review claims only from `review_strong` reviews. Open: you approve `docs/plan/v2/outreach.{sr,en}.md`,
   move them into `config/`, then `draft-notion --limit 1` (dry run) on one sr and one en page.
+  Follow-up fix: `first_offer: audit` only for leads with an audited site that answered (`lead_type` redesign /
+  unclear and `site_reachable`); new_build leads keep the question (`drafter.offer_for`). Notion pages carry no
+  `site_reachable`, so `draft-notion` always uses the question.
 - Next: step 8 (`audit-report`).
 
 **Done**

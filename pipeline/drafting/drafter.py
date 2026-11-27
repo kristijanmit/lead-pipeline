@@ -37,6 +37,22 @@ RULE_SETS: dict[str, Rules] = {"sr": rules_sr.RULES, "en": rules_en.RULES}
 # channels whose examples have a "with audit offer" section; elsewhere first_offer
 # "audit" falls back to the question
 AUDIT_CHANNELS = ("Instagram",)
+# lead types with a site the audit note can be about (new_build leads keep the question)
+_AUDITED_TYPES = ("redesign", "unclear")
+
+
+def offer_for(lead: Lead, channel: str, outreach: dict) -> str:
+    """The first message's offer: "audit" only when `outreach.first_offer` is audit, the
+    channel has audit-offer examples, and the lead has an audited site that answered
+    (lead_type redesign / unclear, site_reachable). Everything else: "question"."""
+    if (
+        outreach.get("first_offer") == "audit"
+        and channel in AUDIT_CHANNELS
+        and lead.lead_type in _AUDITED_TYPES
+        and lead.site_reachable is True
+    ):
+        return "audit"
+    return "question"
 
 _SCHEMA = {
     "type": "object",
@@ -180,7 +196,7 @@ def build_prompt(
     socials = lead.social_links
     # the run's draft phrase; pages without Niche Label fall back to the niche name in Industry
     phrase = lead.niche_label or lead.industry
-    offer = "audit" if outreach.get("first_offer") == "audit" and channel in AUDIT_CHANNELS else "question"
+    offer = offer_for(lead, channel, outreach)
     rules_list = rules.prompt_rules(
         lead, channel, outreach, phrase, _question_rule(channel, phrase, niche, offer), offer,
         review_strong=market.review_strong if market else None,
@@ -331,7 +347,7 @@ def draft_lead(
         return lead  # nothing to send to; the runner counts these, no error recorded
     selected = select_examples(
         examples, channel, lead.niche or lead.industry, redesign=bool(lead.domain),
-        offer=outreach.get("first_offer", "question"),
+        offer=offer_for(lead, channel, outreach),
     )
     prompt = build_prompt(lead, channel, outreach, variant, selected, rules=rules, niche=niche, market=market)
     cite_reviews = reviews_ok(lead, market)

@@ -168,11 +168,40 @@ def test_english_prompt_uses_english_rules():
     assert "I'm Kristijan" in p and "Vaš" not in p and "Pozdrav" not in p
 
 
+def _audited(**kw):
+    return _lead(domain="smile.ae", lead_type="redesign", site_reachable=True, **kw)
+
+
 def test_audit_offer_rule_only_on_instagram_when_turned_on():
     on = _outreach(first_offer="audit")
-    assert "one-page note" in drafter.build_prompt(_lead(), "Instagram", on, 0, "")
-    assert "one-page note" not in drafter.build_prompt(_lead(), "Facebook", on, 0, "")
-    assert "one-page note" not in drafter.build_prompt(_lead(), "Instagram", _outreach(), 0, "")
+    assert "one-page note" in drafter.build_prompt(_audited(), "Instagram", on, 0, "")
+    assert "one-page note" not in drafter.build_prompt(_audited(), "Facebook", on, 0, "")
+    assert "one-page note" not in drafter.build_prompt(_audited(), "Instagram", _outreach(), 0, "")
+
+
+@pytest.mark.parametrize("lead_type, reachable, offer", [
+    ("redesign", True, "audit"),
+    ("unclear", True, "audit"),          # site live, Lighthouse failed
+    ("new_build", None, "question"),     # no site to audit
+    ("new_build", False, "question"),    # dead domain
+    ("unclear", False, "question"),      # site didn't load
+    ("redesign", False, "question"),     # certificate error
+    ("redesign", None, "question"),      # not known to have answered (e.g. a Notion page)
+])
+def test_audit_offer_only_for_leads_with_an_audited_site(lead_type, reachable, offer):
+    lead = _lead(domain="smile.ae" if lead_type != "new_build" else "", lead_type=lead_type, site_reachable=reachable)
+    assert drafter.offer_for(lead, "Instagram", _outreach(first_offer="audit")) == offer
+    assert ("one-page note" in drafter.build_prompt(lead, "Instagram", _outreach(first_offer="audit"), 0, "")) == (
+        offer == "audit"
+    )
+
+
+def test_new_build_lead_keeps_question_examples_when_audit_offer_is_on(monkeypatch):
+    calls = _fake(monkeypatch, {"message": "Hi, I came across your profile. How do new patients find you?",
+                                "verify_note": ""})
+    drafter.draft_lead(_lead(lead_type="new_build"), _outreach(first_offer="audit"), _CFG, _market("uae"),
+                       examples=EN_FILE)
+    assert "with audit offer" not in calls[0]["prompt"] and "one-page note" not in calls[0]["prompt"]
 
 
 def test_landing_url_replaces_site_link_when_links_are_on():
@@ -338,3 +367,10 @@ def test_prompts_spell_out_the_sender_line():
     assert 'word for word: "pravim sajtove za lokalne biznise"' in viber
     en = drafter.build_prompt(_lead(), "Instagram", _outreach(), 0, "")
     assert "I build websites for local businesses" in en and "I build websites for clinics" in en
+
+
+def test_audited_lead_gets_audit_offer_examples_when_audit_offer_is_on(monkeypatch):
+    calls = _fake(monkeypatch, {"message": "Hi, I came across your profile. Could I send a short note?",
+                                "verify_note": ""})
+    drafter.draft_lead(_audited(), _outreach(first_offer="audit"), _CFG, _market("uae"), examples=EN_FILE)
+    assert "with audit offer" in calls[0]["prompt"].lower()
