@@ -7,6 +7,7 @@ imports normalize_domain from this module.
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from typing import Iterable
 from urllib.parse import urlparse
@@ -55,15 +56,38 @@ SOCIAL_HOSTS: dict[str, tuple[str, ...]] = {
 }
 
 
+# Other links that are never the lead's own website when given as one (Maps /
+# OSM / manual "website" field): video and link-in-bio pages, messaging links,
+# Google Maps listings. Kept apart from SOCIAL_HOSTS, which the contact enricher
+# also uses to pick profile links out of a site's HTML.
+NON_SITE_HOSTS: dict[str, tuple[str, ...]] = {
+    "tiktok": ("tiktok.com",),
+    "youtube": ("youtube.com", "youtu.be"),
+    "threads": ("threads.net", "threads.com"),
+    "linktree": ("linktr.ee",),
+    "whatsapp": ("wa.me", "whatsapp.com"),
+    "viber": ("viber.com",),
+    "google_maps": ("g.page", "goo.gl"),
+}
+# maps.google.<tld> and a bare google.<tld> (the host of a google.com/maps/... link)
+_GOOGLE_MAPS_HOST = re.compile(r"^(?:maps\.)?google\.[a-z]{2,3}(?:\.[a-z]{2})?$")
+
+
 def social_network(domain: str) -> str | None:
-    """"facebook.com" / "m.facebook.com" -> "facebook"; None for a real site."""
-    for network, hosts in SOCIAL_HOSTS.items():
+    """The platform a non-site "website" points at, None for a real site:
+    "facebook.com" / "m.facebook.com" -> "facebook", "tiktok.com" -> "tiktok",
+    "maps.google.com" / "g.page" -> "google_maps"."""
+    for network, hosts in {**SOCIAL_HOSTS, **NON_SITE_HOSTS}.items():
         if any(domain == h or domain.endswith("." + h) for h in hosts):
             return network
+    if _GOOGLE_MAPS_HOST.match(domain):
+        return "google_maps"
     return None
 
 
 def is_social_domain(domain: str) -> bool:
+    """True when the "website" is a social profile or another non-site link
+    (NON_SITE_HOSTS): no audit, and the lead counts as having no website."""
     return social_network(domain) is not None
 
 

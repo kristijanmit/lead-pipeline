@@ -125,6 +125,44 @@ def test_split_website(raw, domain, socials):
     assert split_website(raw) == (domain, socials)
 
 
+@pytest.mark.parametrize(
+    "raw, network",
+    [
+        ("https://www.tiktok.com/@zdravkovic", "tiktok"),
+        ("https://youtube.com/@shineon", "youtube"),
+        ("https://youtu.be/abc123", "youtube"),
+        ("https://x.com/shineon", "x"),
+        ("https://twitter.com/shineon", "x"),
+        ("https://www.threads.net/@shineon", "threads"),
+        ("https://linktr.ee/shineon", "linktree"),
+        ("https://wa.me/381641234567", "whatsapp"),
+        ("https://api.whatsapp.com/send?phone=381641234567", "whatsapp"),
+        ("https://www.viber.com/shineon", "viber"),
+        ("https://maps.google.com/?cid=123", "google_maps"),
+        ("https://maps.google.rs/maps?cid=123", "google_maps"),
+        ("https://www.google.com/maps/place/ShineOn", "google_maps"),
+        ("https://g.page/shineon", "google_maps"),
+        ("https://goo.gl/maps/abc123", "google_maps"),
+        ("https://maps.app.goo.gl/abc123", "google_maps"),
+        ("https://www.facebook.com/shineon", "facebook"),
+        # real sites, including ones that only look similar
+        ("https://shineon.rs", None),
+        ("https://sites.google.com/view/shineon", None),
+        ("https://googleplus-detailing.rs", None),
+        ("https://mytiktok.rs", None),
+        ("https://shineon.netlify.app", None),
+    ],
+)
+def test_non_site_links_are_not_a_website(raw, network):
+    from pipeline.dedupe import is_social_domain, normalize_domain, social_network, split_website
+
+    domain = normalize_domain(raw)
+    assert social_network(domain) == network
+    assert is_social_domain(domain) is (network is not None)
+    expected = ("", {network: raw}) if network else (domain, {})
+    assert split_website(raw) == expected
+
+
 def test_duplicate_fills_missing_fields_without_overwriting():
     osm = Lead(
         company="Dental Novak", domain="dentalnovak.rs", source="osm",

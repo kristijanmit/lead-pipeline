@@ -41,6 +41,8 @@ properly" means in practice.
   caps at B). `audit_notes` holds facts only. D2 cap removed. Schema v13, scoring v4; the v3 score fields stay one
   version, empty. Manifest: tier mix, disqualify reasons, low-confidence count. Open: v3/v4 top-20 comparison on
   `2026-10-20T00-08-14` after its audit rescan (`scripts/compare_scorers.py`); SCORING.md rewrite is step 5b.
+- Website links that aren't the lead's own site (TikTok, YouTube, X, Threads, Linktree, wa.me, Viber, Google Maps /
+  g.page / goo.gl) now count as no website (`dedupe.NON_SITE_HOSTS`): kept as a social link, never audited.
 - Next: step 5b (SCORING.md), then step 6 (Notion: Tier, Priority, Score Reasons, `--min-tier`, `--rescore`).
 
 **Done**
