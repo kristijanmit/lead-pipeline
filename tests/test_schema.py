@@ -65,3 +65,13 @@ def test_defaults():
     assert lead.total_score is None
     assert lead.qualified is False
     assert lead.country == ""
+
+
+def test_v11_jsonl_loads_without_collect_details():
+    lead = Lead.from_dict({"company": "A", "domain": "a.rs", "source": "maps", "schema_version": 11})
+    assert (lead.maps_category, lead.business_status, lead.listing_count) == (None, None, None)
+    data = Lead(company="A", domain="a.rs", source="maps", maps_category="Dentist",
+                business_status="Temporarily closed", listing_count=3).to_dict()
+    again = Lead.from_dict(data)
+    assert (again.maps_category, again.business_status, again.listing_count) == (
+        "Dentist", "Temporarily closed", 3)

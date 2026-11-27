@@ -18,6 +18,14 @@ from pipeline.schema import Lead
         ("  https://example.com  ", "example.com"),
         ("", ""),
         (None, ""),
+        # shared path hosts: the site's path is part of the key
+        ("https://sites.google.com/view/dezurnisto", "sites.google.com/view/dezurnisto"),
+        ("https://sites.google.com/view/DezurniSto/kontakt?usp=sharing", "sites.google.com/view/dezurnisto"),
+        ("sites.google.com/site/staraordinacija/", "sites.google.com/site/staraordinacija"),
+        ("https://www.sites.google.com/view/x", "sites.google.com/view/x"),
+        ("https://sites.google.com/", "sites.google.com"),  # no site named
+        ("https://sites.google.com/a/clinic.rs/home", "sites.google.com"),  # prefix not listed
+        ("https://example.com/view/abc", "example.com"),  # only listed hosts keep a path
     ],
 )
 def test_normalize_domain(raw, expected):
@@ -31,12 +39,48 @@ def _lead(company: str, domain: str) -> Lead:
 def test_dedupe_by_domain_first_wins():
     first = _lead("Branch One", "example.com")
     result = dedupe_leads([first, _lead("Branch Two", "example.com")])
-    assert result == [first]
+    assert [lead.company for lead in result] == ["Branch One"]
 
 
 def test_distinct_domains_kept():
     leads = [_lead("A", "a.com"), _lead("B", "b.com")]
-    assert dedupe_leads(leads) == leads
+    result = dedupe_leads(leads)
+    assert [lead.company for lead in result] == ["A", "B"]
+    assert [lead.listing_count for lead in result] == [1, 1]
+
+
+def _listing(source: str, address: str = "", url: str = "", domain: str = "chain.rs") -> Lead:
+    return Lead(company="X", domain=domain, source=source, address=address, profile_url=url)
+
+
+@pytest.mark.parametrize(
+    ("rows", "expected"),
+    [
+        # one business, listed once by each source: not a chain
+        ([_listing("osm", "Main 1"), _listing("maps", "Main 1, Novi Sad", "cid=1")], 1),
+        # neighbouring grid cells returning the same place
+        ([_listing("maps", "Main 1", "cid=1"), _listing("maps", " main  1", "cid=1"),
+          _listing("maps", "Main 1", "cid=1")], 1),
+        # three branches on one domain
+        ([_listing("maps", "Main 1"), _listing("maps", "Side 2"), _listing("maps", "Park 3"),
+          _listing("osm", "Main 1")], 3),
+        # no address: the listing page tells them apart
+        ([_listing("maps", url="cid=1"), _listing("maps", url="cid=2")], 2),
+        # neither: can't be told apart, counts once
+        ([_listing("manual"), _listing("manual")], 1),
+        # highest per source, not the sum
+        ([_listing("osm", "A"), _listing("osm", "B"), _listing("maps", "A x"), _listing("maps", "B x")], 2),
+    ],
+)
+def test_listing_count(rows, expected):
+    [lead] = dedupe_leads(rows)
+    assert lead.listing_count == expected
+
+
+def test_listing_count_for_company_keyed_leads():
+    rows = [_listing("maps", "A", domain=""), _listing("maps", "B", domain="")]
+    [lead] = dedupe_leads(rows)
+    assert lead.listing_count == 2
 
 
 def test_no_domain_leads_kept_but_deduped_by_company():
@@ -102,3 +146,12 @@ def test_duplicate_fills_missing_fields_without_overwriting():
     # same number in two spellings is not repeated; the new one is added
     assert merged.contact_phones == ["021/452-333", "+381 64 111 222"]
     assert merged.profile_url == "https://maps.google.com/?cid=101"  # Maps beats OSM
+
+
+def test_two_google_sites_leads_stay_apart():
+    leads = [
+        Lead(company="A", domain=normalize_domain("https://sites.google.com/view/a"), source="maps"),
+        Lead(company="B", domain=normalize_domain("https://sites.google.com/view/b"), source="maps"),
+    ]
+    result = dedupe_leads(leads)
+    assert [(lead.company, lead.listing_count) for lead in result] == [("A", 1), ("B", 1)]

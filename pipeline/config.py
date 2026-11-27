@@ -12,7 +12,7 @@ from pathlib import Path
 
 import yaml
 
-from pipeline.collectors.maps import parse_bbox
+from pipeline.collectors.areas import parse_bbox
 from pipeline.market import Market
 
 
@@ -26,6 +26,10 @@ DEFAULTS: dict = {
     "collect": {
         "location": "",
         "manual_csv": "leads_manual.csv",
+        # keys disqualified by L0 gates (written by score from v2 step 5); collect
+        # skips them like seen_domains.json — separate because every seen entry
+        # needs a Notion page_id
+        "rejected_path": "data/rejected_domains.json",
     },
     # Market presets — facts about a country, not business choices. Validated
     # below; config.yaml normally defines them (serbia, uae).
@@ -37,7 +41,6 @@ DEFAULTS: dict = {
     "maps": {
         "binary": "google-maps-scraper",
         "depth": 3,
-        "language": "",
         "extract_emails": True,
         "timeout_s": 900,
         "grid_cell_km": 6,
@@ -154,6 +157,8 @@ def _validate(config: dict, path: Path) -> None:
                 f"{path}: collect.{removed} was removed — the niche is created in `go` "
                 "(or --niche-file) and the country comes from the market (markets:)"
             )
+    if not isinstance(collect.get("rejected_path"), str) or not collect["rejected_path"]:
+        raise ConfigError(f"{path}: collect.rejected_path must be a non-empty path")
     if "qualification" in config:
         raise ConfigError(
             f"{path}: qualification: was removed — the target country is the run's market (markets:)"
@@ -169,6 +174,10 @@ def _validate(config: dict, path: Path) -> None:
         except (TypeError, ValueError) as e:
             raise ConfigError(f"{path}: markets.{market_id}: {e}") from None
     maps = config["maps"]
+    if "language" in maps:
+        raise ConfigError(
+            f"{path}: maps.language was removed — set maps_language on the market (markets:)"
+        )
     for key in ("depth", "timeout_s"):
         if not isinstance(maps.get(key), int) or maps[key] <= 0:
             raise ConfigError(f"{path}: maps.{key} must be a positive integer")

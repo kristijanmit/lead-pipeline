@@ -10,7 +10,7 @@ schema). Each phase below notes where it naturally lands in that structure —
 this isn't a separate refactor to schedule, it's what "doing the phase
 properly" means in practice.
 
-## Status at a glance (updated 2026-11-26)
+## Status at a glance (updated 2026-11-27)
 
 **v2 in progress** (plan in `docs/plan/v2/`, build order in `strategy_gaps.md` §E)
 - Step 1 done: market presets (`markets:` serbia, uae) and niche-on-go. Every run picks a market and creates its
@@ -27,7 +27,13 @@ properly" means in practice.
   HTML: `site_reachable` + `probe_error` kind, `copyright_year` incl. "sva prava zadržana", viewport, booking,
   click-to-call, messaging links, ads tags). Schema v11 (v10 was step 1). A dead site or Lighthouse failure is
   data, not `enrich_failed`, so the G3 retry cap isn't needed. `enrich --only audit --rescan` re-audits old runs.
-- Next: step 4, collect (Maps category, listing count, status, Maps language, UAE areas).
+- Step 4 done: collect keeps `maps_category` and `business_status` (raw gosom text) and `listing_count`
+  (distinct listings per source, highest across sources). Schema v12. Collect skips `data/rejected_domains.json`
+  keys too (`--include-seen` keeps them). Maps `-lang` comes only from the market (`maps.language` removed;
+  `en` for Serbia and UAE). UAE `maps.areas` added (approximate, verify on a map). OSM uses the `maps.areas`
+  box when the location matches and prefers `name:en` in `en` markets. Maps keeps gosom's raw CSV as
+  `maps_raw.csv` in the run folder. Open: check the `status` column name against one real CSV (G5).
+- Next: step 5, scorer v4.
 
 **Done**
 - Phases 1-4: collect (OSM, Google Maps, manual CSV), enrich (contacts + Lighthouse), score, Notion sync with

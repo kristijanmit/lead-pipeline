@@ -14,19 +14,37 @@ from urllib.parse import urlparse
 from pipeline.schema import Lead
 
 
+# Shared hosts that put each site in the path, not a subdomain: host -> the path
+# prefixes that start a site. Their key is host + "/<prefix>/<name>", so two
+# Google Sites businesses never share the key "sites.google.com". The one list.
+SHARED_PATH_HOSTS: dict[str, tuple[str, ...]] = {
+    "sites.google.com": ("view", "site"),
+}
+
+
 def normalize_domain(raw: str | None) -> str:
-    """"https://www.Example.com/about/" -> "example.com". Empty in, empty out."""
+    """"https://www.Example.com/about/" -> "example.com". Empty in, empty out.
+
+    On a shared path host the site's path is kept:
+    "https://sites.google.com/view/Foo/kontakt" -> "sites.google.com/view/foo".
+    The result is still a fetchable "https://<key>/" base for enrich/audit."""
     raw = (raw or "").strip().lower()
     if not raw:
         return ""
     # urlparse only fills netloc when a scheme separator is present
     if "://" not in raw:
         raw = "//" + raw
-    host = urlparse(raw).netloc
-    host = host.rpartition("@")[2].partition(":")[0]  # drop userinfo and port
+    parsed = urlparse(raw)
+    host = parsed.netloc.rpartition("@")[2].partition(":")[0]  # drop userinfo and port
     if host.startswith("www."):
         host = host[4:]
-    return host.rstrip(".")
+    host = host.rstrip(".")
+    prefixes = SHARED_PATH_HOSTS.get(host)
+    if prefixes:
+        parts = [p for p in parsed.path.split("/") if p]
+        if len(parts) >= 2 and parts[0] in prefixes:
+            return f"{host}/{parts[0]}/{parts[1]}"
+    return host
 
 
 SOCIAL_HOSTS: dict[str, tuple[str, ...]] = {
@@ -124,16 +142,36 @@ def _merge_duplicate(kept: Lead, dup: Lead) -> Lead:
     return replace(kept, **updates) if updates else kept
 
 
+def _listing_id(lead: Lead) -> str:
+    """What makes two raw rows of one source distinct listings: the address
+    (a branch elsewhere is another listing), else the listing page. Rows with
+    neither can't be told apart and count once."""
+    address = " ".join(lead.address.lower().split())
+    return address or lead.profile_url.strip()
+
+
 def dedupe_leads(leads: Iterable[Lead]) -> list[Lead]:
     """Drop duplicates by lead_key. The first occurrence wins; fields it is
-    missing are filled from later duplicates (_merge_duplicate)."""
+    missing are filled from later duplicates (_merge_duplicate).
+
+    Every kept lead gets listing_count: the number of distinct listings that
+    shared its key, counted per source and taking the highest. Raw row counts
+    would call one business a chain when OSM and Maps both list it, or when
+    neighbouring Maps grid cells return the same place."""
     out: list[Lead] = []
     index: dict[tuple[str, str], int] = {}
+    listings: list[dict[str, set[str]]] = []
     for lead in leads:
         key = lead_key(lead)
         if key in index:
-            out[index[key]] = _merge_duplicate(out[index[key]], lead)
-            continue
-        index[key] = len(out)
-        out.append(lead)
-    return out
+            i = index[key]
+            out[i] = _merge_duplicate(out[i], lead)
+        else:
+            i = index[key] = len(out)
+            out.append(lead)
+            listings.append({})
+        listings[i].setdefault(lead.source, set()).add(_listing_id(lead))
+    return [
+        replace(lead, listing_count=max(1, *(len(ids) for ids in per_source.values())))
+        for lead, per_source in zip(out, listings)
+    ]

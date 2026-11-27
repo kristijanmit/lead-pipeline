@@ -108,7 +108,7 @@ The edits below assume the recommendations. Change them if you decide otherwise.
 - **ADD** a fixture row with a mismatched category and one with a closed status.
 
 ### `pipeline/dedupe.py`
-- **CHANGE** `dedupe_leads` / `_merge_duplicate`: count how many raw rows merged into each kept lead → `listing_count`. The key is still computed only here.
+- **CHANGE** `dedupe_leads` / `_merge_duplicate`: count how many raw rows merged into each kept lead → `listing_count`. The key is still computed only here. **Decided 2026-11-27:** distinct listings per source (by address, else listing page), highest across sources — raw rows over-count OSM+Maps pairs and grid-cell repeats.
 
 ### `pipeline/runner.py` — collect
 - **CHANGE** lines 120-125: skip keys found in `seen_domains.json` **or** `rejected_domains.json`. `--include-seen` overrides both. Add `already_rejected` to the manifest counts.
@@ -134,7 +134,10 @@ The edits below assume the recommendations. Change them if you decide otherwise.
 - **REPLACE** `_qualifies`, `_reachability_score`, `_reachability_multiplier`, `_opportunity_score` with:
   - **ADD** `gates(lead, cfg) -> str | None`, applied in order:
     1. country
-    2. `business_status` closed
+    2. `business_status` closed. **Decided 2026-11-27 (after the first real gosom CSV):** closed = `business_status`
+       contains "closed" (case-insensitive; `maps_language` is `en` in every market). Reason `closed: temporarily`
+       when the text also contains "temporarily", otherwise `closed: permanently`. The real CSV (Novi Sad, 20 open dentists) has the
+       `status` column, empty for open places; the exact closed text is still unseen, so match on "closed" only.
     3. chain: `listing_count ≥ chain_listing_min` or the domain is in `exclude_domains`
     4. `exclude_categories`
     5. `maps_category` mismatch, only if `gates.category_mismatch: true` (default off until you've seen the numbers)
@@ -246,7 +249,7 @@ At this commit, `test_scoring.py` (78 test/assert lines), `test_notion_sink.py` 
 5. **Notion properties**, then `to_notion_properties`, `query_draftable`, `--min-tier`, `--rescore`.
 6. **Auto-drafting** (section 11).
 7. **`score-report`** after your first review session: Go-rate per market and per niche.
-8. **Cleanup** one version later: remove `reachability_score` / `opportunity_score` / `total_score` (schema 12; v10 = step 1 market/niche, v11 = step 3 audit signals) and their Notion columns.
+8. **Cleanup** one version later: remove `reachability_score` / `opportunity_score` / `total_score` (schema 13; v10 = step 1 market/niche, v11 = step 3 audit signals, v12 = step 4 collect) and their Notion columns.
 
 Follow-ups after v2 (not in this change): Instagram bio and post enrichment for IG-only businesses (G15, ROADMAP to-do #2),
 Phase B follow-ups with the `Outcome` field, reply drafts.
@@ -285,8 +288,8 @@ Phase B follow-ups with the `Outcome` field, reply drafts.
 | --- | --- |
 | `pipeline/channels.py` (new, from §4) | Takes `Market`. `is_mobile(phone, market)` replaces `is_serbian_mobile` (`+3816` / `+9715` from `mobile_prefixes`). Numbers starting with a local `0` are normalized using `dial_code` first. `usable_channels(lead, market)` follows `market.channels`. `best_channel` skips `first_touch_excluded`. Labels from the market (SR `Viber/Whatsapp`, UAE `WhatsApp`, plus `LinkedIn`). |
 | `pipeline/enrichers/contact.py` | Social extraction must keep `linkedin` (used by the UAE order). Phone extraction is already format-agnostic (`_plausible_phone`: `+`/`0`, 8–15 digits), so nothing to change. |
-| `pipeline/collectors/maps.py` | `maps.language` from `market.maps_language`. **ADD** UAE `maps.areas` (Dubai, Sharjah, Ajman, Abu Dhabi, Al Ain; boxes in 10.4, VERIFY on a map). |
-| `pipeline/collectors/osm.py` | Prefer `name:en` when `market.language == "en"`. Use bbox areas for the UAE (area names are ambiguous). |
+| `pipeline/collectors/maps.py` | `maps.language` from `market.maps_language`. **Decided 2026-11-27:** `maps.language` removed from config; `maps_language: en` for Serbia too (one language of categories/status strings). Raw gosom CSV kept as `data/runs/<id>/maps_raw.csv`. **ADD** UAE `maps.areas` (Dubai, Sharjah, Ajman, Abu Dhabi, Al Ain; boxes in 10.4, VERIFY on a map). |
+| `pipeline/collectors/osm.py` | Prefer `name:en` when `market.language == "en"`. Use bbox areas for the UAE (area names are ambiguous). **Done in step 4:** any location in `maps.areas` (or `--bbox`) runs as a bbox query, in every market; `--no-grid` falls back to the name lookup. |
 | `pipeline/scoring/scorer.py` | Country gate = `lead.country == market.country`. Viability strong band = `market.review_strong`. Reach by rank in `market.channels`, with excluded channels → 0. Name-pattern gate from `market.exclude_name_patterns`. `score()` gets the `Market` (and `Niche`) as plain arguments, so the scorer stays pure. |
 | **ADD** `pipeline/drafting/rules_sr.py`, `rules_en.py` | Move the Serbian `_SYSTEM`, `_BANNED`, `_VIBER_ALLOWED`, `_RATING_RE`, greeting rule (`drafter.py:28-85`) into `rules_sr`. Write `rules_en`: system prompt in English; banned "free", "no obligation", "this week", "lighthouse", "seo ", "couldn't find", "don't have a website", "rating", "review", "stars"; greeting per channel (DM "Hi", email/call "Hello"); script check rejects Cyrillic/Arabic. Both languages ban the patient-records platform terms (S23). |
 | `pipeline/drafting/drafter.py` | `validate_message(message, channel, rules)`. `build_prompt` takes `lead.language` → rules + examples file. The niche phrase comes from `lead.niche_label` (replaces `outreach["industry_labels"].get(...)`, `drafter.py:210`). Question and landing URL come from the niche when present. The Viber-specific rules apply only where the market's channel label is `Viber/Whatsapp`. |

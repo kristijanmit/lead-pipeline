@@ -12,6 +12,7 @@ from typing import Iterable
 
 import requests
 
+from pipeline.collectors.areas import parse_bbox, resolve_bbox
 from pipeline.collectors.base import register
 from pipeline.dedupe import phone_key, split_website
 from pipeline.schema import Lead
@@ -94,7 +95,19 @@ def resolve_category(category: str) -> tuple[str, str]:
     )
 
 
-def build_query(location: str, tag_pairs: Iterable[tuple[str, str]], timeout_s: int) -> str:
+def build_query(
+    location: str,
+    tag_pairs: Iterable[tuple[str, str]],
+    timeout_s: int,
+    bbox: tuple[float, float, float, float] | None = None,
+) -> str:
+    """One Overpass query for every tag. With a bbox (minLat,minLon,maxLat,maxLon
+    = Overpass's south,west,north,east) the area-name lookup is skipped — area
+    names are ambiguous in some markets (the UAE), a box never is."""
+    if bbox is not None:
+        box = ",".join(f"{v:g}" for v in bbox)
+        clauses = "\n".join(f'  nwr["{key}"="{value}"]({box});' for key, value in tag_pairs)
+        return f"[out:json][timeout:{timeout_s}];\n(\n{clauses}\n);\nout center;"
     escaped = location.replace("\\", "\\\\").replace('"', '\\"')
     # Primary "name" tags are in the local language/script ("Нови Сад",
     # "München") — also match the English and international names so the
@@ -113,13 +126,17 @@ def build_query(location: str, tag_pairs: Iterable[tuple[str, str]], timeout_s: 
     )
 
 
-def parse_elements(data: dict, categories_by_tag: dict[tuple[str, str], str]) -> list[Lead]:
+def parse_elements(
+    data: dict, categories_by_tag: dict[tuple[str, str], str], prefer_en: bool = False
+) -> list[Lead]:
     """Map raw Overpass elements to Leads. Unnamed POIs are skipped; a
-    missing website is data (empty domain), not a reason to drop the lead."""
+    missing website is data (empty domain), not a reason to drop the lead.
+    prefer_en (English-language markets): the company is name:en when the POI
+    has one — in the UAE the primary name is often Arabic script."""
     leads: list[Lead] = []
     for element in data.get("elements", []):
         tags = element.get("tags", {})
-        name = tags.get("name")
+        name = (prefer_en and tags.get("name:en")) or tags.get("name")
         if not name:
             continue
         website = next((tags[t] for t in _WEBSITE_TAGS if tags.get(t)), "")
@@ -166,6 +183,7 @@ class OsmCollector:
         overpass = config.get("overpass", {})
         self.endpoint: str = overpass["endpoint"]
         self.timeout_s: int = overpass["timeout_s"]
+        self.areas: dict = (config.get("maps") or {}).get("areas") or {}
 
     def collect(self, params: dict) -> list[Lead]:
         location = params.get("location")
@@ -176,8 +194,16 @@ class OsmCollector:
                 "(--location, and the niche's search_terms / osm_tags)"
             )
         categories_by_tag = {resolve_category(c): c.strip() for c in categories}
-        query = build_query(location, categories_by_tag.keys(), self.timeout_s)
-        return parse_elements(self._fetch(query), categories_by_tag)
+        # same box as Maps grid mode: --bbox, or the location's maps.areas entry
+        # (--no-grid falls back to the area-name lookup)
+        bbox = resolve_bbox(params, self.areas)
+        query = build_query(
+            location, categories_by_tag.keys(), self.timeout_s,
+            parse_bbox(bbox) if bbox else None,
+        )
+        return parse_elements(
+            self._fetch(query), categories_by_tag, prefer_en=bool(params.get("prefer_name_en"))
+        )
 
     def _fetch(self, query: str) -> dict:
         last_error: Exception | None = None

@@ -7,12 +7,16 @@
 collect:
   location: ""     # city or area, e.g. "Novi Sad" — usually given per run via --location / go
   manual_csv: leads_manual.csv   # hand-gathered leads; see leads_manual.csv.example
+  rejected_path: data/rejected_domains.json   # L0-disqualified keys; collect skips them (--include-seen keeps them)
 
 # Market presets: facts about a country (phone rules, drafting language, channel order).
 # A run picks one (go / --market <id>); its country is stamped on every lead and is the
 # scoring country gate. `go` can create a new market and prints it as YAML to paste here.
 # channels: first-touch order, best first. first_touch_excluded: shown, never used first.
 # review_strong / exclude_name_patterns / currency are used by later v2 steps.
+# maps_language: the scraper's -lang. "en" for every market, so Google categories and
+# status strings read the same everywhere (scoring gates, accepted categories); it has
+# nothing to do with the drafting language.
 markets:
   serbia:
     country: Serbia
@@ -23,7 +27,7 @@ markets:
     first_touch_excluded: []
     review_strong: 50
     currency: EUR
-    maps_language: sr
+    maps_language: en
     exclude_name_patterns: ["dom zdravlja", "zavod", "opšta bolnica", "KBC", "institut"]
   uae:
     country: United Arab Emirates
@@ -46,13 +50,13 @@ overpass:
 maps:
   binary: tools/google-maps-scraper   # v1.16.2 darwin-amd64 release, runs via Rosetta
   depth: 1           # scroll depth per query. v1.16.2 fails ("target closed", 0 rows) at 2+ — verified 2026-10-08
-  language: ""       # e.g. "sr" — empty uses the scraper's default
   extract_emails: true
   timeout_s: 900     # base; a grid run adds timeout_per_cell_s per cell per category
   # Grid mode: depth > 1 is broken, but the scraper can split an area into cells and search
   # each one (every cell returns its own top ~20). Used automatically when the run's location
   # matches a name below; --bbox overrides, --no-grid turns it off. Boxes are approximate:
   # "minLat,minLon,maxLat,maxLon". Smaller cell = more coverage, more repeats, longer runs.
+  # OSM uses the same box (one bbox query, not an area-name lookup) when the location matches.
   grid_cell_km: 6
   timeout_per_cell_s: 60   # measured ~28s per cell per query; 2x margin
   areas:
@@ -60,6 +64,13 @@ maps:
     Belgrade: "44.70,20.30,44.92,20.62"
     Novi Sad: "45.22,19.74,45.31,19.93"
     Niš: "43.28,21.84,43.36,21.98"
+    # UAE — approximate, VERIFY once on a map (docs/plan/v2/script_edits.md §10.4).
+    # First test: Dubai with one search term, check the result count before the rest.
+    Dubai: "24.95,55.05,25.36,55.45"       # Jebel Ali to Al Mamzar, inland to Mirdif. ~56 cells
+    Sharjah: "25.26,55.36,25.41,55.52"     # city only — never the emirate box (~250 cells). ~9 cells
+    Ajman: "25.36,55.42,25.44,55.56"       # ~6 cells
+    Abu Dhabi: "24.30,54.30,24.56,54.66"   # island, Khalifa City, Saadiyat, Yas. ~35 cells
+    Al Ain: "24.13,55.64,24.30,55.82"      # ~16 cells
 
 # Phase 2 — contact scraping + Lighthouse audit.
 # Install the audit engine once: npm install -g lighthouse (see docs/RESOURCES.md).

@@ -28,6 +28,15 @@ def test_presets_load_and_resolve(tmp_path):
 def test_repo_config_has_serbia_and_uae():
     config = load_config("config.yaml")
     assert {"serbia", "uae"} <= set(config["markets"])
+    # one Maps language everywhere: category/status text the step-5 gates can read
+    assert {m["maps_language"] for m in config["markets"].values()} == {"en"}
+    assert {"Dubai", "Sharjah", "Ajman", "Abu Dhabi", "Al Ain"} <= set(config["maps"]["areas"])
+    assert config["collect"]["rejected_path"] == "data/rejected_domains.json"
+
+
+def test_empty_rejected_path_fails(tmp_path):
+    with pytest.raises(ConfigError, match="collect.rejected_path"):
+        _config(tmp_path, "collect:\n  rejected_path: ''\n")
 
 
 @pytest.mark.parametrize("change, message", [
@@ -54,6 +63,7 @@ def test_market_missing_a_required_key_fails(tmp_path):
     ("collect:\n  country: Serbia\n", "collect.country"),
     ("qualification:\n  target_countries: [Serbia]\n", "qualification"),
     ("outreach:\n  industry_labels: {dentist: x}\n", "industry_labels"),
+    ("maps:\n  language: sr\n", "maps.language"),
 ])
 def test_removed_default_keys_fail_with_a_pointer(tmp_path, text, key):
     with pytest.raises(ConfigError, match=f"{key}.* was removed"):

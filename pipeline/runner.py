@@ -18,7 +18,8 @@ from pathlib import Path
 import yaml
 
 from pipeline.collectors import get_collector
-from pipeline.collectors.maps import grid_cell_count, parse_bbox, resolve_bbox
+from pipeline.collectors.areas import parse_bbox, resolve_bbox
+from pipeline.collectors.maps import RAW_CSV_NAME, grid_cell_count
 from pipeline.config import ConfigError, load_config
 from pipeline.dedupe import dedupe_leads, is_social_domain, lead_key
 from pipeline.drafting import DraftBudgetError, draft_lead, language_skip_reason, load_examples
@@ -29,7 +30,7 @@ from pipeline.schema import read_jsonl, write_jsonl
 from pipeline.scoring import score
 from pipeline.sinks import get_sink
 from pipeline.sinks.csv_sink import CsvSink
-from pipeline.sinks.notion_sink import _rich_text, _select_name, _text, cache_key, lead_from_page, load_seen
+from pipeline.sinks.notion_sink import _rich_text, _select_name, _text, cache_key, lead_from_page, load_rejected, load_seen
 
 # find a missing website first, then contact data, then the website audit
 _ENRICH_STEPS = ("discovery", "contact", "audit")
@@ -139,9 +140,17 @@ def cmd_collect(args: argparse.Namespace) -> int:
     }
 
     def source_params(source: str) -> dict:
-        # Maps searches free text, OSM needs tags; the manual CSV ignores both
+        # Maps searches free text, OSM needs tags; the manual CSV ignores both.
+        # Market-driven settings: Maps -lang, OSM name:en for English markets.
+        # raw_dir: where Maps keeps gosom's untouched results CSV.
         terms = niche.osm_tags if source == "osm" else niche.search_terms
-        return {**params, "categories": list(terms)}
+        return {
+            **params,
+            "categories": list(terms),
+            "maps_language": market.maps_language,
+            "prefer_name_en": market.language == "en",
+            "raw_dir": str(RUNS_DIR / run_id),
+        }
 
     # instantiate all collectors up front so a typo'd source name or missing
     # binary fails before any collection effort is spent
@@ -175,12 +184,16 @@ def cmd_collect(args: argparse.Namespace) -> int:
     # draft fields are only written when a page is created — so drop them
     # here, by the same cache sync checks (email matches need enrichment, so
     # sync still catches those)
-    already_in_notion = 0
+    # leads the L0 gates rejected in an earlier run would only be rejected
+    # again; --include-seen keeps both kinds
+    already_in_notion = already_rejected = 0
     if not getattr(args, "include_seen", False):
         seen = load_seen(config["notion"]["cache_path"])
+        rejected = load_rejected(config["collect"]["rejected_path"])
         fresh = [lead for lead in deduped if cache_key(lead) not in seen]
         already_in_notion = len(deduped) - len(fresh)
-        deduped = fresh
+        deduped = [lead for lead in fresh if cache_key(lead) not in rejected]
+        already_rejected = len(fresh) - len(deduped)
     leads = deduped if args.limit is None else deduped[: args.limit]
     # new leads per category — dedupe keeps the first occurrence, so a category
     # listed later only shows what earlier ones didn't already find
@@ -221,6 +234,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
             "raw": len(raw_leads),
             "raw_by_source": raw_by_source,
             "already_in_notion": already_in_notion,
+            "already_rejected": already_rejected,
             "new_by_category": new_by_category,
             "after_dedupe": len(deduped),
             "written": len(leads),
@@ -241,11 +255,14 @@ def cmd_collect(args: argparse.Namespace) -> int:
         print(f"  {len(errors_by_source)} source(s) failed: {', '.join(errors_by_source)} (see manifest.json)")
     if already_in_notion:
         print(f"  {already_in_notion} already in Notion (cache) — skipped")
+    if already_rejected:
+        print(f"  {already_rejected} rejected in an earlier run (rejected_domains.json) — skipped")
     if len(new_by_category) > 1:
         breakdown = ", ".join(f"{c} {n}" for c, n in new_by_category.items())
         print(f"  new per search term: {breakdown}")
     print(f"  {with_domain} with a website, {len(leads) - with_domain} without")
-    print(f"  {run_dir}/collected.jsonl (+ collected.csv, manifest.json)")
+    raw_note = f", {RAW_CSV_NAME}" if (run_dir / RAW_CSV_NAME).exists() else ""
+    print(f"  {run_dir}/collected.jsonl (+ collected.csv, manifest.json{raw_note})")
     return 0
 
 
@@ -1151,10 +1168,12 @@ def cmd_go(args: argparse.Namespace) -> int:
     if mode == "Both":
         print("  drafts are made right away, without SM Audit notes (generic praise);"
               " add notes later and redraft with Draft Outreach")
-    bbox = resolve_bbox({"location": location}, config["maps"]["areas"]) if source == "maps" else None
-    if bbox:
+    bbox = resolve_bbox({"location": location}, config["maps"]["areas"])
+    if bbox and source == "maps":
         cells = grid_cell_count(parse_bbox(bbox), config["maps"]["grid_cell_km"])
         print(f"  grid: ~{cells} cells x {len(terms)} search terms (longer run, many more leads)")
+    elif bbox:
+        print(f"  area: box {bbox} from maps.areas (not an area-name lookup)")
     if _ask("Start? (y/n)", "y").lower() not in ("y", "yes"):
         print("cancelled")
         return 0

@@ -272,7 +272,7 @@ markets:
     first_touch_excluded: []
     review_strong: 50
     currency: EUR
-    maps_language: sr
+    maps_language: en         # en for every market: one language of Google categories / status strings
     exclude_name_patterns: ["dom zdravlja", "zavod", "opšta bolnica", "KBC", "institut"]
   uae:
     country: United Arab Emirates

@@ -9,6 +9,7 @@ markets:
     mobile_prefixes: ["+3816"]
     language: sr
     channels: [Instagram, Facebook, Viber/Whatsapp, Email, Call]
+    maps_language: en
   uae:
     country: United Arab Emirates
     dial_code: "+971"
@@ -17,6 +18,7 @@ markets:
     channels: [Instagram, Facebook, LinkedIn, Email, Call, WhatsApp]
     first_touch_excluded: [WhatsApp]
     review_strong: 100
+    maps_language: en
 """
 
 NICHE = {

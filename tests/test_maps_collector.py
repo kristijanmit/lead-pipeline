@@ -31,6 +31,8 @@ def test_parse_results_csv():
         "Zubar Petrović",
         "Salon Nina",
         "Mystery Biz",
+        "Zubotehnička Laboratorija Dent",
+        "Stara Ordinacija",
     }
 
     novak = by_company["Dental Centar Novak"]
@@ -55,6 +57,25 @@ def test_parse_results_csv():
     assert by_company["Zubar Petrović"].domain == ""
 
 
+def test_parse_results_keeps_raw_category_and_status():
+    leads = parse_results_csv(FIXTURES / "maps_sample.csv", {"dentist"})
+    by_company = {lead.company: lead for lead in leads}
+    # Google's own category, not the search term (a "dentist" query finds labs too)
+    lab = by_company["Zubotehnička Laboratorija Dent"]
+    assert (lab.industry, lab.maps_category) == ("dentist", "Dental laboratory")
+    assert by_company["Dental Centar Novak"].maps_category == "Dentist"
+    # status is raw text; empty = None (scoring decides what "closed" means)
+    assert by_company["Stara Ordinacija"].business_status == "Permanently closed"
+    assert by_company["Dental Centar Novak"].business_status is None
+
+
+def test_parse_results_without_status_column(tmp_path):
+    csv_path = tmp_path / "old.csv"
+    csv_path.write_text("input_id,title,category\ndentist,A,\n", encoding="utf-8")
+    [lead] = parse_results_csv(csv_path, {"dentist"})
+    assert (lead.maps_category, lead.business_status) == (None, None)
+
+
 def test_split_emails_strips_leading_slashes_and_dedupes():
     # seen live on "In Dental": scraper pulled emails out of a "//foo@bar"
     # JS comment line, leaving a stray leading "//" that must not be kept
@@ -64,6 +85,12 @@ def test_split_emails_strips_leading_slashes_and_dedupes():
         "info@indental.rs, indentalinfo@gmail.com"
     )
     assert emails == ["indentalinfo@gmail.com", "indental.ns@gmail.com", "info@indental.rs"]
+
+
+def test_split_emails_strips_url_encoded_spaces():
+    # seen live (Novi Sad, 2026-11-27): the same address once clean, once "%20"-prefixed
+    emails = _split_emails("info@dentalcentaramidzic.com, %20info@dentalcentaramidzic.com, x@y.rs%20 ")
+    assert emails == ["info@dentalcentaramidzic.com", "x@y.rs"]
 
 
 def test_missing_binary_raises_with_install_hint():
@@ -140,3 +167,38 @@ def test_collect_adds_grid_flags_and_scales_timeout(tmp_path, monkeypatch):
     captured.clear()
     maps_mod.MapsCollector(config).collect({"location": "Beograd", "categories": ["detailing"], "grid": False})
     assert "-grid-bbox" not in captured["cmd"] and captured["timeout"] == 900
+
+
+def _fake_scraper(monkeypatch, captured):
+    import subprocess
+
+    from pipeline.collectors import maps as maps_mod
+
+    def fake_run(cmd, check, capture_output, timeout, env):
+        captured["cmd"] = cmd
+        results = cmd[cmd.index("-results") + 1]
+        open(results, "w", encoding="utf-8").write("input_id,title,status\ndentist,A Shop,\n")
+        return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(maps_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(maps_mod.shutil, "which", lambda b: "/bin/scraper")
+    return maps_mod.MapsCollector({"maps": {"binary": "x"}})
+
+
+def test_collect_lang_comes_from_params_only(monkeypatch):
+    captured = {}
+    collector = _fake_scraper(monkeypatch, captured)
+    collector.collect({"location": "Zemun", "categories": ["dentist"], "maps_language": "en"})
+    cmd = captured["cmd"]
+    assert cmd[cmd.index("-lang") + 1] == "en"
+    collector.collect({"location": "Zemun", "categories": ["dentist"]})
+    assert "-lang" not in captured["cmd"]
+
+
+def test_collect_keeps_raw_csv_in_raw_dir(tmp_path, monkeypatch):
+    from pipeline.collectors.maps import RAW_CSV_NAME
+
+    collector = _fake_scraper(monkeypatch, {})
+    raw_dir = tmp_path / "runs" / "r1"
+    collector.collect({"location": "Zemun", "categories": ["dentist"], "raw_dir": str(raw_dir)})
+    assert (raw_dir / RAW_CSV_NAME).read_text(encoding="utf-8") == "input_id,title,status\ndentist,A Shop,\n"

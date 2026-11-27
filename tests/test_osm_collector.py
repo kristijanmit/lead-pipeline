@@ -80,3 +80,45 @@ def test_parse_elements(overpass_sample):
     bistro = by_company["No Web Bistro"]
     assert bistro.domain == ""  # no website is data, not a dropped lead
     assert bistro.contact_phones == ["+49 30 7654321"]
+
+
+def test_build_query_with_bbox_skips_area_lookup():
+    query = build_query("Dubai", [("amenity", "dentist")], 60, (24.95, 55.05, 25.36, 55.45))
+    assert "area[" not in query and "searchArea" not in query
+    # Overpass order (south,west,north,east) == gosom's minLat,minLon,maxLat,maxLon
+    assert 'nwr["amenity"="dentist"](24.95,55.05,25.36,55.45);' in query
+
+
+_ARABIC_NAMED = {"elements": [
+    {"type": "node", "id": 1, "tags": {"name": "عيادة الابتسامة", "name:en": "Smile Clinic", "amenity": "dentist"}},
+    {"type": "node", "id": 2, "tags": {"name": "Only Primary", "amenity": "dentist"}},
+]}
+
+
+def test_parse_elements_prefers_name_en_for_english_markets():
+    tags = {("amenity", "dentist"): "dentist"}
+    en = [lead.company for lead in parse_elements(_ARABIC_NAMED, tags, prefer_en=True)]
+    assert en == ["Smile Clinic", "Only Primary"]
+    default = [lead.company for lead in parse_elements(_ARABIC_NAMED, tags)]
+    assert default == ["عيادة الابتسامة", "Only Primary"]
+
+
+def test_collector_uses_area_box_and_name_en(monkeypatch):
+    from pipeline.collectors.osm import OsmCollector
+
+    queries = []
+    collector = OsmCollector({
+        "overpass": {"endpoint": "x", "timeout_s": 60},
+        "maps": {"areas": {"Dubai": "24.95,55.05,25.36,55.45"}},
+    })
+    monkeypatch.setattr(collector, "_fetch", lambda q: queries.append(q) or _ARABIC_NAMED)
+
+    leads = collector.collect({"location": "dubai", "categories": ["dentist"], "prefer_name_en": True})
+    assert "(24.95,55.05,25.36,55.45)" in queries[-1] and "area[" not in queries[-1]
+    assert leads[0].company == "Smile Clinic"
+
+    # not in maps.areas, or --no-grid: the area-name lookup as before
+    collector.collect({"location": "Zemun", "categories": ["dentist"]})
+    assert 'area["name"="Zemun"]' in queries[-1]
+    collector.collect({"location": "Dubai", "categories": ["dentist"], "grid": False})
+    assert 'area["name"="Dubai"]' in queries[-1]
