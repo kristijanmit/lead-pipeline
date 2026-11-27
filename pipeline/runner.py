@@ -21,11 +21,14 @@ from pipeline.collectors import get_collector
 from pipeline.collectors.areas import parse_bbox, resolve_bbox
 from pipeline.collectors.maps import RAW_CSV_NAME, grid_cell_count
 from pipeline.config import ConfigError, load_config
-from pipeline.dedupe import dedupe_leads, is_social_domain, lead_key
+from pipeline.dedupe import dedupe_leads, is_social_domain, lead_key, normalize_domain
 from pipeline.drafting import DraftBudgetError, draft_lead, examples_path, language_skip_reason, load_examples
 from pipeline.enrichers import apply_enrichers, get_enricher
+from pipeline.enrichers.audit import apply_audit
 from pipeline.market import Market, load_market, market_from_prompts, market_yaml
 from pipeline.niche import Niche, check_sources, load_niche_file
+from pipeline.reports import build_report, findings, markdown_to_html, skip_reason
+from pipeline.reports.audit_report import positives
 from pipeline.schema import read_jsonl, write_jsonl
 from pipeline.scoring import score
 from pipeline.sinks import get_sink
@@ -657,6 +660,155 @@ def cmd_score(args: argparse.Namespace) -> int:
             f"({lead.domain or 'no website'}, {lead.lead_type})"
         )
     print(f"  {run_dir}/scored.jsonl (+ scored.csv, manifest.json)")
+    return 0
+
+
+# an audit older than this gets a warning in audit-report (the report shows its date)
+AUDIT_STALE_DAYS = 14
+
+
+def _audit_date(manifest: dict) -> datetime | None:
+    """When the run's stored audit data was taken: the last enrich, or the last
+    `enrich --only audit --rescan` when it reached every lead (a --limit rescan
+    leaves older audits, so it doesn't count)."""
+    stamps = []
+    enrich = manifest.get("enrich") or {}
+    if enrich.get("finished_at"):
+        stamps.append(enrich["finished_at"])
+    rescan = manifest.get("enrich_rescan") or {}
+    if rescan.get("finished_at") and not (rescan.get("counts") or {}).get("pending"):
+        stamps.append(rescan["finished_at"])
+    return datetime.fromisoformat(max(stamps)) if stamps else None
+
+
+def _run_language(config: dict, manifest: dict) -> str:
+    """The run's language for leads without one: the manifest's market block, else the
+    market the run was scored under (`score --market` for runs collected before markets)."""
+    block = manifest.get("market") or {}
+    if block.get("language"):
+        return block["language"]
+    scored_under = ((manifest.get("score") or {}).get("config_snapshot") or {}).get("market")
+    if scored_under:
+        try:
+            return load_market(config, scored_under).language
+        except ValueError:
+            return ""
+    return ""
+
+
+def cmd_audit_report(args: argparse.Namespace) -> int:
+    """One-page audit report per lead (docs/OUTREACH.md §7): Markdown + self-contained
+    HTML in data/runs/<id>/reports/, in the lead's market language. Stored audit data by
+    default; --rescan re-audits with the shared audit core (report only, JSONL untouched).
+    An existing .md is kept (it may hold hand edits) unless --force; the HTML is always
+    rendered again from the .md."""
+    config = load_config(args.config)
+    run_dir = RUNS_DIR / args.run
+    scored_path = run_dir / "scored.jsonl"
+    if not scored_path.exists():
+        raise ValueError(f"no scored.jsonl in {run_dir} — run score first")
+    leads = read_jsonl(scored_path)
+    manifest = _read_manifest(run_dir)
+    run_language = _run_language(config, manifest)
+    niche = _score_niche(run_dir)
+    need_cfg = config["scoring"]["need"]
+    overrides = niche.need_overrides if niche else None
+    signature = config["outreach"]["signature"]
+    now = datetime.now(timezone.utc)
+    started_at = _now_iso()
+
+    if args.domain:
+        wanted = normalize_domain(args.domain)
+        selected = [lead for lead in leads if lead.domain == wanted]
+        if not selected:
+            raise ValueError(f"no lead with domain {wanted!r} in {scored_path}")
+    else:
+        floor = _TIER_ORDER.index(args.min_tier)
+        selected = [
+            lead for lead in leads
+            if lead.qualified and lead.tier in _TIER_ORDER and _TIER_ORDER.index(lead.tier) <= floor
+        ]
+        selected.sort(key=lambda lead: lead.priority or 0, reverse=True)
+
+    audited_at = _audit_date(manifest)
+    if not args.rescan:
+        if audited_at is None:
+            print("  warning: the run's manifest has no enrich date; the reports show today's date", file=sys.stderr)
+        elif (now - audited_at).days > AUDIT_STALE_DAYS:
+            print(
+                f"  warning: the audit data is {(now - audited_at).days} days old (from {audited_at.date()}); "
+                "add --rescan for a fresh audit",
+                file=sys.stderr,
+            )
+
+    reports_dir = run_dir / "reports"
+    enricher = get_enricher("audit", config) if args.rescan else None
+    delay_s = config["enrich"]["delay_s"]
+    written = kept = rescanned = 0
+    skipped: dict[str, int] = {}
+    for lead in selected:
+        if args.limit is not None and written + kept >= args.limit:
+            break
+        if not lead.language and run_language:
+            lead = replace(lead, language=run_language)  # runs from before step 1 didn't stamp it
+        md_path = reports_dir / f"{lead.domain}.md"
+        if lead.domain and md_path.exists() and not args.force:
+            reports_dir.mkdir(parents=True, exist_ok=True)
+            (reports_dir / f"{lead.domain}.html").write_text(
+                markdown_to_html(md_path.read_text(encoding="utf-8"), lead.language or "en"), encoding="utf-8"
+            )
+            kept += 1
+            print(f"  kept {md_path.name} (hand edits safe; --force to rebuild), HTML re-rendered")
+            continue
+        checked = (audited_at or now).date()
+        if enricher and lead.domain and not is_social_domain(lead.domain):
+            if rescanned and delay_s:
+                time.sleep(delay_s)  # shared courtesy between sites (ARCHITECTURE §11)
+            lead = apply_audit(lead, enricher.audit(lead.domain))
+            rescanned += 1
+            checked = now.date()
+        reason = skip_reason(lead)
+        found = [] if reason else findings(lead, need_cfg, checked.year, overrides)
+        if not reason and not found:
+            reason = "site looks fine"
+        if reason:
+            key = reason.split(" (")[0]
+            skipped[key] = skipped.get(key, 0) + 1
+            if args.domain:
+                print(f"  {lead.company} ({lead.domain or 'no website'}): skipped, {reason}")
+            continue
+        md = build_report(lead, found, positives(lead, checked.year), checked, signature)
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        md_path.write_text(md, encoding="utf-8")
+        (reports_dir / f"{lead.domain}.html").write_text(markdown_to_html(md, lead.language), encoding="utf-8")
+        written += 1
+        print(f"  {lead.tier or '-'} {lead.company} ({lead.domain}, {lead.language}): {len(found)} findings")
+
+    manifest = _read_manifest(run_dir) or {"run_id": args.run}
+    manifest["audit_report"] = {
+        "config_snapshot": {
+            "domain": args.domain, "min_tier": args.min_tier, "limit": args.limit,
+            "rescan": args.rescan, "force": args.force,
+            "audit_date": audited_at.isoformat() if audited_at else None,
+        },
+        "counts": {
+            "selected": len(selected), "written": written, "kept": kept, "rescanned": rescanned,
+            "skipped": skipped,
+        },
+        "started_at": started_at,
+        "finished_at": _now_iso(),
+    }
+    (run_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    skips = ", ".join(f"{k} {n}" for k, n in sorted(skipped.items()))
+    print(
+        f"run {args.run}: {written} reports written, {kept} kept"
+        + (f", {rescanned} re-audited" if args.rescan else "")
+        + (f"; skipped: {skips}" if skips else "")
+    )
+    if written or kept:
+        print(f"  {reports_dir}/ (<domain>.md + .html; edit the .md, re-run to update the .html)")
     return 0
 
 
@@ -1441,6 +1593,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--limit", type=int, help="score only the first N leads — dry-run"
     )
     score_cmd.set_defaults(func=cmd_score)
+
+    ar_cmd = sub.add_parser(
+        "audit-report", help="one-page audit report (Markdown + HTML) per lead, in the market's language"
+    )
+    ar_cmd.add_argument("--run", required=True, help="run id under data/runs/")
+    ar_cmd.add_argument("--domain", help="only the lead with this domain (any tier or status)")
+    ar_cmd.add_argument(
+        "--min-tier", choices=("A", "B", "C", "D"), default="C",
+        help="qualified leads at this tier or better (default C), best priority first",
+    )
+    ar_cmd.add_argument("--limit", type=int, help="at most N reports")
+    ar_cmd.add_argument(
+        "--rescan", action="store_true",
+        help="re-audit each site now (probe + Lighthouse) instead of the stored data; JSONL is not changed",
+    )
+    ar_cmd.add_argument(
+        "--force", action="store_true", help="rebuild existing .md reports (overwrites hand edits)"
+    )
+    ar_cmd.set_defaults(func=cmd_audit_report)
 
     draft_cmd = sub.add_parser(
         "draft", help="draft outreach copy for qualified scored leads (via the claude CLI)"

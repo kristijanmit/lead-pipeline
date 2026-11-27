@@ -139,5 +139,28 @@ used only with `first_offer: audit`.
 channel and niche are sent to the model; a file without these headings is sent whole. To add a niche, add a
 `### name | alias` subsection with 2-3 approved messages.
 
+## Audit report (`audit-report`, `pipeline/reports/`)
+The one-page note with concrete suggestions (at most 3) that the audit-offer message promises (v2 step 8).
+
+    python -m pipeline.runner audit-report --run <run_id> [--domain X] [--min-tier C] [--limit N] [--rescan] [--force]
+
+- **Which leads:** qualified leads at `--min-tier` (default C) or better, best priority first; `--domain` picks one
+  lead whatever its tier. Skipped (counted in the manifest): no website / social page only, domain dead
+  (`dns`/`refused`), site didn't load, not audited (old run), and **"site looks fine"** (no findings). An empty
+  report is never written. A certificate error is a finding.
+- **Findings:** the scorer's own Need items (`scorer.need_items`), ranked by their Need points
+  (`scoring.need.redesign`, with the niche's `need_overrides`; items at 0 are left out), at most 3. "Outdated"
+  names the © year or the legacy builder. "What already works" lists only signals known to be true.
+- **Language:** the lead's `language` (its market's), else the run manifest's market, else the market the run was scored under (`score --market`, runs from before markets). Wording in
+  `pipeline/reports/texts_{sr,en}.py`: written for the owner, no tool names, scores, ratings or "free".
+- **Data:** the run's stored audit by default. The report shows the audit date (the run's last enrich, or a full
+  `enrich --only audit --rescan`), and the CLI warns when it is older than 14 days. `--rescan` re-audits each site
+  with the shared audit core (`pipeline/audit.py`) and dates the report today; it does not change the JSONL.
+- **Files:** `data/runs/<run_id>/reports/<domain>.md` and `<domain>.html` (self-contained, inline CSS, ONIX name,
+  prints to one A4 page). The .md is the source: it carries a `<!-- add your own finding -->` placeholder (not
+  rendered while empty; replace it with e.g. `4. **Title**` plus an indented line). A re-run keeps an existing .md
+  (hand edits safe) and re-renders its HTML from it; `--force` rebuilds the .md from data.
+- Google Business Profile completeness (S14) is not in the report: there is no data source for it yet.
+
 ## Cost
 One `claude -p` call per lead using your Claude login (no API key), ~1k tokens each, `draft.model` (haiku).

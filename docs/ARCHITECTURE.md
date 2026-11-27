@@ -222,6 +222,10 @@ pipeline/
     channel.py         # re-exports pipeline/channels.py (suggest_channel = best_channel)
     drafter.py         # one first message per lead via `claude -p`, under the lead's market
 
+  reports/
+    audit_report.py    # one-page audit report per lead (findings, Markdown, HTML) — pure
+    texts_sr.py, texts_en.py  # report wording per language
+
   sinks/
     base.py           # Sink protocol: write(leads: list[Lead]) -> None
     csv_sink.py         # always-on human-readable export
