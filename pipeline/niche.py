@@ -29,6 +29,9 @@ class Niche:
     accepted_categories: list[str] = field(default_factory=list)  # Google categories; empty = no check
     question: str = ""  # niche question for drafts; empty = generic
     landing_url: str = ""  # used only if links are turned on
+    # Need item -> points, overriding scoring.need.redesign for this niche (S15),
+    # e.g. accommodation {no_booking_or_call: 0}. Keys: scorer.NEED_ITEMS.
+    need_overrides: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -68,6 +71,15 @@ class Niche:
         ]
         if missing:
             raise ValueError(f"niche is missing {', '.join(missing)}")
+        if not isinstance(self.need_overrides, dict):
+            raise ValueError("niche need_overrides must be a mapping of Need item -> points")
+        from pipeline.scoring.scorer import NEED_ITEMS  # lazy: scorer is not needed to collect
+
+        for item, points in self.need_overrides.items():
+            if item not in NEED_ITEMS:
+                raise ValueError(f"niche need_overrides: unknown item {item!r} (known: {', '.join(NEED_ITEMS)})")
+            if isinstance(points, bool) or not isinstance(points, (int, float)) or not 0 <= points <= 100:
+                raise ValueError(f"niche need_overrides.{item} must be a number 0-100")
         for tag in self.osm_tags:
             resolve_category(tag)  # ValueError names the bad tag and the known keys
 

@@ -91,43 +91,50 @@ notion:
   timeout_s: 30
   cache_path: data/seen_domains.json   # local dedupe cache, refreshed via --refresh-cache
 
-# Phase 3 — scoring weights. The reasoning behind every number is in
-# docs/SCORING.md; tune here after the first real outreach batch (docs/SCORING.md §7),
-# and bump version whenever weights or formula shape change so old and new
-# total_scores are never silently compared as if they meant the same thing.
-# v3: dropped icp_fit/intent entirely — industry and location moved out of
-# scoring into the qualification: filters below, added reachability_score,
-# and total_score is now opportunity_score * a reachability-derived
-# multiplier instead of a three-way weighted sum (docs/SCORING.md changelog).
+# Phase 3 — scorer v4 (docs/plan/v2/PIPELINE.md §3, docs/SCORING.md). Bump version
+# whenever a weight, threshold or the formula changes, so scores from different
+# versions are never compared as if they meant the same thing.
+# Per-market values live on the market above: channel order (reach), review_strong
+# (viability), exclude_name_patterns (gate). Niches never appear here.
 scoring:
-  version: 3
+  version: 4
 
-  # reachability_score: can we contact this lead right now, today. Sums to
-  # 100 with every channel present; used both as its own Notion field and to
-  # derive the total_score multiplier below.
-  reachability:
-    has_email: 50
-    has_phone: 40
-    has_social: 10
+  # L0 gates — a lead matching any is disqualified (kept in JSONL, never synced,
+  # its key goes into collect.rejected_path). Order: country, closed, chain,
+  # excluded category, market name patterns, niche mismatch, no first-touch channel.
+  gates:
+    chain_listing_min: 3        # this many distinct listings on one domain = chain
+    exclude_domains: []         # known chains / brands
+    exclude_categories: []      # Google Maps categories, e.g. Pharmacy, Bank
+    niche_mismatch: false       # true: a Maps category outside the niche's accepted
+                                # categories disqualifies; false: reason line + tier max C
 
-  # opportunity_score (was website_audit_score — same underlying values,
-  # renamed so it isn't mistaken for a quality score): how much upside in
-  # pitching a redesign/new build. Computed case is 100 - weighted
-  # Lighthouse quality + flat bonuses, capped at audited_score_cap. An
-  # "unclear" lead (domain present, no usable Lighthouse data) gets no
-  # opportunity_score at all — see scorer.py — rather than a fixed
-  # discounted value like it used to.
-  opportunity:
-    no_website_score: 90           # no domain at all — strongest new-build signal,
-                                    # a fixed policy value, not a placeholder
-    audited_score_cap: 85          # must stay below no_website_score — a bad
-                                   # audited site is still an easier sell than a
-                                   # blank slate, so it must never outrank
-                                   # "no website at all" (docs/SCORING.md §4.2)
-    no_https_bonus: 10             # flat add-ons: easy one-sentence pitch hooks
-    not_mobile_friendly_bonus: 10  # that Lighthouse doesn't penalize cleanly
-    lighthouse_weights:            # must sum to 1.0
-      performance: 0.40      # most visible; "this site feels broken"
-      best_practices: 0.25   # structural/security issues perf misses
-      accessibility: 0.20    # real gap, rarely why a cold lead replies
-      seo: 0.15              # most sites already score 75-100 — least signal
+  # priority = (need·w + viability·w) × (0.5 + reach/200)
+  weights: {need: 0.6, viability: 0.4}
+  reach_by_rank: [100, 90, 80, 60, 40]   # by rank in the market's channel order
+
+  # Need: problems an owner sees on their own phone (0-100, capped)
+  need:
+    new_build: {base: 60, has_social: 25, reviews_20plus: 15}   # no website (or social page only)
+    dead_site_base: 50          # domain dead (dns/refused), certificate error, or site didn't load
+    redesign:                   # site audited; a niche may override these (need_overrides)
+      not_mobile: 30
+      no_https: 20
+      outdated: 20              # © year <= now - outdated_years, or a legacy_cms builder
+      perf_below_50: 15         # Lighthouse items: left out when Lighthouse failed
+      no_booking_or_call: 10    # no booking widget, tel: link or Viber/WhatsApp link
+      seo_below_70: 5
+    outdated_years: 4
+    legacy_cms: [Joomla]
+
+  # Viability: active and able to pay (0-100, capped)
+  viability:
+    no_data: 50                 # no rating and no review count (OSM, manual): a reason line, no tier cap
+    volume_at_strong: 40        # volume at the market's review_strong count (log scale)
+    volume_max: 60
+    rating_bands: [[4.5, 40], [4.0, 30], [3.5, 15]]   # [min rating, points], below = 0
+    runs_ads: 10                # Meta Pixel / Google Ads / GTM found on the site
+
+  # A/B/C thresholds on priority, D below C. Low-confidence Need caps at B.
+  # Aim for A ≈ top 15-20% of a run (manifest tier_counts).
+  tiers: {A: 65, B: 45, C: 25}

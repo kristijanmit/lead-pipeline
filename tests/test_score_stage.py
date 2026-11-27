@@ -1,7 +1,8 @@
 """cmd_score file handling — the invariants the scorer itself can't
 enforce: leads enrichment never reached are passed through unscored, a
---limit dry-run never truncates scored.jsonl, and qualification config from
-the country gate comes from the run's market."""
+--limit dry-run never truncates scored.jsonl, the country gate and niche come
+from the run's manifest, disqualified keys land in rejected_domains.json, and
+the manifest records the tier mix."""
 
 import json
 
@@ -11,7 +12,7 @@ from support import MARKETS_YAML, SERBIA_BLOCK
 
 
 def _lead(company, domain, status="enriched", **overrides):
-    defaults = dict(industry="dentist", country="Serbia")
+    defaults = dict(industry="dentist", country="Serbia", social_links={"instagram": "https://instagram.com/x"})
     return Lead(
         company=company,
         domain=domain,
@@ -47,22 +48,24 @@ def test_pending_leads_pass_through_unscored(tmp_path, monkeypatch, capsys):
     assert main(["score", "--run", "test-run"]) == 0
     scored = {lead.company: lead for lead in read_jsonl(run_dir / "scored.jsonl")}
     assert scored["Done"].status == "scored"
-    assert scored["Done"].total_score is not None
+    assert scored["Done"].priority is not None
     assert scored["Pending"].status == "collected"
-    assert scored["Pending"].total_score is None
+    assert scored["Pending"].priority is None
     assert scored["Pending"].lead_type is None
     assert "1 leads still pending enrichment" in capsys.readouterr().out
 
 
 def test_enrich_failed_leads_are_scored():
     # unlike pending, a failed enrichment is real data: someone tried and
-    # the site was down — that's the unreachable/unclear case by design
+    # the site was down — that's the unclear case by design
     lead = _lead("Failed", "failed.rs", status="enrich_failed")
     from pipeline.config import DEFAULTS
+    from pipeline.market import Market
     from pipeline.scoring import score
 
-    scored = score(lead, DEFAULTS["scoring"], {"target_countries": ["Serbia"]})
+    scored = score(lead, DEFAULTS["scoring"], Market.from_dict("serbia", SERBIA_BLOCK), None, 2026)
     assert scored.lead_type == "unclear"
+    assert scored.status == "scored"
 
 
 def test_limit_dry_run_keeps_all_rows_untouched(tmp_path, monkeypatch):
@@ -105,10 +108,12 @@ def test_country_gate_is_the_run_market(tmp_path, monkeypatch):
     assert main(["score", "--run", "test-run"]) == 0
     scored = read_jsonl(run_dir / "scored.jsonl")[0]
     assert scored.qualified is False
-    assert scored.total_score is None
+    assert scored.status == "disqualified"
+    assert scored.priority is None
 
     manifest = json.loads((run_dir / "manifest.json").read_text())
     assert manifest["score"]["counts"]["qualified"] == 0
+    assert manifest["score"]["counts"]["disqualify_reasons"] == {"country": 1}
 
 
 def test_pre_v2_run_needs_market_flag(tmp_path, monkeypatch, capsys):
@@ -137,3 +142,50 @@ def test_uae_run_gates_on_uae(tmp_path, monkeypatch):
     assert main(["score", "--run", "test-run"]) == 0
     by = {l.company: l.qualified for l in read_jsonl(run_dir / "scored.jsonl")}
     assert by == {"Dubai Dental": True, "Beograd Dent": False}
+
+
+def test_disqualified_keys_go_to_rejected_and_come_off_when_they_pass(tmp_path, monkeypatch):
+    leads = [
+        _lead("Chain", "chain.rs", listing_count=4),
+        _lead("Fine", "fine.rs", lighthouse={"performance": 40}),
+    ]
+    run_dir = _make_run(tmp_path, monkeypatch, leads)
+    assert main(["score", "--run", "test-run"]) == 0
+    rejected_path = tmp_path / "data" / "rejected_domains.json"
+    rejected = json.loads(rejected_path.read_text())
+    assert set(rejected) == {"domain:chain.rs"}
+    assert rejected["domain:chain.rs"]["reason"] == "chain: 4 listings"
+    assert rejected["domain:chain.rs"]["run_id"] == "test-run"
+
+    # the gate loosens (or the data is fixed): a re-score takes the key off again
+    (tmp_path / "config.yaml").write_text(MARKETS_YAML + "scoring:\n  gates: {chain_listing_min: 5}\n")
+    assert main(["score", "--run", "test-run"]) == 0
+    assert json.loads(rejected_path.read_text()) == {}
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    assert manifest["score"]["counts"]["rejected_removed"] == 1
+
+
+def test_manifest_records_tier_mix_confidence_and_niche(tmp_path, monkeypatch, capsys):
+    from support import NICHE
+
+    leads = [
+        _lead("No site", "", maps_category="Dentist"),  # need 85, viability 50 -> 71 A, match
+        _lead("Unclear", "unclear.rs", maps_category="Dental laboratory"),  # no audit data -> low, mismatch
+    ]
+    run_dir = _make_run(tmp_path, monkeypatch, leads)
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["niche"] = {**NICHE, "accepted_categories": ["Dentist"]}
+    manifest_path.write_text(json.dumps(manifest))
+
+    assert main(["score", "--run", "test-run"]) == 0
+    counts = json.loads(manifest_path.read_text())["score"]["counts"]
+    assert counts["tier_counts"]["A"] == 1
+    assert counts["confidence_low"] == 1
+    assert counts["niche_match"] == {"match": 1, "mismatch": 1}
+    out = capsys.readouterr().out
+    assert "A  71.0  No site" in out
+    scored = {l.company: l for l in read_jsonl(run_dir / "scored.jsonl")}
+    assert scored["No site"].niche_match == "match"
+    csv_text = (run_dir / "scored.csv").read_text()
+    assert "tier" in csv_text.splitlines()[0] and "niche match" in csv_text

@@ -146,18 +146,24 @@ Learning which niches work happens in `score-report` (Go-rate and outcomes by ni
 | --- | --- | --- |
 | `new_build` (no domain) | 60, +25 if they have a social link (they're already online and just missing a site), +15 if `review_count ≥ 20` | high |
 | `redesign` (domain + Lighthouse) | not mobile-friendly +30 · no HTTPS +20 · outdated (`copyright_year ≤ now−4` or legacy builder) +20 · perf < 50 +15 · no booking and no click-to-call +10 · SEO < 70 +5 | high |
-| `new_build` (dead/parked domain, probe failed) | 50 + the same social/review add-ons; reason "domain dead" | high |
+| `new_build` (dead domain: probe `dns` / `refused`) | 50 + the same social/review add-ons; reason "domain dead" | high |
+| `redesign` (certificate error: probe `ssl`) | the dead-site formula: 50 + the same add-ons; reason "certificate error, browsers show a warning". `lead_type` stays `redesign` because the site exists | high |
+| `unclear` (site didn't load: probe `timeout` / `http_error` / `other`) | 50 + the same add-ons; reason "site didn't load" | **low** |
 | `unclear` (site live, Lighthouse failed) | the same as `redesign`, with "not mobile-friendly" read from `has_viewport_meta` and the Lighthouse items left out (max 80) | **low** |
+
+(Decided 2026-11-27.) "No booking and no click-to-call" also needs no Viber/WhatsApp link (S9). A niche's optional
+`need_overrides` (Need item → points) replaces these points for that niche (S15). A social page given as the website counts as no website.
 
 In v1, Need came from `100 − Lighthouse`, and owners never see those numbers (you can't mention them in a
 message either). Here the biggest weights go to problems a dentist notices on their own phone, and a
 modern site lands near 0, which is correct. `unclear` no longer drops out. It gets a provisional score and is flagged.
 
 **Viability — whether they're active and can pay.**
-With no rating data (OSM, manual), viability is 50 with low confidence. Otherwise:
-`volume = min(60, 20·log10(review_count + 1))` (10 reviews → 21, 100 → 40, 1000 → 60)
+With no rating data (OSM, manual), viability is 50 plus a reason line ("no rating data"). It does **not** lower confidence or cap the tier (decided 2026-11-27). Otherwise:
+`volume = min(60, 40·log10(review_count + 1) / log10(review_strong + 1))`: the market's `review_strong` count scores 40
+(UAE, 100: 10 reviews → 21, 100 → 40, 1000 → 60; Serbia, 50: 10 → 24, 50 → 40, 300 → 58)
 `quality` = rating ≥ 4.5 → 40, 4.0–4.4 → 30, 3.5–3.9 → 15, below that → 0
-`viability = volume + quality`.
+`viability = volume + quality`, +10 if the site runs ads (Meta Pixel / Google Ads / GTM, S8), capped at 100.
 v1 had no such signal. A 4.8★ practice with 300 reviews and a bad site beats a dormant one with 2 reviews.
 
 **Reach — the best single channel**, in the **market's** channel order (one shared `pipeline/channels.py`).
@@ -174,12 +180,14 @@ priority = (0.6·need + 0.4·viability) × (0.5 + reach/200)
            reach 100 → ×1.0 · 80 → ×0.9 · 60 → ×0.8 · 40 → ×0.7
 
 tier     = A ≥ 65 · B 45–64 · C 25–44 · D < 25
-           unclear (low confidence) → at most B, plus "needs manual look" in reasons
+           low-confidence Need (unclear: Lighthouse failed, or the site didn't load) → at most B,
+           plus "needs manual look" in reasons. A missing rating never caps the tier.
 ```
 
 - `score_reasons`: kept separate from `audit_notes`. `audit_notes` is the fact sheet the draft prompt reads, so ratings and scores stay out of it. `score_reasons` holds the top 3–5 drivers, e.g. `niche match · not mobile-friendly · no HTTPS ·
   4.7★/212 reviews · best channel: Instagram`. They go into Notion and show you why a lead was drafted.
-- `score_confidence`: `high` / `low` (low if Need or Viability fell back to a default).
+- `score_confidence`: `high` / `low`. Low only when Need had no audit data to rest on (the two `unclear` rows); that is also
+  exactly when the tier is capped at B. A missing rating is a reason line, not low confidence.
 - The thresholds are a first guess. The manifest records the tier mix for each run. Aim for A ≈ top 15–20%,
   a number you can review in one sitting, and move the thresholds if a run is mostly A or almost no A.
 - One weight set for all lead types for now. Split weights by `lead_type` only if `score-report` shows
@@ -300,14 +308,18 @@ maps:
 
 scoring:
   version: 4
-  gates: {chain_listing_min: 3, exclude_domains: [], niche_mismatch: false}
+  gates: {chain_listing_min: 3, exclude_domains: [], exclude_categories: [], niche_mismatch: false}
   weights: {need: 0.6, viability: 0.4}
   reach_by_rank: [100, 90, 80, 60, 40]   # applied to the market's channel order
   need:
     new_build: {base: 60, has_social: 25, reviews_20plus: 15}
+    dead_site_base: 50                    # dead domain, certificate error, site didn't load
     redesign: {not_mobile: 30, no_https: 20, outdated: 20, perf_below_50: 15,
                no_booking_or_call: 10, seo_below_70: 5}
     outdated_years: 4
+    legacy_cms: [Joomla]
+  viability: {no_data: 50, volume_at_strong: 40, volume_max: 60,
+              rating_bands: [[4.5, 40], [4.0, 30], [3.5, 15]], runs_ads: 10}
   tiers: {A: 65, B: 45, C: 25}
 ```
 
@@ -325,7 +337,7 @@ scoring:
 | `config/outreach.sr.md`, `config/outreach.en.md` | example messages by channel, `### generic` + optional niche subsections | you |
 | `.env` | `NOTION_TOKEN`, `NOTION_DATABASE_ID` | you (never committed) |
 
-**Schema v10** (`pipeline/schema.py`) adds: `maps_category`, `listing_count`, `business_status`, `site_reachable`, `copyright_year`,
+**Schema v10–v13** (`pipeline/schema.py`; v10 step 1, v11 step 3, v12 step 4, v13 step 5) adds: `maps_category`, `listing_count`, `business_status`, `site_reachable`, `copyright_year`,
 `has_viewport_meta`, `has_booking`, `has_click_to_call`, `market`, `language`, `niche` (= `industry`, synced to the Notion `Industry` select), `niche_label`, `niche_match`, `need_score`,
 `viability_score`, `reach_score`, `priority`, `tier`, `score_reasons`, `score_confidence`,
 `disqualify_reason`. `opportunity_score` / `reachability_score` / `total_score` are kept for one version
@@ -338,7 +350,7 @@ Notion `Verdict`: optional, `Skip` stops all further work on a page. Notion `Out
 ## Principles that hold across every stage
 
 - One `Lead` dataclass flows everywhere; new fields bump `schema_version`.
-- Degrade, don't crash: missing data becomes a default plus `score_confidence: low`, never an exception or a silent drop.
+- Degrade, don't crash: missing data becomes a default plus a reason line (and `score_confidence: low` when Need has no audit data), never an exception or a silent drop.
 - **Every score explains itself**: no number without a reason string.
 - **The formula drafts, you send**: L1 picks what gets drafted and in what order; nothing is sent without you.
 - **One source per rule**: domain key in `dedupe.py`, channel ranking in one shared function,

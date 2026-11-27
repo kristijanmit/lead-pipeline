@@ -140,17 +140,20 @@ The edits below assume the recommendations. Change them if you decide otherwise.
        `status` column, empty for open places; the exact closed text is still unseen, so match on "closed" only.
     3. chain: `listing_count ≥ chain_listing_min` or the domain is in `exclude_domains`
     4. `exclude_categories`
-    5. `maps_category` mismatch, only if `gates.category_mismatch: true` (default off until you've seen the numbers)
-    6. no usable channel
+    5. `market.exclude_name_patterns` (whole-word, case-insensitive, on the business name)
+    6. niche mismatch, only if `gates.niche_mismatch: true` (default off until you've seen the numbers; was `category_mismatch`, renamed 2026-11-27 to match PIPELINE.md)
+    7. no usable first-touch channel
   - **ADD** `niche_match()`: Maps category vs the run niche's accepted categories → `match` / `unknown` / `mismatch` (section 9).
   - **ADD** `need()`, by case:
     - `no_website` → new_build: base 60, +25 if IG/FB present, +15 if `review_count ≥ 20`
-    - `dead_site` (`site_reachable is False`) → new_build-like: base 50, plus the same IG/FB and review add-ons, reason "domain dead/parked"
+    - `dead_site` (`site_reachable is False`, `probe_error` dns/refused) → new_build: base 50, plus the same IG/FB and review add-ons, reason "domain dead"
+    - **Decided 2026-11-27:** `probe_error` ssl → `lead_type` redesign (the site exists), but Need uses the dead-site formula, confidence high, reason "certificate error, browsers show a warning".
+      `probe_error` timeout / http_error / other → `unclear`, the same dead-site formula, confidence **low**, reason "site didn't load".
     - `audited` → redesign points: not mobile 30 · no HTTPS 20 · outdated 20 · perf < 50 15 · no booking and no call 10 · SEO < 70 5
     - `no_audit` (site live, Lighthouse failed) → redesign points without the Lighthouse items (viewport stands in for mobile), `confidence = low`
-  - **ADD** `viability()`: `min(60, 20·log10(reviews+1))` plus rating bands (40/30/15/0). No data → 50, `confidence = low`.
+  - **ADD** `viability()`: volume plus rating bands (40/30/15/0), +10 runs ads. **Decided 2026-11-27:** volume = `min(60, 40·log10(reviews+1)/log10(review_strong+1))`, so the market's `review_strong` scores 40. No data → 50 plus a reason line; it does **not** set low confidence or cap the tier.
   - **ADD** `reach()`: values from config for `channels.best_channel(lead)`.
-  - **ADD** priority and tier: `priority = (0.6·need + 0.4·viability) × (0.5 + reach/200)`. Tiers A ≥ 65, B ≥ 45, C ≥ 25, else D. Low confidence caps the tier at B.
+  - **ADD** priority and tier: `priority = (0.6·need + 0.4·viability) × (0.5 + reach/200)`. Tiers A ≥ 65, B ≥ 45, C ≥ 25, else D. **Decided 2026-11-27:** only a low-confidence Need (`unclear`: Lighthouse failed, or the site didn't load) caps the tier at B; `score_confidence` is low exactly then.
 - **CHANGE** `lead_type` mapping: `no_website` / `dead_site` → `new_build`, `audited` → `redesign`, `no_audit` → `unclear`. Today's "unreachable" is now two cases (G2).
 - **CHANGE** `_build_audit_notes` (P5, G12): keep the who-they-are, web-presence and contact sentences. **Remove** the rating sentence and the priority sentence, and put them in `score_reasons` instead.
 - **DELETE**: the `assert cap < no_website_score` (D2).
@@ -160,7 +163,7 @@ The edits below assume the recommendations. Change them if you decide otherwise.
 - **REPLACE** the `scoring` defaults (lines ~83-101) and `_validate` (lines 229-264) together (G9):
   - weights sum to 1.0 · tiers descending · reach values 0-100 · every market preset complete (section 9)
   - remove the `audited_score_cap` rule
-- **ADD** `scoring.gates: {chain_listing_min: 3, exclude_domains: [], exclude_categories: [], category_mismatch: false}`.
+- **ADD** `scoring.gates: {chain_listing_min: 3, exclude_domains: [], exclude_categories: [], niche_mismatch: false}`.
 - **CHANGE** `config.yaml` `scoring` block to v4 (shape as in PIPELINE.md v2: `markets:` presets, no niche anywhere).
 - `qualification.target_countries` moves under `scoring.gates.target_countries`, or stays where it is. Pick one and validate it.
 
@@ -249,7 +252,7 @@ At this commit, `test_scoring.py` (78 test/assert lines), `test_notion_sink.py` 
 5. **Notion properties**, then `to_notion_properties`, `query_draftable`, `--min-tier`, `--rescore`.
 6. **Auto-drafting** (section 11).
 7. **`score-report`** after your first review session: Go-rate per market and per niche.
-8. **Cleanup** one version later: remove `reachability_score` / `opportunity_score` / `total_score` (schema 13; v10 = step 1 market/niche, v11 = step 3 audit signals, v12 = step 4 collect) and their Notion columns.
+8. **Cleanup** one version later: remove `reachability_score` / `opportunity_score` / `total_score` (schema 14; v10 = step 1 market/niche, v11 = step 3 audit signals, v12 = step 4 collect, v13 = step 5 scorer v4) and their Notion columns.
 
 Follow-ups after v2 (not in this change): Instagram bio and post enrichment for IG-only businesses (G15, ROADMAP to-do #2),
 Phase B follow-ups with the `Outcome` field, reply drafts.

@@ -12,8 +12,8 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Iterable
 
-SCHEMA_VERSION = 12
-SCORING_VERSION = 3
+SCHEMA_VERSION = 13
+SCORING_VERSION = 4
 
 
 @dataclass
@@ -93,7 +93,19 @@ class Lead:
     # scorer.py alongside opportunity_score (same _audit_case branch, different
     # pitch implication). Never set at collection/enrichment time. v3 JSONL loads
     # as None via the default — re-running score() fills it in (docs/SCORING.md §8).
-    qualified: bool = False  # industry + country filters passed AND reachability_score > 0
+    qualified: bool = False  # v4: passed every L0 gate (status "scored", not "disqualified")
+
+    # v13 — scorer v4 (docs/plan/v2/PIPELINE.md §3). The v3 fields above stay one
+    # version for comparison; v4 leaves them None. v12 JSONL loads these as None/[].
+    niche_match: str | None = None  # "match" | "unknown" | "mismatch"
+    need_score: float | None = None  # 0-100, problems an owner can see
+    viability_score: float | None = None  # 0-100, active and able to pay
+    reach_score: float | None = None  # 0-100, best first-touch channel in the market's order
+    priority: float | None = None  # (0.6·need + 0.4·viability) × (0.5 + reach/200)
+    tier: str | None = None  # "A" | "B" | "C" | "D"
+    score_reasons: list[str] = field(default_factory=list)  # drivers, never shown to drafting
+    score_confidence: str | None = None  # "high" | "low" (low = Need had no audit data; caps tier at B)
+    disqualify_reason: str | None = None  # first L0 gate that matched
 
     # outreach (v8) — filled by the draft stage, empty until then. suggested_channel
     # is a Notion select option ("Instagram" | "Facebook" | "Viber/Whatsapp" | "Email" |
@@ -113,7 +125,7 @@ class Lead:
 
     # pipeline bookkeeping
     run_id: str = ""
-    status: str = "collected"  # collected | enriched | enrich_failed | scored | synced
+    status: str = "collected"  # collected | enriched | enrich_failed | scored | disqualified | synced
     errors: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
