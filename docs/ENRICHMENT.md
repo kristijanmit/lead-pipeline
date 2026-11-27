@@ -75,7 +75,7 @@ wins, by lowercased email / `phone_key` / dict key).
 ## 3. Audit enricher and the shared audit core
 
 The audit itself lives in **`pipeline/audit.py`**, the shared audit core (v2 step 3). It works on a domain and
-knows nothing about `Lead`, so the `audit` enricher, the `audit-report` command (step 8) and later the public
+knows nothing about `Lead`, so the `audit` enricher, the `audit-report` command (docs/OUTREACH.md, step 8) and later the public
 scanner all use the same code. `pipeline/enrichers/audit.py` is a thin wrapper: it calls `audit_site()` and maps
 the `AuditResult` onto the lead (`apply_audit`).
 

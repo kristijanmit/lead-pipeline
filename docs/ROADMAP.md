@@ -69,7 +69,14 @@ properly" means in practice.
   Follow-up fix: `first_offer: audit` only for leads with an audited site that answered (`lead_type` redesign /
   unclear and `site_reachable`); new_build leads keep the question (`drafter.offer_for`). Notion pages carry no
   `site_reachable`, so `draft-notion` always uses the question.
-- Next: step 8 (`audit-report`).
+- Step 8 done (branch `v2-step8-audit-report`): `audit-report` writes a one-page audit per qualified lead
+  (`data/runs/<id>/reports/<domain>.md` + self-contained `.html`) in the market's language (`pipeline/reports/`).
+  Findings are the scorer's Need items (`need_items`, shared) ranked by Need points, at most 3, plus "what
+  already works"; a certificate error is a finding; no-site / dead / didn't-load / "site looks fine" leads are
+  skipped. Stored audit by default with its date (warning past 14 days), `--rescan` via the audit core. A
+  hand-edited .md is kept (placeholder for a manual finding), `--force` rebuilds. GBP completeness (S14) left out:
+  no data source. Open: you read 2–3 reports.
+- Next: step 9 (automatic drafting).
 
 **Done**
 - Phases 1-4: collect (OSM, Google Maps, manual CSV), enrich (contacts + Lighthouse), score, Notion sync with
