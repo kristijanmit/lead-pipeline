@@ -22,7 +22,7 @@ from pipeline.collectors.areas import parse_bbox, resolve_bbox
 from pipeline.collectors.maps import RAW_CSV_NAME, grid_cell_count
 from pipeline.config import ConfigError, load_config
 from pipeline.dedupe import dedupe_leads, is_social_domain, lead_key
-from pipeline.drafting import DraftBudgetError, draft_lead, language_skip_reason, load_examples
+from pipeline.drafting import DraftBudgetError, draft_lead, examples_path, language_skip_reason, load_examples
 from pipeline.enrichers import apply_enrichers, get_enricher
 from pipeline.market import Market, load_market, market_from_prompts, market_yaml
 from pipeline.niche import Niche, check_sources, load_niche_file
@@ -81,6 +81,23 @@ class _DraftMarkets:
         if isinstance(market, str):
             return None, market
         return market, language_skip_reason(market)
+
+
+class _Examples:
+    """Examples file per drafting language (outreach.examples_path with {language}),
+    loaded once. A missing file is a warning, not an error: drafts run without examples."""
+
+    def __init__(self, outreach: dict):
+        self.outreach = outreach
+        self.loaded: dict[str, str] = {}
+
+    def get(self, language: str) -> str:
+        if language not in self.loaded:
+            path = examples_path(self.outreach, language)
+            self.loaded[language] = load_examples(path)
+            if not self.loaded[language]:
+                print(f"  warning: no examples file {path}; drafting {language} without examples", file=sys.stderr)
+        return self.loaded[language]
 
 
 def _print_market_skips(skips: dict[str, int]) -> None:
@@ -657,7 +674,11 @@ def cmd_draft(args: argparse.Namespace) -> int:
     started_at = _now_iso()
 
     outreach, draft_cfg = config["outreach"], config["draft"]
-    examples = load_examples(outreach["examples_path"])
+    examples = _Examples(outreach)
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {"run_id": args.run}
+    # the run's niche supplies the niche question and landing URL (runs before markets have none)
+    niche = Niche.from_dict(manifest["niche"]) if manifest.get("niche") else None
     drafted = failed = skipped = no_contact = 0
     markets = _DraftMarkets(config)
     market_skips: dict[str, int] = {}
@@ -676,7 +697,10 @@ def cmd_draft(args: argparse.Namespace) -> int:
             results.append(lead)
             continue
         try:
-            out = draft_lead(lead, outreach, draft_cfg, market, variant=drafted + failed, examples=examples)
+            out = draft_lead(
+                lead, outreach, draft_cfg, market, variant=drafted + failed,
+                examples=examples.get(market.language), niche=niche, need_cfg=config["scoring"]["need"],
+            )
         except DraftBudgetError as e:
             out_of_credits = str(e)
             break
@@ -693,8 +717,6 @@ def cmd_draft(args: argparse.Namespace) -> int:
     write_jsonl(scored_path, results)
     CsvSink(run_dir / "scored.csv").write(results)
 
-    manifest_path = run_dir / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {"run_id": args.run}
     manifest["stage"] = "draft"
     manifest["draft"] = {
         "config_snapshot": {"draft": draft_cfg, "limit": args.limit},
@@ -740,7 +762,7 @@ def cmd_draft_notion(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     sink = get_sink("notion", config)
     outreach, draft_cfg = config["outreach"], config["draft"]
-    examples = load_examples(outreach["examples_path"])
+    examples = _Examples(outreach)
 
     redraft = getattr(args, "redraft", False)
     pages = sink.query_draftable(
@@ -771,7 +793,11 @@ def cmd_draft_notion(args: argparse.Namespace) -> int:
             market_skips[reason] = market_skips.get(reason, 0) + 1
             print(f"  skipped: {lead.company}: {reason}")
             continue
-        out = draft_lead(lead, outreach, draft_cfg, market, variant=drafted + failed, examples=examples)
+        # a page has no niche definition: the question comes from the examples' Questions list
+        out = draft_lead(
+            lead, outreach, draft_cfg, market, variant=drafted + failed, examples=examples.get(market.language),
+            need_cfg=config["scoring"]["need"],
+        )
         if not out.draft_message:
             if out.errors != lead.errors:
                 failed += 1

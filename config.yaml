@@ -22,7 +22,7 @@ markets:
     country: Serbia
     dial_code: "+381"
     mobile_prefixes: ["+3816"]
-    language: sr              # drafting rules + examples (config/outreach.md for now)
+    language: sr              # drafting rules (pipeline/drafting/rules_sr.py) + examples (config/outreach.sr.md)
     channels: [Instagram, Facebook, Viber/Whatsapp, Email, Call]
     first_touch_excluded: []
     review_strong: 50
@@ -33,7 +33,7 @@ markets:
     country: United Arab Emirates
     dial_code: "+971"
     mobile_prefixes: ["+9715"]
-    language: en              # English drafting lands in v2 step 7
+    language: en              # rules_en.py + config/outreach.en.md
     channels: [Instagram, Facebook, LinkedIn, Email, Call, WhatsApp]
     first_touch_excluded: [WhatsApp]   # only after a reply
     review_strong: 100

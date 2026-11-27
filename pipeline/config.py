@@ -67,7 +67,11 @@ DEFAULTS: dict = {
         "named_references": [],
         "price_from": "",
         "signature": "Kristijan, ONIX Web Lab, onixweblab.com",
-        "examples_path": "config/outreach.md",
+        # voice references per drafting language; {language} is the market's (sr / en)
+        "examples_path": "config/outreach.{language}.md",
+        # last sentence of a first message: "question" (default) or "audit" (offer a
+        # one-page audit note, Instagram only). Keep "question" until website P0 is live.
+        "first_offer": "question",
         # lowest Notion Tier drafting picks up (script_edits.md §11.2); a page with
         # no Tier (hand-made, backfilled) stays eligible
         "auto_draft_min_tier": "B",
@@ -240,6 +244,12 @@ def _validate(config: dict, path: Path) -> None:
         isinstance(r, str) for r in outreach["named_references"]
     ):
         raise ConfigError(f"{path}: outreach.named_references must be a list of strings")
+    if "{language}" not in outreach["examples_path"]:
+        raise ConfigError(
+            f"{path}: outreach.examples_path must contain {{language}}, e.g. config/outreach.{{language}}.md"
+        )
+    if outreach.get("first_offer") not in ("question", "audit"):
+        raise ConfigError(f"{path}: outreach.first_offer must be question or audit")
     if outreach.get("auto_draft_min_tier") not in ("A", "B", "C"):
         raise ConfigError(f"{path}: outreach.auto_draft_min_tier must be A, B or C")
     if "industry_labels" in outreach:

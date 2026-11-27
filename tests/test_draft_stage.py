@@ -30,7 +30,7 @@ def _make_run(tmp_path, monkeypatch, leads):
 def _fake(monkeypatch, fail_for=(), message="Pozdrav, ja sam Kristijan. Kako Vam stižu upiti?"):
     calls = []
 
-    def fake(prompt, model, timeout_s):
+    def fake(prompt, model, timeout_s, **kw):
         calls.append(prompt)
         if any(name in prompt for name in fail_for):
             raise RuntimeError("boom")
@@ -76,34 +76,65 @@ def test_lead_without_market_is_skipped_not_guessed(tmp_path, monkeypatch, capsy
     assert "1 skipped, not drafted: no market" in capsys.readouterr().out
 
 
-def test_english_market_lead_is_skipped_never_drafted_in_serbian(tmp_path, monkeypatch, capsys):
+def test_english_market_lead_is_drafted_with_english_rules(tmp_path, monkeypatch):
     run_dir = _make_run(tmp_path, monkeypatch, [
         _lead("Dubai Smile", "smile.ae", market="uae", language="en"),
         _lead("Beograd", "bg.rs", market="serbia", language="sr"),
     ])
-    calls = _fake(monkeypatch)
-    assert main(["draft", "--run", "r", "--limit", "1"]) == 0
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "outreach.en.md").write_text("## Instagram (DM)\n### generic\nEN-EXAMPLE\n")
+    (tmp_path / "config" / "outreach.sr.md").write_text("## Instagram (DM)\n### generic\nSR-EXAMPLE\n")
+    calls = []
+
+    def fake(prompt, model, timeout_s, **kw):
+        calls.append((prompt, kw["system"]))
+        if "in English" in kw["system"]:
+            return {"message": "Hi, I'm Kristijan. How do new patients find you?", "verify_note": ""}
+        return {"message": "Pozdrav, ja sam Kristijan. Kako Vam stižu upiti?", "verify_note": ""}
+
+    monkeypatch.setattr(drafter, "_call_claude", fake)
+    assert main(["draft", "--run", "r"]) == 0
     by = {l.company: l for l in read_jsonl(run_dir / "scored.jsonl")}
-    assert len(calls) == 1 and "Dubai Smile" not in calls[0]  # skip doesn't use up --limit
-    assert by["Dubai Smile"].draft_message == "" and by["Dubai Smile"].errors == []
-    assert by["Dubai Smile"].suggested_channel == ""
-    assert by["Beograd"].draft_message
-    draft = json.loads((run_dir / "manifest.json").read_text())["draft"]
-    assert draft["counts"]["skipped_market"] == 1
-    assert draft["market_skip_reasons"] == {"English drafting arrives in step 7": 1}
-    assert "1 skipped, not drafted: English drafting arrives in step 7" in capsys.readouterr().out
+    assert by["Dubai Smile"].draft_message.startswith("Hi") and by["Beograd"].draft_message.startswith("Pozdrav")
+    en_prompt = next(p for p, sys in calls if "Dubai Smile" in p)
+    sr_prompt = next(p for p, sys in calls if "Beograd" in p)
+    assert "EN-EXAMPLE" in en_prompt and "SR-EXAMPLE" not in en_prompt
+    assert "SR-EXAMPLE" in sr_prompt and "Vaš" in sr_prompt and "Vaš" not in en_prompt
+
+
+def test_missing_examples_file_warns_and_drafts(tmp_path, monkeypatch, capsys):
+    run_dir = _make_run(tmp_path, monkeypatch, [_lead("A", "a.rs")])
+    _fake(monkeypatch)
+    assert main(["draft", "--run", "r"]) == 0
+    assert read_jsonl(run_dir / "scored.jsonl")[0].draft_message
+    assert "no examples file config/outreach.sr.md" in capsys.readouterr().err
+
+
+def test_run_niche_question_reaches_the_prompt(tmp_path, monkeypatch):
+    run_dir = _make_run(tmp_path, monkeypatch, [_lead("A", "a.rs")])
+    (run_dir / "manifest.json").write_text(json.dumps({"run_id": "r", "niche": {
+        "name": "dental clinic", "search_terms": ["dentist"], "phrase": "stomatološke ordinacije",
+        "question": "da li pacijenti zakazuju i preko sajta?",
+    }}))
+    calls = _fake(monkeypatch)
+    main(["draft", "--run", "r"])
+    assert "da li pacijenti zakazuju i preko sajta?" in calls[0]
 
 
 def test_draft_lead_refuses_a_language_without_rules():
+    import dataclasses
+
     import pytest
     import yaml
 
     from pipeline.market import Market
 
     uae = Market.from_dict("uae", yaml.safe_load(MARKETS_YAML)["markets"]["uae"])
-    assert drafter.language_skip_reason(uae) == "English drafting arrives in step 7"
-    with pytest.raises(ValueError, match="step 7"):
-        drafter.draft_lead(_lead("A", "a.ae"), {}, {}, uae)
+    assert drafter.language_skip_reason(uae) == ""
+    german = dataclasses.replace(uae, language="de")
+    assert drafter.language_skip_reason(german) == "no drafting rules for language 'de'"
+    with pytest.raises(ValueError, match="no drafting rules"):
+        drafter.draft_lead(_lead("A", "a.ae"), {}, {}, german)
 
 
 def test_unknown_market_is_skipped_with_its_reason(tmp_path, monkeypatch, capsys):
@@ -154,7 +185,7 @@ def test_rule_violation_retries_once_then_succeeds(tmp_path, monkeypatch):
     answers = iter(["Pozdrav, besplatno?", "Pozdrav. Kako Vam stižu upiti?"])
     prompts = []
 
-    def fake(prompt, model, timeout_s):
+    def fake(prompt, model, timeout_s, **kw):
         prompts.append(prompt)
         return {"message": next(answers), "verify_note": ""}
 
@@ -174,7 +205,11 @@ def test_persistent_violation_is_an_error_not_a_draft(tmp_path, monkeypatch):
 
 
 def test_validate_message_rules():
-    v = drafter.validate_message
+    from pipeline.drafting.rules_sr import RULES
+
+    def v(message, channel):
+        return drafter.validate_message(message, channel, RULES)
+
     assert v("Pozdrav. Kako Vam stižu upiti?", "Instagram") == []
     assert any("Cyrillic" in p for p in v("Добар дан", "Instagram"))
     assert any("exclamation" in p for p in v("Zdravo!", "Instagram"))

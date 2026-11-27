@@ -57,7 +57,21 @@ properly" means in practice.
 - Scoring v5 (branch `v2-no-reviews-yet`): a Maps listing with 0 reviews (rating 0 or empty) is "no reviews yet":
   viability volume 0 + neutral quality 20 (`viability.no_reviews_quality`), confidence unchanged. v4 read it as a
   0★ rating ("0★/0 reviews", viability 0).
-- Next: step 7 (drafting rule sets sr/en, examples per language, offer slot).
+- Step 7 done (branch `v2-step7-drafting-rules`): drafting rule sets `drafting/rules_sr.py` (the Serbian rules,
+  moved unchanged) and `rules_en.py` (UAE): system prompt, banned phrases, greeting per channel, script check,
+  one-question and no-link checks for en. Patient-records platform terms are banned in both. Examples per language
+  come from `config/outreach.{language}.md` (`config/outreach.md` renamed to `outreach.sr.md`). The question rule
+  is niche-neutral: the niche's `question` from `go`, otherwise the examples' Questions list. `outreach.first_offer`
+  is `question` (default) or `audit` (Instagram only). LinkedIn drafts carry two outputs in `Draft Message`
+  ("Connection note:" / "After accept:"). `en` leads are drafted now. The validator also enforces the
+  approved sender line per language and allows Viber review claims only from `review_strong` reviews. Open: you approve `docs/plan/v2/outreach.{sr,en}.md`,
+  move them into `config/`, then `draft-notion --limit 1` (dry run) on one sr and one en page.
+  Follow-up fix: `first_offer: audit` only for leads with an audited site that answered (`lead_type` redesign /
+  unclear and `site_reachable`) that shows at least one Need item (shared `scorer.need_items`); new_build and
+  "site looks fine" leads keep the question (`drafter.offer_for`). Audit-offer examples are count-free
+  ("concrete suggestions", not "three"). Notion pages carry no
+  `site_reachable`, so `draft-notion` always uses the question.
+- Next: step 8 (`audit-report`).
 
 **Done**
 - Phases 1-4: collect (OSM, Google Maps, manual CSV), enrich (contacts + Lighthouse), score, Notion sync with
@@ -84,7 +98,7 @@ properly" means in practice.
   run out (exit code 3, finished drafts kept, `run` doesn't sync undrafted leads, `batch` pauses and resumes at draft).
 
 **To do (next, in order)**
-1. Read about 10 drafts in Notion, edit the weak ones, and feed the edits back into the prompt / `config/outreach.md`.
+1. Read about 10 drafts in Notion, edit the weak ones, and feed the edits back into the prompt / `config/outreach.{sr,en}.md`.
 2. Make drafts more specific: many leads are beauty salons whose real presence is an Instagram / Facebook page,
    and the pipeline only reads their website. Capture the public bio and recent post captions in `enrich`
    (check each site's rules first), then regenerate the generic drafts.
