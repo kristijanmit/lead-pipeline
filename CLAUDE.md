@@ -28,7 +28,7 @@ All stages run through one CLI entrypoint (`pipeline/runner.py`):
 - `python -m pipeline.runner collect --source maps --market serbia --niche-file <niche.yaml> --location "..."` — collect leads. Market (preset in `config.yaml` `markets:`) and niche (name, search_terms, phrase, osm_tags for osm…) are required; see docs/COLLECTION.md §1.1
 - `python -m pipeline.runner enrich --run <run_id>` — contact enrichment, then website audit
 - `python -m pipeline.runner enrich --run <run_id> --only audit --rescan [--limit N]` — re-run only the audit (probe signals + Lighthouse) on an enriched run, e.g. one enriched before schema v11; contact data kept, run `score` again after
-- `python -m pipeline.runner score --run <run_id> [--market <id>]` — scorer v4 (docs/plan/v2/PIPELINE.md §3): L0 gates (disqualified leads are kept in JSONL, never synced, keys go to `data/rejected_domains.json`), then Need / Viability / Reach → priority → tier A–D with `score_reasons`. Market and niche come from the run manifest; `--market` only for runs collected before markets existed. Old runs: `enrich --only audit --rescan` first, or audited leads lose the signal-based Need items
+- `python -m pipeline.runner score --run <run_id> [--market <id>]` — scorer v5 (v4 layout, docs/plan/v2/PIPELINE.md §3; v5 = "no reviews yet", docs/SCORING.md changelog): L0 gates (disqualified leads are kept in JSONL, never synced, keys go to `data/rejected_domains.json`), then Need / Viability / Reach → priority → tier A–D with `score_reasons`. Market and niche come from the run manifest; `--market` only for runs collected before markets existed. Old runs: `enrich --only audit --rescan` first, or audited leads lose the signal-based Need items
 - `python -m pipeline.runner draft --run <run_id>` — suggested channel + one Serbian first message per qualified lead via `claude -p` (rules in docs/OUTREACH.md); run before sync, since fields are written only when a Notion page is created
 - `python -m pipeline.runner draft-notion [--limit N] [--yes] [--redraft] [--company X]` — draft for Notion pages with no draft yet: Qualified, Status Not started, Verdict not Skip, Tier empty or ≥ `outreach.auto_draft_min_tier` (B); `SM Audit` optional; pages without Market/Industry are skipped and reported; `--redraft` overwrites drafts; dry run unless `--yes`
 - `python -m pipeline.runner sync --run <run_id> --sink notion [--min-tier C]` — push qualified leads at tier ≥ `--min-tier` (default C) to Notion
@@ -74,7 +74,7 @@ For deeper context, consult these before guessing:
 - `docs/ROADMAP.md` — status at a glance (done / to do / ideas), the six phases, and checkbox status; update both as work ships
 - `docs/OUTREACH.md` — the draft stage: channel rules, message rules, settings, what is written to Notion
 - `docs/SCORING.md` — the "why" behind every scoring weight, the fit/opportunity split, the manual intent workflow, and how to retune after real reply data
-- `config.yaml` — market presets and scoring v4 weights / gates / tiers (safe to commit; secrets are not)
+- `config.yaml` — market presets and scoring v5 weights / gates / tiers (safe to commit; secrets are not)
 
 ## Testing
 

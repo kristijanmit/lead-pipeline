@@ -16,9 +16,9 @@ from pipeline.scoring import score
 
 YEAR = 2026
 
-# hand-built mirror of the config.yaml v4 block — tests must not load config
+# hand-built mirror of the config.yaml v5 block — tests must not load config
 SCORING = {
-    "version": 4,
+    "version": 5,
     "gates": {
         "chain_listing_min": 3,
         "exclude_domains": ["bigchain.rs"],
@@ -39,6 +39,7 @@ SCORING = {
     },
     "viability": {
         "no_data": 50,
+        "no_reviews_quality": 20,
         "volume_at_strong": 40,
         "volume_max": 60,
         "rating_bands": [[4.5, 40], [4.0, 30], [3.5, 15]],
@@ -275,6 +276,31 @@ def test_rating_bands(rating, points):
     assert s.viability_score == points  # 0 reviews -> volume 0
 
 
+@pytest.mark.parametrize("rating", [0.0, None])
+def test_listing_with_no_reviews_yet_gets_neutral_quality(rating):
+    s = _score(_lead(domain="", social_links=IG, rating=rating, review_count=0))
+    assert s.viability_score == 20  # volume 0 + neutral quality, not 0★ and not "no data" 50
+    assert "no reviews yet" in s.score_reasons
+    assert not any("★" in r or "reviews" in r and r != "no reviews yet" for r in s.score_reasons)
+    assert s.score_confidence == "high"
+
+
+def test_rating_zero_without_a_count_is_no_reviews_yet():
+    s = _score(_lead(domain="", social_links=IG, rating=0.0))
+    assert s.viability_score == 20 and "no reviews yet" in s.score_reasons
+
+
+def test_no_reviews_yet_still_gets_the_ads_bonus():
+    s = _score(_lead(domain="", social_links=IG, rating=0.0, review_count=0, ads_tags=["gtm"]))
+    assert s.viability_score == 30
+
+
+def test_scoring_version_4_config_fails_with_a_pointer(tmp_path):
+    path = _write(tmp_path, "scoring:\n  version: 4\n")
+    with pytest.raises(ConfigError, match="scoring.version must be 5"):
+        load_config(path)
+
+
 def test_review_volume_is_capped():
     s = _score(_lead(domain="", social_links=IG, review_count=100000))
     assert s.viability_score == 60
@@ -425,7 +451,7 @@ def test_score_is_pure_and_clears_v3_fields():
     s = _score(lead)
     assert lead == before
     assert (s.total_score, s.opportunity_score, s.reachability_score) == (None, None, None)
-    assert s.scoring_version == 4
+    assert s.scoring_version == 5
 
 
 def test_rescoring_a_disqualified_lead_that_now_passes_clears_the_reason():
@@ -444,7 +470,7 @@ def test_defaults_match_the_hand_built_mirror_except_test_gates():
     assert defaults == mirror
 
 
-def test_repo_config_yaml_is_scoring_v4():
+def test_repo_config_yaml_is_scoring_v5():
     assert load_config("config.yaml")["scoring"] == DEFAULTS["scoring"]
 
 

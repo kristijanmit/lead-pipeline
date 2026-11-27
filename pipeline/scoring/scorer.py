@@ -206,6 +206,12 @@ def viability(lead: Lead, scoring: dict, market: Market) -> tuple[float, list[st
     if lead.rating is None and lead.review_count is None:
         value = float(cfg["no_data"])
         reasons.append(f"no rating data (viability {_fmt(value)})")
+    elif not lead.rating and not lead.review_count:
+        # v5: Maps reports rating 0 (or none) for a listing nobody has reviewed. That's
+        # a new or quiet listing, not a 0★ business and not missing data: volume 0,
+        # neutral quality, confidence unchanged
+        value = float(cfg["no_reviews_quality"])
+        reasons.append("no reviews yet")
     else:
         reviews = lead.review_count or 0
         volume = cfg["volume_at_strong"] * math.log10(reviews + 1) / math.log10(market.review_strong + 1)

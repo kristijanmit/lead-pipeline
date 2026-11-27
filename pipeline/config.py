@@ -82,7 +82,7 @@ DEFAULTS: dict = {
     # Scorer v4 (docs/plan/v2/PIPELINE.md §3). Per-market values (channel order,
     # review_strong, exclude_name_patterns) live on the market, not here.
     "scoring": {
-        "version": 4,
+        "version": 5,
         "gates": {
             "chain_listing_min": 3,
             "exclude_domains": [],
@@ -107,6 +107,7 @@ DEFAULTS: dict = {
         },
         "viability": {
             "no_data": 50,
+            "no_reviews_quality": 20,
             "volume_at_strong": 40,
             "volume_max": 60,
             "rating_bands": [[4.5, 40], [4.0, 30], [3.5, 15]],
@@ -270,10 +271,15 @@ def _num(value) -> bool:
 
 def _validate_scoring(scoring: dict, path: Path) -> None:
     """Scorer v4 shape. A v3 block (reachability / opportunity) fails with a pointer."""
-    if "reachability" in scoring or "opportunity" in scoring or scoring.get("version") != 4:
+    if "reachability" in scoring or "opportunity" in scoring or scoring.get("version") not in (4, 5):
         raise ConfigError(
             f"{path}: scoring v4 expected (gates, weights, reach_by_rank, need, viability, tiers) — "
             "the v3 reachability/opportunity block was replaced, see docs/SCORING.md"
+        )
+    if scoring["version"] != 5:
+        raise ConfigError(
+            f"{path}: scoring.version must be 5 (v5 scores a Maps listing with no reviews yet "
+            "via viability.no_reviews_quality, see docs/SCORING.md changelog)"
         )
     for section in ("gates", "weights", "need", "viability", "tiers"):
         if not isinstance(scoring.get(section), dict):
@@ -318,7 +324,7 @@ def _validate_scoring(scoring: dict, path: Path) -> None:
         raise ConfigError(f"{path}: scoring.need.legacy_cms must be a list of strings")
 
     via = scoring["viability"]
-    for key in ("no_data", "volume_at_strong", "volume_max", "runs_ads"):
+    for key in ("no_data", "no_reviews_quality", "volume_at_strong", "volume_max", "runs_ads"):
         if not _num(via.get(key)) or not 0 <= via[key] <= 100:
             raise ConfigError(f"{path}: scoring.viability.{key} must be a number 0-100")
     bands = via.get("rating_bands")

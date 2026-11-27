@@ -1,4 +1,4 @@
-# AGENCY lead scoring — design notes (scorer v4)
+# AGENCY lead scoring — design notes (scorer v5)
 
 ## 1. Overview
 
@@ -35,7 +35,7 @@ L2 is the real decision; L3 is the ground truth L1 is tuned against (§11).
 | §8 | Priority, tiers, confidence | `score()`, `tier_for()`, `_cap()` |
 | §9 | `score_reasons` and `audit_notes` | `score()`, `_build_audit_notes()` |
 
-All weights and thresholds live in `config.yaml › scoring` (`version: 4`).
+All weights and thresholds live in `config.yaml › scoring` (`version: 5`).
 Per-market values live in `config.yaml › markets` (§10).
 
 ## 2. L0 gates — filters, not scores
@@ -149,7 +149,14 @@ item set to 0 is skipped and gets no reason line. Keys are validated against
 
 With no rating and no review count (OSM, manual): `viability = no_data` (50)
 and the reason "no rating data (viability 50)". This is **not** low
-confidence and never caps the tier. Otherwise:
+confidence and never caps the tier.
+
+A Maps listing with **no reviews yet** (review count 0 and rating 0 or empty;
+Google reports a 0 rating for a listing nobody has reviewed): volume 0 +
+`no_reviews_quality` (20), reason "no reviews yet". That's neither a 0★
+rating nor missing data: it's a new or quiet listing, so it scores below a
+lead we know nothing about (50) but above a genuinely bad rating. Confidence
+stays high. `runs_ads` still adds on top. Otherwise:
 
 ```
 volume  = min(volume_max (60),
@@ -297,6 +304,13 @@ and a hand-built mirror of the config, no mocks:
 - the shipped `config.yaml` matches the test mirror
 
 ## 13. Changelog
+
+- **v5** (v2, after step 6) — a Maps listing with 0 reviews (rating 0 or
+  empty) is "no reviews yet": viability = volume 0 + `no_reviews_quality`
+  (20, new config key), reason "no reviews yet", confidence unchanged. In v4
+  it fell into the rating path as a 0★ rating (viability 0) with the reason
+  "0★/0 reviews", which dropped such leads a tier. Only Viability changes;
+  everything else is as in v4.
 
 - **v4** (schema v13, v2 step 5) — layered scoring replaces the single
   `total_score`. **L0 gates** (country = the run's market, closed, chain,
