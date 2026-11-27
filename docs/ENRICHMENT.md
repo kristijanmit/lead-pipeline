@@ -71,6 +71,17 @@ Pages are decoded with `audit.html_text()` (contact and the audit probe alike): 
 `Content-Type` header, the page's own `<meta charset>` decides, not requests' ISO-8859-1 fallback, which turned
 "Isailović u Šapcu" into "IsailoviÄ\x87 u Å apcu".
 
+### One polite visitor per site (`audit.SiteClient`)
+
+Every GET to a lead's own site during enrich (contact, discovery, the audit probe) goes through one `SiteClient`
+that `cmd_enrich` shares across the enrichers:
+- **One homepage fetch:** contact takes the homepage from the audit probe (`SiteClient.probe`, cached per domain;
+  robots.txt checked first, and again for the final URL), and the audit reuses it. A probe failure is cached too.
+- **Same-site spacing:** `enrich.same_domain_delay_s` (default 1.5 s) between two requests to the same host
+  (robots.txt, homepage, contact page) and before Lighthouse starts. `enrich.delay_s` still spaces different leads.
+- **429:** wait `Retry-After` (seconds or an HTTP date, max 10 s; 10 s when missing) and retry once. A second 429
+  is recorded like any HTTP error (`contact: …` / `probe_error: http_error`).
+
 ### `profile_facts` (schema v14)
 
 The contact step also builds `profile_facts` with `pipeline/enrichers/profile.py` (pure, fixture-tested): short,

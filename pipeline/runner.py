@@ -17,6 +17,7 @@ from pathlib import Path
 
 import yaml
 
+from pipeline.audit import SiteClient
 from pipeline.collectors import get_collector
 from pipeline.collectors.areas import parse_bbox, resolve_bbox
 from pipeline.collectors.maps import RAW_CSV_NAME, grid_cell_count
@@ -393,6 +394,12 @@ def cmd_enrich(args: argparse.Namespace) -> int:
         }
 
     enrichers = [(name, get_enricher(name, config)) for name in _ENRICH_STEPS]
+    # one SiteClient for the whole run: the audit reuses the homepage contact fetched,
+    # and same-site spacing / the 429 retry hold across enrichers
+    site = SiteClient.from_config(config)
+    for _, enricher in enrichers:
+        if hasattr(enricher, "site"):
+            enricher.site = site
     delay_s = config["enrich"]["delay_s"]
     started_at = _now_iso()
 

@@ -91,6 +91,9 @@ properly" means in practice.
   batch `draft:` / `no_draft:`, `scripts/backfill_drafts.py`. D2 was already dropped in step 5. Not used yet: OSM
   tags and a Maps photo count (`images` was empty in the real CSV). Open: you run `run --limit 5` end to end, then
   read the drafts and Draft Notes.
+  Follow-up after the first real run (Šabac): HTML decoded by the page's own charset (`audit.html_text`); one
+  shared `audit.SiteClient` per enrich run (contact reuses the probe's homepage, `enrich.same_domain_delay_s` 1.5 s
+  between requests to one site, a 429 waits Retry-After ≤ 10 s and retries once) after MIS Dental answered 429.
 - Next: step 10 (`score-report`). Cleanup of the v3 score fields is now schema 15.
 
 **Done**

@@ -20,7 +20,11 @@ import json
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass, field
+from email.utils import parsedate_to_datetime
+from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup, UnicodeDammit
@@ -178,21 +182,114 @@ def html_text(response) -> str:
     return UnicodeDammit(response.content, is_html=True).unicode_markup or ""
 
 
-def probe(domain: str, timeout_s: float) -> tuple[str, str, bool]:
+# a 429's Retry-After is honoured up to this many seconds (also the wait when it is
+# missing or unreadable); then one retry, and a second 429 is recorded as a failure
+MAX_RETRY_AFTER_S = 10.0
+
+
+def retry_after_s(value: str | None, cap: float = MAX_RETRY_AFTER_S) -> float:
+    """Seconds to wait from a Retry-After header (delta-seconds or an HTTP date),
+    clamped to 0..cap. Missing or unreadable: cap."""
+    if not value:
+        return cap
+    value = value.strip()
+    try:
+        seconds = float(value)
+    except ValueError:
+        try:
+            seconds = (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds()
+        except (TypeError, ValueError):
+            return cap
+    return max(0.0, min(cap, seconds))
+
+
+def _host(url: str) -> str:
+    host = urlparse(url).netloc.lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+class SiteClient:
+    """Every GET to a lead's own site during enrich (contact, discovery, the audit
+    probe) goes through one client, so the site sees one polite visitor:
+    - requests to the same host are spaced by `same_domain_delay_s`;
+    - a 429 waits Retry-After (max MAX_RETRY_AFTER_S) and is retried once;
+    - the homepage probe is cached per domain, so contact and the audit share one
+      fetch (failures too: probe already tried https and http, with the 429 retry).
+    cmd_enrich shares one client across its enrichers; on their own they make their own."""
+
+    def __init__(
+        self, timeout_s: float, same_domain_delay_s: float = 0.0, *,
+        max_retry_after_s: float = MAX_RETRY_AFTER_S, sleep=time.sleep, clock=time.monotonic,
+    ):
+        self.timeout_s = timeout_s
+        self.same_domain_delay_s = same_domain_delay_s
+        self.max_retry_after_s = max_retry_after_s
+        self._sleep, self._clock = sleep, clock
+        self._last: dict[str, float] = {}
+        self._homepages: dict[str, tuple[str, str, bool] | ProbeError] = {}
+
+    @classmethod
+    def from_config(cls, config: dict) -> SiteClient:
+        enrich = config.get("enrich", {})
+        return cls(enrich["http_timeout_s"], enrich.get("same_domain_delay_s", 0.0))
+
+    def wait_for(self, url: str) -> None:
+        """Sleep until `same_domain_delay_s` has passed since the last request to this host."""
+        last = self._last.get(_host(url))
+        if last is not None and self.same_domain_delay_s:
+            remaining = self.same_domain_delay_s - (self._clock() - last)
+            if remaining > 0:
+                self._sleep(remaining)
+
+    def _send(self, url: str):
+        self.wait_for(url)
+        try:
+            return requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=self.timeout_s)
+        finally:
+            self._last[_host(url)] = self._clock()
+
+    def get(self, url: str):
+        """GET with host spacing and one retry after a 429. The caller checks the status."""
+        response = self._send(url)
+        if getattr(response, "status_code", 200) == 429:
+            headers = getattr(response, "headers", None) or {}
+            self._sleep(retry_after_s(headers.get("Retry-After"), self.max_retry_after_s))
+            response = self._send(url)
+        return response
+
+    def probe(self, domain: str) -> tuple[str, str, bool]:
+        """The homepage, https first -> (url, html, https), cached per domain.
+        Raises ProbeError with the most alive-looking failure kind across both schemes."""
+        if domain not in self._homepages:
+            try:
+                self._homepages[domain] = self._probe(domain)
+            except ProbeError as e:
+                self._homepages[domain] = e
+        cached = self._homepages[domain]
+        if isinstance(cached, ProbeError):
+            raise cached
+        return cached
+
+    def _probe(self, domain: str) -> tuple[str, str, bool]:
+        failures: list[tuple[str, str]] = []
+        for scheme, is_https in (("https", True), ("http", False)):
+            url = f"{scheme}://{domain}/"
+            try:
+                response = self.get(url)
+                response.raise_for_status()
+                return str(response.url), html_text(response), is_https
+            except requests.RequestException as e:
+                failures.append((classify_probe_error(e), f"{scheme}: {e}"))
+        kind, _ = min(failures, key=lambda f: _ALIVENESS.index(f[0]))
+        raise ProbeError(kind, " | ".join(detail for _, detail in failures)[:300])
+
+
+def probe(domain: str, timeout_s: float, client: SiteClient | None = None) -> tuple[str, str, bool]:
     """One GET for the working homepage URL, https first -> (url, html, https).
     https means "the https:// URL works". Raises ProbeError with the most
-    alive-looking failure kind across both schemes."""
-    failures: list[tuple[str, str]] = []
-    for scheme, is_https in (("https", True), ("http", False)):
-        url = f"{scheme}://{domain}/"
-        try:
-            response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=timeout_s)
-            response.raise_for_status()
-            return str(response.url), html_text(response), is_https
-        except requests.RequestException as e:
-            failures.append((classify_probe_error(e), f"{scheme}: {e}"))
-    kind, _ = min(failures, key=lambda f: _ALIVENESS.index(f[0]))
-    raise ProbeError(kind, " | ".join(detail for _, detail in failures)[:300])
+    alive-looking failure kind across both schemes. `client` shares spacing,
+    the 429 retry and the homepage cache with the rest of enrich."""
+    return (client or SiteClient(timeout_s)).probe(domain)
 
 
 # --- Lighthouse ------------------------------------------------------------
@@ -264,18 +361,22 @@ class AuditResult:
 
 
 def audit_site(
-    domain: str, *, http_timeout_s: float, lighthouse_binary: str, lighthouse_timeout_s: int, current_year: int
+    domain: str, *, http_timeout_s: float, lighthouse_binary: str, lighthouse_timeout_s: int, current_year: int,
+    client: SiteClient | None = None,
 ) -> AuditResult:
     """Probe, then Lighthouse. Never raises for a dead site or a Lighthouse
-    failure — both come back as fields."""
+    failure — both come back as fields. With `client`, a homepage contact already
+    fetched is reused, and Lighthouse waits for the host spacing too."""
     try:
-        url, html, https = probe(domain, http_timeout_s)
+        url, html, https = probe(domain, http_timeout_s, client)
     except ProbeError as e:
         return AuditResult(site_reachable=False, probe_error=e.kind, probe_detail=e.detail)
     result = AuditResult(
         site_reachable=True, url=url, https=https, cms=detect_cms(html),
         signals=extract_signals(html, current_year),
     )
+    if client is not None:
+        client.wait_for(url)
     try:
         scores, mobile_friendly = parse_lighthouse_report(
             run_lighthouse(url, lighthouse_binary, lighthouse_timeout_s)

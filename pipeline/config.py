@@ -49,6 +49,9 @@ DEFAULTS: dict = {
     },
     "enrich": {
         "delay_s": 2,
+        # pause between two requests to the same site (homepage, robots.txt, contact
+        # page, Lighthouse), so a lead's own site never sees a burst (429s)
+        "same_domain_delay_s": 1.5,
         "http_timeout_s": 20,
         "lighthouse": {
             "binary": "lighthouse",
@@ -220,6 +223,8 @@ def _validate(config: dict, path: Path) -> None:
     enrich = config["enrich"]
     if not isinstance(enrich.get("delay_s"), (int, float)) or enrich["delay_s"] < 0:
         raise ConfigError(f"{path}: enrich.delay_s must be a non-negative number")
+    if not isinstance(enrich.get("same_domain_delay_s"), (int, float)) or enrich["same_domain_delay_s"] < 0:
+        raise ConfigError(f"{path}: enrich.same_domain_delay_s must be a non-negative number")
     if not isinstance(enrich.get("http_timeout_s"), int) or enrich["http_timeout_s"] <= 0:
         raise ConfigError(f"{path}: enrich.http_timeout_s must be a positive integer")
     lighthouse = enrich.get("lighthouse")

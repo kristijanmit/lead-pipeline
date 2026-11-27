@@ -70,6 +70,14 @@ class DiscoveryEnricher:
     def __init__(self, config: dict):
         self._fetcher = ContactEnricher(config)
 
+    @property
+    def site(self):
+        return self._fetcher.site
+
+    @site.setter
+    def site(self, client) -> None:  # cmd_enrich shares one SiteClient across enrichers
+        self._fetcher.site = client
+
     def enrich(self, lead: Lead) -> Lead:
         if lead.domain:
             return lead
