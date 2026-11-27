@@ -68,9 +68,10 @@ docs/COLLECTION.md §1.1.
 Then, in order:
 1. Stamp `location` (unless the collector set it), and `country`, `market`, `language`, `industry` = `niche`,
    `niche_label` from the run's market and niche; both blocks go into `manifest.json`.
-2. **Dedupe** by normalized domain (`pipeline/dedupe.py` — no scheme, no `www.`, lowercase; the only place
+2. **Dedupe** by normalized domain (`pipeline/dedupe.py` — no scheme, no `www.`, lowercase; `sites.google.com/view/<x>` keeps its path; the only place
    this key is computed).
-3. **Skip leads already in Notion** via `data/seen_domains.json` (`--include-seen` keeps them).
+3. **Skip leads already in Notion** via `data/seen_domains.json`, and leads the L0 gates rejected in an earlier
+   run via `data/rejected_domains.json` (`--include-seen` keeps both). Each kept lead gets `listing_count`.
 4. `--limit N` keeps the first N.
 
 Output: `collected.jsonl` (`status: collected`), manifest counts (raw, after dedupe, already in Notion,
@@ -190,7 +191,7 @@ Notion `Status`: `Not started` → `Queued` → (sent by you) → `Follow-up due
 
 ## Principles that hold across every stage
 
-- One `Lead` dataclass (`pipeline/schema.py`, schema v11) flows everywhere; new fields bump `schema_version`.
+- One `Lead` dataclass (`pipeline/schema.py`, schema v12) flows everywhere; new fields bump `schema_version`.
 - Degrade, don't crash: missing data is a status + `Lead.errors`, not an exception.
 - Idempotent re-runs: enrich skips enriched, sync and collect skip cached, drafting skips drafted.
 - New sources / enrichers / sinks implement the protocol in their `base.py` and `@register` — `runner.py`

@@ -242,7 +242,10 @@ class ContactEnricher:
         return str(response.url), response.text
 
     def _robots_for(self, url: str) -> RobotFileParser | None:
-        base = url.partition("://")[0] + "://" + normalize_domain(url)
+        # robots.txt lives at the host root — not at a dedup key, which keeps
+        # the site path on shared hosts (sites.google.com/view/<x>)
+        parsed = urlparse(url)
+        base = f"{parsed.scheme}://{parsed.netloc}"
         if base not in self._robots:
             parser: RobotFileParser | None = RobotFileParser()
             try:

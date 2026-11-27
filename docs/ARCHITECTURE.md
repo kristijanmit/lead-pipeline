@@ -106,11 +106,12 @@ A single canonical record flows through every stage. Defined once in
 ```python
 @dataclass
 class Lead:
-    schema_version: int = 11       # bump whenever fields are added/changed (pipeline/schema.py is authoritative)
+    schema_version: int = 12       # bump whenever fields are added/changed (pipeline/schema.py is authoritative)
 
     # identity — set at collection, never changes after
     company: str
-    domain: str                    # normalized: no scheme, no "www.", lowercase
+    domain: str                    # normalized: no scheme, no "www.", lowercase; on shared path hosts
+                                   # (dedupe.SHARED_PATH_HOSTS) host + site path, e.g. sites.google.com/view/x
     source: str                    # "osm" | "maps" | "manual"
     industry: str = "other"        # v10: the run's niche name (Notion Industry select)
     location: str = ""             # the city/area the lead was collected in, e.g. "Novi Sad" (v5)
@@ -119,6 +120,11 @@ class Lead:
     language: str = ""             # v10 — drafting language, "sr" | "en"
     niche: str = ""                # v10 — same as industry
     niche_label: str = ""          # v10 — plural draft phrase in the market language
+
+    # v12 — collect details (Maps / dedupe); None for older JSONL
+    maps_category: str | None = None    # gosom's raw category text; None for OSM/manual
+    business_status: str | None = None  # gosom's raw status text, e.g. "Permanently closed"
+    listing_count: int | None = None    # distinct listings on this key, highest per source (dedupe.py)
 
     # contact enrichment (Phase 2, step 1)
     contact_emails: list[str] = field(default_factory=list)   # info@, sales@, etc — don't collapse to one
@@ -231,6 +237,9 @@ data/
     enriched.jsonl
     scored.jsonl
     scored.csv          # human-readable export
+    maps_raw.csv        # gosom's untouched results CSV (Maps runs only)
+  seen_domains.json     # keys already in Notion -> page_id (sync writes, collect skips)
+  rejected_domains.json # keys the L0 gates disqualified (score writes from v2 step 5, collect skips)
 
 tests/
   test_scoring.py       # pure function — no mocks needed
@@ -321,6 +330,8 @@ leads twice — see dedupe/idempotency below.
 
 - **Dedup key**: normalized domain (strip protocol, strip `www.`, lowercase,
   strip trailing slash). Computed once, in `dedupe.py`, used everywhere.
+  Shared hosts that put each site in the path (`SHARED_PATH_HOSTS`, e.g.
+  `sites.google.com/view/<x>`) keep that path, so their sites don't share a key.
 - **At collection**: merging multiple sources (OSM + Maps + manual) drops
   duplicates by this key before anything downstream sees them — no point
   enriching the same domain twice.

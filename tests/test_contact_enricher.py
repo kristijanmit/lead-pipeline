@@ -133,3 +133,18 @@ def test_extract_site_text_title_meta_headings_deduped_and_capped():
         "Mira Salon", "Frizerski salon od 1996", "Šišanje", "Farbanje",
     ]
     assert len(extract_site_text("<h1>" + "x" * 5000 + "</h1>")) == 1500
+
+
+def test_robots_is_fetched_at_the_host_root_for_shared_path_hosts(monkeypatch):
+    from pipeline.enrichers import contact as contact_mod
+
+    requested = []
+
+    class Missing:
+        status_code = 404
+        text = ""
+
+    monkeypatch.setattr(contact_mod.requests, "get", lambda url, **kw: requested.append(url) or Missing())
+    enricher = ContactEnricher({"enrich": {"http_timeout_s": 5}})
+    assert enricher._robots_for("https://sites.google.com/view/dezurnisto/") is None
+    assert requested == ["https://sites.google.com/robots.txt"]

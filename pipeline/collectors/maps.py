@@ -18,9 +18,9 @@ import re
 import shutil
 import subprocess
 import tempfile
-import unicodedata
 from pathlib import Path
 
+from pipeline.collectors.areas import parse_bbox, resolve_bbox
 from pipeline.collectors.base import register
 from pipeline.dedupe import split_website
 from pipeline.schema import Lead
@@ -39,6 +39,10 @@ def build_queries(location: str, categories: list[str]) -> str:
     )
 
 
+# gosom's results CSV, copied as-is into data/runs/<run_id>/ (params["raw_dir"])
+RAW_CSV_NAME = "maps_raw.csv"
+
+
 _GRID_ID_RE = re.compile(r"-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
@@ -46,19 +50,6 @@ def category_from_input_id(input_id: str) -> str:
     """Grid mode returns "<category>-<uuid>" as input_id (one per cell);
     plain mode returns the bare category."""
     return _GRID_ID_RE.sub("", input_id.strip())
-
-
-def parse_bbox(raw: str) -> tuple[float, float, float, float]:
-    """"minLat,minLon,maxLat,maxLon" -> floats, validated. Raises ValueError."""
-    try:
-        min_lat, min_lon, max_lat, max_lon = (float(x) for x in raw.split(","))
-    except ValueError:
-        raise ValueError(
-            f"bbox {raw!r} must be 4 comma-separated numbers: minLat,minLon,maxLat,maxLon"
-        ) from None
-    if not (-90 <= min_lat < max_lat <= 90 and -180 <= min_lon < max_lon <= 180):
-        raise ValueError(f"bbox {raw!r}: min must be below max (lat -90..90, lon -180..180)")
-    return min_lat, min_lon, max_lat, max_lon
 
 
 def grid_cell_count(bbox: tuple[float, float, float, float], cell_km: float) -> int:
@@ -70,32 +61,14 @@ def grid_cell_count(bbox: tuple[float, float, float, float], cell_km: float) -> 
     return max(1, math.ceil(height_km / cell_km)) * max(1, math.ceil(width_km / cell_km))
 
 
-def _ascii_key(text: str) -> str:
-    text = text.strip().lower().replace("đ", "dj")
-    return re.sub(r"[^a-z0-9]+", " ", unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()).strip()
-
-
-def resolve_bbox(params: dict, areas: dict) -> str | None:
-    """The bounding box for this run: an explicit params["bbox"] wins, then the
-    configured area for the location; params["grid"] is False -> no grid."""
-    if params.get("grid") is False:
-        return None
-    if params.get("bbox"):
-        return params["bbox"]
-    wanted = _ascii_key(params.get("location") or "")
-    for name, bbox in (areas or {}).items():
-        if _ascii_key(str(name)) == wanted:
-            return bbox
-    return None
-
-
 def _split_emails(raw: str) -> list[str]:
     # the emails column is only filled with -email; seen as comma-joined,
     # sometimes wrapped in brackets/quotes depending on version
     cleaned = raw.strip().strip("[]")
     seen: dict[str, str] = {}
     for part in cleaned.split(","):
-        email = part.strip().strip("'\"").lstrip("/")
+        # "%20info@x.rs": a URL-encoded space the scraper copied out of a mailto: link
+        email = part.replace("%20", "").strip().strip("'\"").lstrip("/").strip()
         if email and _EMAIL_RE.fullmatch(email):
             seen.setdefault(email.lower(), email)
     return list(seen.values())
@@ -124,6 +97,10 @@ def parse_results_csv(path: str | Path, categories: set[str]) -> list[Lead]:
             category = category_from_input_id(input_id)
             industry = category if category in categories else "other"
             domain, socials = split_website(row.get("website"))
+            # raw text, as gosom wrote it (in the market's maps_language) —
+            # scoring decides what counts as closed or off-niche
+            maps_category = (row.get("category") or "").strip() or None
+            business_status = (row.get("status") or "").strip() or None
             leads.append(
                 Lead(
                     company=company,
@@ -131,6 +108,8 @@ def parse_results_csv(path: str | Path, categories: set[str]) -> list[Lead]:
                     social_links=socials,
                     source="maps",
                     industry=industry,
+                    maps_category=maps_category,
+                    business_status=business_status,
                     address=(row.get("address") or "").strip(),
                     rating=_parse_rating(row.get("review_rating")),
                     review_count=_parse_review_count(row.get("review_count")),
@@ -150,7 +129,6 @@ class MapsCollector:
         maps = config.get("maps", {})
         self.binary: str = maps.get("binary", "google-maps-scraper")
         self.depth: int = maps.get("depth", 3)
-        self.language: str = maps.get("language", "")
         self.extract_emails: bool = maps.get("extract_emails", True)
         self.timeout_s: int = maps.get("timeout_s", 900)
         self.grid_cell_km: float = maps.get("grid_cell_km", 6)
@@ -202,8 +180,10 @@ class MapsCollector:
                 )
             if self.extract_emails:
                 cmd.append("-email")
-            if self.language:
-                cmd += ["-lang", self.language]
+            # -lang comes from the run's market (maps_language), never from
+            # config.maps — it decides the language of category/status text
+            if params.get("maps_language"):
+                cmd += ["-lang", params["maps_language"]]
             # the scraper's bundled playwright-go points at the retired
             # playwright.azureedge.net CDN for its first-run driver/browser
             # downloads, and cdn.playwright.dev rejects requests from here
@@ -228,6 +208,12 @@ class MapsCollector:
                 raise RuntimeError(f"maps scraper failed: {stderr or e}") from None
             if not results_path.exists():
                 raise RuntimeError("maps scraper produced no results file")
+            if params.get("raw_dir"):
+                # keep gosom's untouched output next to the run, so its columns
+                # (and anything we don't parse yet) can be checked later
+                raw_dir = Path(params["raw_dir"])
+                raw_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(results_path, raw_dir / RAW_CSV_NAME)
             leads = parse_results_csv(results_path, {c.strip() for c in categories})
             if not leads and b'"status":"failed"' in completed.stderr + completed.stdout:
                 # exit code 0 even when every search job died (e.g. playwright

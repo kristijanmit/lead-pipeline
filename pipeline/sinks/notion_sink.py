@@ -293,6 +293,14 @@ def load_seen(path: str | Path) -> dict:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+def load_rejected(path: str | Path) -> dict:
+    """data/rejected_domains.json: {cache_key: {reason, run_id, rejected_at}} for
+    leads the L0 gates disqualified (written by score from v2 step 5). Kept apart
+    from seen_domains.json because every seen entry must carry a Notion page_id.
+    Missing file = nothing rejected yet."""
+    return load_seen(path)
+
+
 def save_seen(path: str | Path, seen: dict) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)

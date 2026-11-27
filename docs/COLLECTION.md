@@ -32,6 +32,9 @@ Every run has a **market** and a **niche**; neither has a default.
   into config, never written there automatically. Fields: `country`, `dial_code`, `mobile_prefixes`, `language`
   (`sr` / `en`), `channels` (first-touch order), `first_touch_excluded`, `review_strong`, `currency`,
   `maps_language`, `exclude_name_patterns`. Config validation rejects an incomplete preset.
+  `maps_language` is the only source of the scraper's `-lang` (the old `maps.language` config key is rejected).
+  Both presets use `en`, so Google categories and status strings read the same in every market (the step-5
+  closed gate and `accepted_categories` match one language); it has nothing to do with the drafting language.
 - **Niche** (`pipeline/niche.py`): created in `go` (or copied from an earlier run's manifest, never preselected),
   or given in full with `--niche-file` / a batch entry's `niche:` block. Nothing in config or code names a niche.
 
@@ -64,14 +67,16 @@ names like `"dentist"` or `"hairdresser"`, mapped to an OSM `key=value` tag pair
 trades, and professional services), or raw tags like `"craft=roofer"` —
 `resolve_category` treats any string containing `=` as already-resolved.
 
-**Query building** (`build_query`): the Overpass QL query matches the
-location against three area-name tags (`name`, `name:en`, `int_name`) so
-the CLI accepts either the local-language spelling ("Нови Сад") or the
-English one ("Novi Sad"). Every requested category becomes an `nwr[...]`
-clause inside that search area.
+**Query building** (`build_query`): when the location matches a name in `maps.areas` (same lookup as Maps
+grid mode, see §3) or `--bbox` is given, the query searches that box — `nwr[...](south,west,north,east)` —
+with no area-name lookup. Area names are ambiguous in some markets (the UAE), a box never is. `--no-grid`
+falls back to the name lookup. Otherwise the query matches the location against three area-name tags
+(`name`, `name:en`, `int_name`) so the CLI accepts either the local-language spelling ("Нови Сад") or the
+English one ("Novi Sad"). Every requested category becomes an `nwr[...]` clause inside that search area.
 
 **Parsing** (`parse_elements`): unnamed OSM elements are skipped (nothing
-to call the lead), but a missing `website` tag is not — it becomes an
+to call the lead). For `en`-language markets the company is `name:en` when the element has one (UAE
+primary names are often in Arabic script), else `name`. A missing `website` tag is not skipped — it becomes an
 empty `domain`, which is data, not an error. Emails and phone numbers
 found across `email`/`contact:email` and `phone`/`contact:phone` tags are
 deduped (case-insensitive for emails, by `phone_key` for phones) but never
@@ -129,6 +134,14 @@ Mechanics:
 - **Timeout** is `maps.timeout_s` plus `maps.timeout_per_cell_s` per cell per category; the collector
   prints the cell count and the resulting timeout. If a run still times out, use fewer categories, a
   smaller box, or split the work with `batch`.
+- **Category and status** (schema v12): `parse_results_csv` keeps Google's own `category` column as
+  `maps_category` and the `status` column as `business_status`, both raw text (None when empty or the column
+  is missing). `industry` still comes from the search term, so a "dentist" query that returns a dental lab
+  keeps `maps_category: "Dental laboratory"` for the step-5 niche-match check. The `status` column name is
+  **not yet verified** against a real gosom CSV (script_edits.md G5); check `maps_raw.csv` from a real run.
+- **Raw output kept:** gosom's results CSV is copied untouched to `data/runs/<run_id>/maps_raw.csv`, so its
+  columns (including ones we don't parse) can be checked later.
+- **Language:** `-lang` is the run market's `maps_language` (`en` for both presets).
 - **Per-category counts:** collect prints new leads per category (`new per category: ...`). Dedupe keeps
   the first occurrence, so a category listed later shows only what the earlier ones missed.
 
@@ -159,6 +172,23 @@ for the general dedup/idempotency principle. This doc's only concern is
 that it happens *before* enrichment: there's no reason to scrape a
 contact page or run Lighthouse against the same domain twice because two
 sources both found it.
+
+**Shared path hosts:** a site on a host that puts each site in the path (`dedupe.SHARED_PATH_HOSTS`, today
+`sites.google.com` with `/view/<x>` and `/site/<x>`) keeps that path in its key, e.g.
+`sites.google.com/view/dezurnisto`, so two Google Sites businesses never merge into one "chain". The key is
+still a fetchable base URL, so the site is enriched and audited normally (robots.txt is read at the host root).
+
+**Listing count** (schema v12): every kept lead gets `listing_count`, the number of distinct listings that
+shared its key, counted per source and taking the highest. Within a source, rows are distinct by address
+(whitespace/case-folded), else by listing page; rows with neither count once. Raw row counts would call one
+business a chain when OSM and Maps both list it, or when neighbouring Maps grid cells return the same place.
+Three or more on one domain usually means a chain or franchise (the step-5 L0 gate).
+
+**Skipping known keys:** after dedupe, collect drops leads whose key is in `data/seen_domains.json` (already
+in Notion) or in `collect.rejected_path` (`data/rejected_domains.json`: keys the L0 gates disqualified in an
+earlier run, `{key: {reason, run_id, rejected_at}}`; score writes it from step 5). They're separate files
+because every seen entry carries a Notion `page_id`. `--include-seen` keeps both. The manifest counts them as
+`already_in_notion` and `already_rejected`.
 
 ## 6. Adding a new collector
 

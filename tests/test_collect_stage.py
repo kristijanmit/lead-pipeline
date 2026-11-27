@@ -159,3 +159,56 @@ def test_osm_without_osm_tags_fails_before_collecting(tmp_path, monkeypatch, cap
     (tmp_path / "niche.yaml").write_text("name: x\nsearch_terms: [x]\nphrase: y\n")
     assert main(["collect", "--source", "osm", "--market", "serbia", "--niche-file", "niche.yaml"]) == 1
     assert "no osm_tags" in capsys.readouterr().err
+
+
+def test_collect_passes_market_settings_to_collectors(tmp_path, monkeypatch):
+    captured = {}
+
+    class Recording(FakeCollector):
+        def collect(self, params):
+            captured.update(params)
+            return [Lead(company="A", domain="a.ae", source="maps")]
+
+    _setup(tmp_path, monkeypatch, {"maps": Recording()})
+    assert main(["collect", "--source", "maps", "--market", "uae", "--niche-file", "niche.yaml",
+                 "--location", "Dubai"]) == 0
+    run_dir = next((tmp_path / "data" / "runs").iterdir())
+    assert captured["maps_language"] == "en"
+    assert captured["prefer_name_en"] is True
+    assert captured["raw_dir"] == str(run_dir.relative_to(tmp_path))
+
+
+def _collect_with_caches(tmp_path, monkeypatch, extra=()):
+    leads = [
+        Lead(company="Seen", domain="seen.rs", source="maps"),
+        Lead(company="Rejected", domain="rejected.rs", source="maps"),
+        Lead(company="No Site", domain="", source="maps"),
+        Lead(company="Fresh", domain="fresh.rs", source="maps"),
+    ]
+    _setup(tmp_path, monkeypatch, {"maps": FakeCollector(leads=leads)})
+    data = tmp_path / "data"
+    data.mkdir(exist_ok=True)
+    (data / "seen_domains.json").write_text(json.dumps({"domain:seen.rs": {"page_id": "p1"}}))
+    (data / "rejected_domains.json").write_text(json.dumps({
+        "domain:rejected.rs": {"reason": "chain", "run_id": "r0", "rejected_at": "2026-11-27"},
+        "company:no site": {"reason": "closed", "run_id": "r0", "rejected_at": "2026-11-27"},
+    }))
+    args = ["collect", "--source", "maps", "--market", "serbia", "--niche-file", "niche.yaml",
+            "--location", "Novi Sad", *extra]
+    assert main(args) == 0
+    run_dir = max((data / "runs").iterdir())
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    return [lead.company for lead in read_jsonl(run_dir / "collected.jsonl")], manifest["counts"]
+
+
+def test_collect_skips_seen_and_rejected_keys(tmp_path, monkeypatch, capsys):
+    companies, counts = _collect_with_caches(tmp_path, monkeypatch)
+    assert companies == ["Fresh"]
+    assert (counts["already_in_notion"], counts["already_rejected"]) == (1, 2)
+    assert "2 rejected in an earlier run" in capsys.readouterr().out
+
+
+def test_include_seen_keeps_rejected_too(tmp_path, monkeypatch):
+    companies, counts = _collect_with_caches(tmp_path, monkeypatch, ["--include-seen"])
+    assert companies == ["Seen", "Rejected", "No Site", "Fresh"]
+    assert (counts["already_in_notion"], counts["already_rejected"]) == (0, 0)

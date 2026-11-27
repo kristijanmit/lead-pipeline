@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Iterable
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 SCORING_VERSION = 3
 
 
@@ -46,6 +46,15 @@ class Lead:
     rating: float | None = None  # e.g. 4.7 (Google Maps stars)
     review_count: int | None = None
     profile_url: str = ""  # the lead's listing page: Google Maps link / OSM object
+
+    # v12 — collect details for the step-5 gates. maps_category / business_status are
+    # gosom's raw text (category / status columns, in the market's maps_language),
+    # None for OSM/manual leads. listing_count: distinct listings merged into this
+    # lead by dedupe (highest per source — see dedupe.listing_count); 3+ on one
+    # domain usually means a chain. v11 JSONL loads them as None.
+    maps_category: str | None = None
+    business_status: str | None = None
+    listing_count: int | None = None
 
     # contact enrichment (Phase 2, step 1)
     contact_emails: list[str] = field(default_factory=list)  # keep every address found
