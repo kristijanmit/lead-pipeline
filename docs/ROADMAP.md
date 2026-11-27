@@ -54,6 +54,9 @@ properly" means in practice.
   `outreach.auto_draft_min_tier`); `draft-notion --all` removed; the Serbia market fallback is gone (no market =
   skipped). Open: you add the Notion properties and run the migration (Market = serbia, Language = sr), then
   `sync --rescore --limit 10`.
+- Scoring v5 (branch `v2-no-reviews-yet`): a Maps listing with 0 reviews (rating 0 or empty) is "no reviews yet":
+  viability volume 0 + neutral quality 20 (`viability.no_reviews_quality`), confidence unchanged. v4 read it as a
+  0★ rating ("0★/0 reviews", viability 0).
 - Next: step 7 (drafting rule sets sr/en, examples per language, offer slot).
 
 **Done**

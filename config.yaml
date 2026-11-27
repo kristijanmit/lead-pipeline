@@ -97,7 +97,7 @@ notion:
 # Per-market values live on the market above: channel order (reach), review_strong
 # (viability), exclude_name_patterns (gate). Niches never appear here.
 scoring:
-  version: 4
+  version: 5
 
   # L0 gates — a lead matching any is disqualified (kept in JSONL, never synced,
   # its key goes into collect.rejected_path). Order: country, closed, chain,
@@ -130,6 +130,7 @@ scoring:
   # Viability: active and able to pay (0-100, capped)
   viability:
     no_data: 50                 # no rating and no review count (OSM, manual): a reason line, no tier cap
+    no_reviews_quality: 20      # Maps listing with 0 reviews (rating 0 or empty): volume 0 + this, "no reviews yet"
     volume_at_strong: 40        # volume at the market's review_strong count (log scale)
     volume_max: 60
     rating_bands: [[4.5, 40], [4.0, 30], [3.5, 15]]   # [min rating, points], below = 0
