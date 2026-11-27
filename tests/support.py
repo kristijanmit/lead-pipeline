@@ -97,6 +97,7 @@ class FakeNotion:
                 select(props, "Status") not in statuses
                 or not props.get("Qualified", {}).get("checkbox")
                 or select(props, "Verdict") == "Skip"
+                or select(props, "Campaign") == "legacy-v1"
                 or (select(props, "Tier") and select(props, "Tier") not in tiers)
                 or (not redraft and text(props, "Draft Message"))
                 or (company and company not in title)

@@ -100,6 +100,10 @@ notion:
   delay_s: 0.35        # pause between page creates — Notion allows ~3 req/s
   timeout_s: 30
   cache_path: data/seen_domains.json   # local dedupe cache, refreshed via --refresh-cache
+  # legacy-v1 businesses (earlier niche/offer) can be collected again once their old page's
+  # Last Contacted is empty or older than this; Closed / Replied / declined / won / replied /
+  # meeting / proposal stay blocked (docs/ROADMAP.md, "Archived: legacy-v1")
+  legacy_recontact_days: 90
 
 # Phase 3 — scorer v4 (docs/plan/v2/PIPELINE.md §3, docs/SCORING.md). Bump version
 # whenever a weight, threshold or the formula changes, so scores from different

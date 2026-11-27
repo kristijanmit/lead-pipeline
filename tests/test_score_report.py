@@ -9,8 +9,8 @@ import pytest
 
 from pipeline import runner
 from pipeline.reports.score_report import (
-    Group, Settings, ab_rule, format_report, group_by, page_row, page_state, sent_channel,
-    skip_reason_counts, tier_trend,
+    Group, PageRow, Settings, ab_rule, format_report, group_by, keep_campaign, page_row, page_state,
+    sent_channel, skip_reason_counts, tier_trend,
 )
 from pipeline.schema import Lead, write_jsonl
 from pipeline.sinks.notion_sink import cache_key
@@ -231,6 +231,24 @@ def test_format_report_sections_and_small_sample_flags():
     assert out.count("*") >= 5  # every group is under 30
 
 
+# --- campaign cohorts -----------------------------------------------------------------
+
+@pytest.mark.parametrize("campaign, include_legacy, kept", [
+    ("", False, {"", "dental clinic"}),                  # default: legacy left out
+    ("", True, {"", "dental clinic", "legacy-v1"}),
+    ("dental clinic", False, {"dental clinic"}),
+    ("legacy-v1", False, {"legacy-v1"}),                 # naming the cohort shows it
+])
+def test_keep_campaign(campaign, include_legacy, kept):
+    rows = [PageRow(page_id=c or "x", state="sent", campaign=c) for c in ("", "dental clinic", "legacy-v1")]
+    assert {r.campaign for r in rows if keep_campaign(r, campaign, include_legacy, "legacy-v1")} == kept
+
+
+def test_page_row_reads_campaign():
+    assert page_row(page(Status=sel("Sent"), Campaign=sel("legacy-v1"))).campaign == "legacy-v1"
+    assert page_row(page(Status=sel("Sent"))).campaign == ""
+
+
 # --- command end to end ---------------------------------------------------------------
 
 def test_cmd_score_report(tmp_path, monkeypatch, capsys):
@@ -262,6 +280,29 @@ def test_cmd_score_report(tmp_path, monkeypatch, capsys):
     assert runner.cmd_score_report(args) == 0
     out = capsys.readouterr().out
     assert "0 sent · 0 skipped · 1 pending" in out
+
+
+def test_cmd_score_report_campaigns(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.yaml").write_text(MARKETS_YAML)
+    notion = FakeNotion(tmp_path / "data" / "seen_domains.json")
+    notion.add("p-old", "Old", status="Sent", Campaign=sel("legacy-v1"))
+    notion.add("p-new", "New", status="Queued", Campaign=sel("dental clinic"))
+    monkeypatch.setattr(runner, "get_sink", lambda *a: notion)
+    args = argparse.Namespace(config="config.yaml", market=None, niche=None, min_band=None,
+                              campaign=None, include_legacy=False)
+    assert runner.cmd_score_report(args) == 0
+    out = capsys.readouterr().out
+    assert "0 sent · 0 skipped · 1 pending" in out and "1 legacy-v1 pages left out" in out
+
+    args.include_legacy = True
+    assert runner.cmd_score_report(args) == 0
+    assert "1 sent · 0 skipped · 1 pending" in capsys.readouterr().out
+
+    args.include_legacy, args.campaign = False, "legacy-v1"
+    assert runner.cmd_score_report(args) == 0
+    out = capsys.readouterr().out
+    assert "filtered to campaign legacy-v1" in out and "1 sent · 0 skipped · 0 pending" in out
 
 
 def test_cmd_score_report_empty(tmp_path, monkeypatch, capsys):

@@ -12,7 +12,7 @@ import json
 import sys
 import time
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -31,14 +31,14 @@ from pipeline.market import Market, load_market, market_from_prompts, market_yam
 from pipeline.niche import Niche, check_sources, load_niche_file
 from pipeline.reports import build_report, findings, markdown_to_html, skip_reason
 from pipeline.reports.audit_report import positives
-from pipeline.reports.score_report import Settings, format_report, page_row
+from pipeline.reports.score_report import Settings, format_report, keep_campaign, page_row
 from pipeline.schema import read_jsonl, write_jsonl
 from pipeline.scoring import score
 from pipeline.sinks import get_sink
 from pipeline.sinks.csv_sink import CsvSink
 from pipeline.sinks.notion_sink import (
-    NotionAuthError, _email_index, _rich_text, _select_name, _text, cache_key, lead_from_page, load_rejected,
-    load_seen, match_cache_key, save_seen,
+    LEGACY_CAMPAIGN, NotionAuthError, _email_index, _rich_text, _select_name, _text, cache_key, lead_from_page,
+    blocking_seen, is_legacy, load_rejected, load_seen, match_cache_key, save_seen,
 )
 
 _TIER_ORDER = ("A", "B", "C", "D")
@@ -192,12 +192,15 @@ def cmd_collect(args: argparse.Namespace) -> int:
     # sync still catches those)
     # leads the L0 gates rejected in an earlier run would only be rejected
     # again; --include-seen keeps both kinds
-    already_in_notion = already_rejected = 0
+    # legacy-v1 businesses (docs/ROADMAP.md) come back unless still blocked
+    already_in_notion = already_rejected = legacy_again = 0
     if not getattr(args, "include_seen", False):
         seen = load_seen(config["notion"]["cache_path"])
+        blocking = blocking_seen(seen, date.today(), config["notion"]["legacy_recontact_days"])
         rejected = load_rejected(config["collect"]["rejected_path"])
-        fresh = [lead for lead in deduped if cache_key(lead) not in seen]
+        fresh = [lead for lead in deduped if cache_key(lead) not in blocking]
         already_in_notion = len(deduped) - len(fresh)
+        legacy_again = sum(1 for lead in fresh if cache_key(lead) in seen)
         deduped = [lead for lead in fresh if cache_key(lead) not in rejected]
         already_rejected = len(fresh) - len(deduped)
     leads = deduped if args.limit is None else deduped[: args.limit]
@@ -241,6 +244,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
             "raw_by_source": raw_by_source,
             "already_in_notion": already_in_notion,
             "already_rejected": already_rejected,
+            "legacy_collected_again": legacy_again,
             "new_by_category": new_by_category,
             "after_dedupe": len(deduped),
             "written": len(leads),
@@ -263,6 +267,8 @@ def cmd_collect(args: argparse.Namespace) -> int:
         print(f"  {already_in_notion} already in Notion (cache) — skipped")
     if already_rejected:
         print(f"  {already_rejected} rejected in an earlier run (rejected_domains.json) — skipped")
+    if legacy_again:
+        print(f"  {legacy_again} {LEGACY_CAMPAIGN} businesses collected again (no blocking status, past the cooldown)")
     if len(new_by_category) > 1:
         breakdown = ", ".join(f"{c} {n}" for c, n in new_by_category.items())
         print(f"  new per search term: {breakdown}")
@@ -1132,7 +1138,7 @@ def _cmd_rescore(args: argparse.Namespace, config: dict, sink) -> int:
         seen = load_seen(sink.cache_path)
         index = _email_index(seen)
         pointed = {match_cache_key(lead, seen, index) for lead in leads}
-        no_source = sum(1 for key in seen if key not in pointed)
+        no_source = sum(1 for key, entry in seen.items() if key not in pointed and not is_legacy(entry))
 
     counts = {
         "candidates": len(leads),
@@ -1183,20 +1189,29 @@ def cmd_score_report(args: argparse.Namespace) -> int:
     sink = get_sink("notion", config)
     pages = sink.query_pages()
     leads = _latest_rows_by_page(sink)
-    rows, left_out = [], 0
+    campaign = (getattr(args, "campaign", None) or "").strip()
+    include_legacy = getattr(args, "include_legacy", False)
+    rows, left_out, legacy_out = [], 0, 0
     for page in pages:
         row = page_row(page, leads.get(page.get("id")))
         if row is None:
             left_out += 1
+            continue
+        if not keep_campaign(row, campaign, include_legacy, LEGACY_CAMPAIGN):
+            legacy_out += row.campaign == LEGACY_CAMPAIGN
             continue
         if args.market and row.market != args.market.strip().lower():
             continue
         if args.niche and row.niche != args.niche:
             continue
         rows.append(row)
-    scope = ", ".join(f"{k} {v}" for k, v in (("market", args.market), ("niche", args.niche)) if v)
+    scope = ", ".join(
+        f"{k} {v}" for k, v in (("campaign", campaign), ("market", args.market), ("niche", args.niche)) if v
+    )
     if scope:
         print(f"filtered to {scope}")
+    if legacy_out:
+        print(f"{legacy_out} {LEGACY_CAMPAIGN} pages left out (--include-legacy or --campaign {LEGACY_CAMPAIGN} to see them)")
     if not rows:
         print(f"score-report: no drafted, sent or skipped pages yet ({len(pages)} pages read)")
         return 0
@@ -1262,6 +1277,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
             "input": len(leads),
             "created": len(report.created),
             "already_in_notion": len(report.cached),
+            "legacy_relinked": len(report.relinked),
+            "legacy_blocked": len(report.legacy_blocked),
             "already_synced": already_synced,
             "skipped_disqualified": disqualified,
             "skipped_below_min_tier": below_tier,
@@ -1283,6 +1300,10 @@ def cmd_sync(args: argparse.Namespace) -> int:
         + (f", {disqualified} disqualified (not synced)" if disqualified else "")
         + (f", {below_tier} below tier {min_tier} or unscored by v4 (not synced)" if below_tier else "")
     )
+    if report.relinked:
+        print(f"  {len(report.relinked)} of the created were {LEGACY_CAMPAIGN} businesses: Notes links the old page")
+    if report.legacy_blocked:
+        print(f"  {len(report.legacy_blocked)} matched a blocked {LEGACY_CAMPAIGN} page (status / outcome / cooldown) — not synced")
     for lead, error in report.failed:
         print(f"  failed: {lead.company} ({lead.domain or 'no website'}): {error}")
     if not_scored:
@@ -1776,6 +1797,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sr_cmd.add_argument("--market", help="only pages of this market (preset id, e.g. serbia)")
     sr_cmd.add_argument("--niche", help="only pages whose Industry (niche name) is exactly this")
+    sr_cmd.add_argument("--campaign", help="only pages of this Campaign (cohort), e.g. a niche name or legacy-v1")
+    sr_cmd.add_argument(
+        "--include-legacy", action="store_true",
+        help="also count legacy-v1 pages (left out by default)",
+    )
     sr_cmd.add_argument(
         "--min-band", type=int,
         help="groups smaller than this print as not enough data (default score_report.min_band, 30)",
