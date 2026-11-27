@@ -166,7 +166,8 @@ Contact data and `status` are kept; the audit fields are replaced. If Lighthouse
 Lighthouse scores are kept (noted in `errors`). Leads without a site are left alone. `--limit N` re-audits the
 first N only. Writes `enriched.jsonl` / `enriched.csv` and an `enrich_rescan` block in `manifest.json`. It
 doesn't touch `scored.jsonl`, so run `score` again afterwards. `--only` and `--rescan` go together; `audit` is
-the only step that can be re-run.
+the only step that can be re-run. A re-audit replaces the lead's earlier `audit:` error lines
+(e.g. an old 429) instead of adding to them; other errors are kept.
 
 ## 4. Retry-once-then-fail, and degrade-don't-crash
 

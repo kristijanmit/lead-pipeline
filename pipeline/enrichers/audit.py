@@ -67,7 +67,8 @@ def apply_audit(lead: Lead, result: AuditResult, keep_lighthouse: bool = False) 
     signals = result.signals
     lighthouse_failed = result.site_reachable and bool(result.lighthouse_error)
     keep = keep_lighthouse and lighthouse_failed and lead.lighthouse is not None
-    errors = list(lead.errors)
+    # a re-audit replaces the previous audit's lines (e.g. an old 429) instead of piling up
+    errors = [e for e in lead.errors if not e.startswith("audit:")]
     if not result.site_reachable:
         errors.append(f"audit: site unreachable ({result.probe_error}): {result.probe_detail}")
     elif lighthouse_failed:

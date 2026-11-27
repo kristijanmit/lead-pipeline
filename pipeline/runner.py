@@ -41,6 +41,8 @@ from pipeline.sinks.notion_sink import (
 )
 
 _TIER_ORDER = ("A", "B", "C", "D")
+# rows the score stage wrote; --rescore and draft-notion match pages to any of them
+_SCORED_STATUSES = ("scored", "disqualified", "synced")
 
 # find a missing website first, then contact data, then the website audit
 _ENRICH_STEPS = ("discovery", "contact", "audit")
@@ -1003,16 +1005,18 @@ def _auto_draft(args: argparse.Namespace) -> int:
 
 
 def _jsonl_by_page(sink) -> tuple[dict[str, object], dict[str, Niche | None]]:
-    """page_id -> latest JSONL lead (via the sync cache, like --rescore), and run_id
-    -> that run's niche. draft-notion drafts from these when it can, so pages a run
-    left undrafted keep their profile_facts, niche_label and niche question."""
+    """page_id -> latest JSONL lead (via the sync cache key, then the email index,
+    like --rescore), and run_id -> that run's niche. draft-notion drafts from these
+    when it can, so pages a run left undrafted keep their profile_facts, niche_label
+    and niche question. Any scored row counts (scored, disqualified, synced): a
+    re-scored run resets "synced" to "scored", and that must not cut it off."""
     seen = load_seen(sink.cache_path)
     index = _email_index(seen)
     rows: dict[str, object] = {}
     niches: dict[str, Niche | None] = {}
     for path in sorted(RUNS_DIR.glob("*/scored.jsonl")):  # run ids sort by time: later wins
         for lead in read_jsonl(path):
-            if lead.status != "synced":
+            if lead.status not in _SCORED_STATUSES:
                 continue
             key = match_cache_key(lead, seen, index)
             if key and seen[key].get("page_id"):
@@ -1096,7 +1100,7 @@ def _rescore_leads(run_id: str | None) -> tuple[list, int]:
     latest: dict[str, object] = {}
     for path in paths:
         for lead in read_jsonl(path):
-            if lead.status in ("scored", "disqualified", "synced"):
+            if lead.status in _SCORED_STATUSES:
                 latest[cache_key(lead)] = lead  # later runs overwrite earlier ones
     leads, old = [], 0
     for lead in latest.values():

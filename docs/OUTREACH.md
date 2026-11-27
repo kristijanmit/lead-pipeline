@@ -58,7 +58,8 @@ and with `--redraft` pages that already have a draft (Status `Queued` / `Draft f
 `outreach.auto_draft` is on; `--dry-run` only prints. Pages without `Market` or `Industry` are skipped and reported
 ("set Market and Industry on the page"). `--limit N` caps the pages drafted, not the pages read.
 
-A page synced by a run is drafted from its latest JSONL row (page_id → sync cache key → newest `scored.jsonl` row),
+A page synced by a run is drafted from its latest JSONL row (sync cache key or a shared email, like `--rescore`;
+any scored row: `scored`, `disqualified` or `synced`, so re-scoring a run doesn't cut it off),
 so it keeps `profile_facts`, `niche_label` and the run's niche question; `SM Audit` comes from the page. A page with
 no row (hand-made, or a cache rebuilt from Notion) is drafted from the page itself: create it with `Company`,
 `Industry`, `Market`, `Location`, `Social Links` (the Instagram URL as a link), `SM Audit` (optional) and

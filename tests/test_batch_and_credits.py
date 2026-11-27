@@ -507,3 +507,39 @@ def test_draft_notion_out_of_credits_exits_3_and_reports(notion_dir, monkeypatch
     monkeypatch.setattr(runner, "draft_lead", broke)
     assert runner.cmd_draft_notion(_draft_notion_args()) == EXIT_OUT_OF_CREDITS
     assert sink.updates == [] and "2 pages undrafted" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("status", ["scored", "disqualified", "synced"])
+def test_draft_notion_matches_rows_of_a_rescored_run(notion_dir, monkeypatch, status):
+    """Re-scoring resets "synced" to "scored": the page must still find its row (by cache key,
+    or by a shared email like --rescore), so profile_facts and the niche question reach the prompt."""
+    from support import FakeNotion
+
+    from pipeline.sinks.notion_sink import cache_key
+
+    run_dir = notion_dir / "data" / "runs" / "r1"
+    run_dir.mkdir(parents=True)
+    by_key = _lead("Zubić", "zubic.rs", status=status, run_id="r1", profile_facts=["Named on the website: Implantologija"])
+    by_email = _lead("Osmeh", "", status=status, run_id="r1", contact_emails=["info@osmeh.rs"],
+                     profile_facts=["Google Maps description: Porodična ordinacija"])
+    write_jsonl(run_dir / "scored.jsonl", [by_key, by_email, _lead("Old", "old.rs", status="enriched", run_id="r1")])
+    (run_dir / "manifest.json").write_text(json.dumps({"niche": {
+        "name": "dental clinic", "search_terms": ["dentist"], "phrase": "stomatološke ordinacije",
+        "question": "da li pacijenti zakazuju preko sajta?"}}))
+    notion = FakeNotion(notion_dir / "data" / "seen_domains.json")
+    notion.add("p-z", "Zubić")
+    notion.add("p-o", "Osmeh", **{"Social Links": _notion_page()["properties"]["Social Links"]})
+    # Osmeh's cache entry is keyed by an earlier domain; only the email links it
+    (notion_dir / "data" / "seen_domains.json").write_text(json.dumps({
+        cache_key(by_key): {"page_id": "p-z"},
+        "domain:osmeh-old.rs": {"page_id": "p-o", "snapshot": {"emails": ["info@osmeh.rs"]}},
+    }))
+    monkeypatch.setattr(runner, "get_sink", lambda *a: notion)
+    prompts = []
+    monkeypatch.setattr(drafter, "_call_claude", lambda prompt, *a, **k: prompts.append(prompt) or {
+        "message": "Pozdrav. Kako Vam stižu upiti?", "verify_note": ""})
+    assert runner.cmd_draft_notion(_draft_notion_args()) == 0
+    zubic = next(p for p in prompts if "Business: Zubić" in p)
+    osmeh = next(p for p in prompts if "Business: Osmeh" in p)
+    assert "Implantologija" in zubic and "da li pacijenti zakazuju preko sajta?" in zubic
+    assert "Porodična ordinacija" in osmeh and "da li pacijenti zakazuju preko sajta?" in osmeh
